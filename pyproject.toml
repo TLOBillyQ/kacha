@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ugc-image-tool"
+version = "0.1.0"
+description = "UGC AI 生图工具"
+requires-python = ">=3.12"
+
+[project.scripts]
+ugc-contracts = "ugc_image_tool.contracts.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

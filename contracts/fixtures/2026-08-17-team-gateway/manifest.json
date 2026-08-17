@@ -1,0 +1,511 @@
+{
+  "schema_version": 1,
+  "verified_at": "2026-08-17T14:03:06Z",
+  "gateway": {
+    "base_url": "http://lzxsvn:3001",
+    "authentication": {
+      "header": "Authorization",
+      "scheme": "Bearer"
+    },
+    "response_headers": [
+      "X-New-Api-Version",
+      "X-Oneapi-Request-Id"
+    ]
+  },
+  "interfaces": {
+    "models": {
+      "path": "/v1/models",
+      "method": "GET",
+      "exchanges": [
+        {
+          "request": {
+            "method": "GET",
+            "path": "/v1/models",
+            "headers": {
+              "Accept": "application/json",
+              "Authorization": "[REDACTED]"
+            },
+            "body": null
+          },
+          "response": {
+            "status": 200,
+            "headers": {
+              "Content-Type": "application/json; charset=utf-8",
+              "X-New-Api-Version": "v0.0.0",
+              "X-Oneapi-Request-Id": "202608171354269069570008268d9d6qabWg9wk",
+              "Content-Length": "1236"
+            },
+            "body": {
+              "data": [
+                {
+                  "id": "deepseek-v4-flash",
+                  "object": "model",
+                  "created": 1626777600,
+                  "owned_by": "deepseek",
+                  "supported_endpoint_types": [
+                    "openai",
+                    "openai-response"
+                  ]
+                },
+                {
+                  "id": "deepseek-v4-pro",
+                  "object": "model",
+                  "created": 1626777600,
+                  "owned_by": "deepseek",
+                  "supported_endpoint_types": [
+                    "openai"
+                  ]
+                },
+                {
+                  "id": "kimi/kimi-k3",
+                  "object": "model",
+                  "created": 1626777600,
+                  "owned_by": "ali",
+                  "supported_endpoint_types": [
+                    "openai"
+                  ]
+                },
+                {
+                  "id": "qwen-image-3.0-pro",
+                  "object": "model",
+                  "created": 1626777600,
+                  "owned_by": "ali",
+                  "supported_endpoint_types": [
+                    "openai"
+                  ]
+                },
+                {
+                  "id": "qwen3.8-max",
+                  "object": "model",
+                  "created": 1626777600,
+                  "owned_by": "ali",
+                  "supported_endpoint_types": [
+                    "openai"
+                  ]
+                },
+                {
+                  "id": "wan2.6-i2v-flash",
+                  "object": "model",
+                  "created": 1626777600,
+                  "owned_by": "ali",
+                  "supported_endpoint_types": [
+                    "openai"
+                  ]
+                },
+                {
+                  "id": "wan2.7-i2v",
+                  "object": "model",
+                  "created": 1626777600,
+                  "owned_by": "ali",
+                  "supported_endpoint_types": [
+                    "openai"
+                  ]
+                },
+                {
+                  "id": "wan2.7-image",
+                  "object": "model",
+                  "created": 1626777600,
+                  "owned_by": "ali",
+                  "supported_endpoint_types": [
+                    "openai"
+                  ]
+                },
+                {
+                  "id": "wan2.7-image-pro",
+                  "object": "model",
+                  "created": 1626777600,
+                  "owned_by": "ali",
+                  "supported_endpoint_types": [
+                    "openai"
+                  ]
+                },
+                {
+                  "id": "wan2.7-t2v",
+                  "object": "model",
+                  "created": 1626777600,
+                  "owned_by": "ali",
+                  "supported_endpoint_types": [
+                    "openai"
+                  ]
+                }
+              ],
+              "object": "list",
+              "success": true
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "GET",
+            "path": "/v1/models",
+            "headers": {
+              "Accept": "application/json",
+              "Authorization": "[REDACTED]"
+            },
+            "body": null
+          },
+          "response": {
+            "status": 401,
+            "headers": {
+              "Content-Type": "application/json; charset=utf-8",
+              "X-New-Api-Version": "v0.0.0",
+              "X-Oneapi-Request-Id": "202608171404319537962008268d9d6eth9f8XD",
+              "Content-Length": "124"
+            },
+            "body": {
+              "error": {
+                "code": "",
+                "message": "Invalid token (request id: 202608171404319537962008268d9d6eth9f8XD)",
+                "type": "new_api_error"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "text_to_image": {
+      "path": "/v1/images/generations",
+      "method": "POST",
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/images/generations",
+            "headers": {
+              "Accept": "application/json",
+              "Authorization": "[REDACTED]",
+              "Content-Type": "application/json"
+            },
+            "body": {}
+          },
+          "response": {
+            "status": 503,
+            "headers": {
+              "Content-Type": "application/json; charset=utf-8",
+              "X-New-Api-Version": "v0.0.0",
+              "X-Oneapi-Request-Id": "202608171354495635823008268d9d6Oa25CMBE",
+              "Content-Length": "190"
+            },
+            "body": {
+              "error": {
+                "code": "model_not_found",
+                "message": "分组 default 下模型 dall-e 无可用渠道（distributor） (request id: 202608171354495635823008268d9d6Oa25CMBE)",
+                "type": "new_api_error"
+              }
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/images/generations",
+            "headers": {
+              "Accept": "application/json",
+              "Authorization": "[REDACTED]",
+              "Content-Type": "application/json"
+            },
+            "body": {
+              "model": "qwen-image-3.0-pro",
+              "prompt": "[REDACTED_PROMPT]"
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": {
+              "Content-Length": "948",
+              "Content-Type": "application/json",
+              "X-Dashscope-Finished": "true",
+              "X-Dashscope-Timeout": "3600",
+              "X-New-Api-Version": "v0.0.0",
+              "X-Oneapi-Request-Id": "202608171356597727104008268d9d6LqjrqK4O"
+            },
+            "body": {
+              "data": [
+                {
+                  "url": "https://example.invalid/redacted",
+                  "b64_json": "[REDACTED_IMAGE]",
+                  "revised_prompt": ""
+                }
+              ],
+              "created": 1786975019,
+              "metadata": {
+                "output": {
+                  "choices": [
+                    {
+                      "finish_reason": "stop",
+                      "message": {
+                        "content": [
+                          {
+                            "image": "[REDACTED_IMAGE]"
+                          }
+                        ],
+                        "role": "assistant"
+                      }
+                    }
+                  ],
+                  "rewrite_status": "success"
+                },
+                "usage": {
+                  "input_image_count": 0,
+                  "input_image_type": "qima_input_2k",
+                  "output_height": 2048,
+                  "output_image_count": 1,
+                  "output_image_type": "qima_output_2k",
+                  "output_width": 2048
+                },
+                "request_id": "97147d02-8b05-9450-9c5c-f2ea689cb35b"
+              }
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/images/generations",
+            "headers": {
+              "Accept": "application/json",
+              "Authorization": "[REDACTED]",
+              "Content-Type": "application/json"
+            },
+            "body": {
+              "model": "qwen-image-3.0-pro",
+              "prompt": "[REDACTED_PROMPT]",
+              "negative_prompt": "[REDACTED_PROMPT]",
+              "n": 2,
+              "size": "1024x1024",
+              "watermark": false
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": {
+              "Content-Length": "1215",
+              "Content-Type": "application/json",
+              "X-Dashscope-Finished": "true",
+              "X-Dashscope-Timeout": "3600",
+              "X-New-Api-Version": "v0.0.0",
+              "X-Oneapi-Request-Id": "202608171402373097571008268d9d6Lzi57b4w"
+            },
+            "body": {
+              "data": [
+                {
+                  "url": "https://example.invalid/redacted",
+                  "b64_json": "[REDACTED_IMAGE]",
+                  "revised_prompt": ""
+                }
+              ],
+              "created": 1786975357,
+              "metadata": {
+                "output": {
+                  "choices": [
+                    {
+                      "finish_reason": "stop",
+                      "message": {
+                        "content": [
+                          {
+                            "image": "[REDACTED_IMAGE]"
+                          },
+                          {
+                            "image": "[REDACTED_IMAGE]"
+                          }
+                        ],
+                        "role": "assistant"
+                      }
+                    }
+                  ],
+                  "rewrite_status": "success"
+                },
+                "usage": {
+                  "input_image_count": 0,
+                  "input_image_type": "qima_input_1k",
+                  "output_height": 1024,
+                  "output_image_count": 2,
+                  "output_image_type": "qima_output_1k",
+                  "output_width": 1024
+                },
+                "request_id": "ad56dcb6-f11d-9f12-a900-b6b8fa95edde"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "image_edit": {
+      "path": "/v1/images/edits",
+      "method": "POST",
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/images/edits",
+            "headers": {
+              "Accept": "application/json",
+              "Authorization": "[REDACTED]",
+              "Content-Type": "application/json"
+            },
+            "body": {}
+          },
+          "response": {
+            "status": 400,
+            "headers": {
+              "Content-Type": "application/json; charset=utf-8",
+              "X-New-Api-Version": "v0.0.0",
+              "X-Oneapi-Request-Id": "202608171354497324590008268d9d6jJponIcq",
+              "Content-Length": "159"
+            },
+            "body": {
+              "error": {
+                "code": "",
+                "message": "未指定模型名称，模型名称不能为空 (request id: 202608171354497324590008268d9d6jJponIcq)",
+                "type": "new_api_error"
+              }
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/images/edits",
+            "headers": {
+              "Accept": "application/json",
+              "Authorization": "[REDACTED]",
+              "Content-Type": "multipart/form-data; boundary=ugc-contract-boundary"
+            },
+            "body": "[REDACTED_MULTIPART_BODY]"
+          },
+          "response": {
+            "status": 200,
+            "headers": {
+              "Content-Length": "952",
+              "Content-Type": "application/json",
+              "X-Dashscope-Finished": "true",
+              "X-Dashscope-Timeout": "3600",
+              "X-New-Api-Version": "v0.0.0",
+              "X-Oneapi-Request-Id": "202608171400344687536008268d9d6na0g2qsy"
+            },
+            "body": {
+              "data": [
+                {
+                  "url": "https://example.invalid/redacted",
+                  "b64_json": "[REDACTED_IMAGE]",
+                  "revised_prompt": ""
+                }
+              ],
+              "created": 1786975234,
+              "metadata": {
+                "output": {
+                  "choices": [
+                    {
+                      "finish_reason": "stop",
+                      "message": {
+                        "content": [
+                          {
+                            "image": "[REDACTED_IMAGE]"
+                          }
+                        ],
+                        "role": "assistant"
+                      }
+                    }
+                  ],
+                  "rewrite_status": "success"
+                },
+                "usage": {
+                  "input_image_count": 1,
+                  "input_image_type": "qima_input_2k",
+                  "output_height": 2048,
+                  "output_image_count": 1,
+                  "output_image_type": "qima_output_2k",
+                  "output_width": 2048
+                },
+                "request_id": "a7c70ae1-f665-9e58-b42c-209996147e89"
+              }
+            }
+          }
+        }
+      ],
+      "request_shape": {
+        "encoding": "multipart/form-data",
+        "fields": [
+          {
+            "name": "model",
+            "kind": "text"
+          },
+          {
+            "name": "prompt",
+            "kind": "text",
+            "sensitive": true
+          },
+          {
+            "name": "image",
+            "kind": "file",
+            "media_type": "image/png"
+          }
+        ]
+      }
+    }
+  },
+  "error_mappings": {
+    "authentication": {
+      "status": 401,
+      "verified": true,
+      "evidence": "models-auth-error.json"
+    },
+    "invalid_request": {
+      "status": 400,
+      "verified": true,
+      "evidence": "edit-empty.json"
+    },
+    "rate_limit": {
+      "status": null,
+      "verified": false,
+      "evidence": "本次实测未安全触发 429；不得依赖 Retry-After"
+    },
+    "server_error": {
+      "status": 503,
+      "verified": true,
+      "evidence": "text-empty.json"
+    }
+  },
+  "behaviors": {
+    "partial_failure": {
+      "status": "unknown",
+      "evidence": "n=2 返回 metadata.output 两张图但 data 仅一项；未发现可依赖的逐项失败结构"
+    },
+    "idempotency_key": {
+      "status": "unknown",
+      "evidence": "未重复提交生成请求，避免重复计费；契约中没有幂等证明"
+    },
+    "running_cancellation": {
+      "status": "unknown",
+      "evidence": "同步响应仅提供 request_id，未发现取消句柄；未宣称支持"
+    },
+    "task_query": {
+      "status": "unknown",
+      "evidence": "同步响应仅提供 request_id，未发现任务查询路径；未宣称支持"
+    },
+    "retry_after": {
+      "status": "unknown",
+      "evidence": "401、400、503 样例均无 Retry-After；未安全触发限流"
+    }
+  },
+  "verified_models": [
+    "qwen-image-3.0-pro"
+  ],
+  "unsafe_to_enable": [
+    "deepseek-v4-flash",
+    "deepseek-v4-pro",
+    "kimi/kimi-k3",
+    "qwen3.8-max",
+    "wan2.6-i2v-flash",
+    "wan2.7-i2v",
+    "wan2.7-image",
+    "wan2.7-image-pro",
+    "wan2.7-t2v"
+  ],
+  "conclusions": [
+    "鉴权使用 Authorization 头，具体凭据不进入夹具。",
+    "文生图和图片编辑均使用 POST JSON/multipart 到各自 /v1/images 路径。",
+    "成功响应提供临时 url；metadata.output 还包含图片内容，客户端必须按实际结果数量保存并检测 data 数量不一致。",
+    "仅 qwen-image-3.0-pro 的文生图和图片编辑在本次实测通过；其他模型保持禁用。"
+  ]
+}

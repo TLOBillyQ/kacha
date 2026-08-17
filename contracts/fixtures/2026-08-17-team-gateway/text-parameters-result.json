@@ -1,0 +1,70 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/v1/images/generations",
+    "headers": {
+      "Accept": "application/json",
+      "Authorization": "[REDACTED]",
+      "Content-Type": "application/json"
+    },
+    "body": {
+      "model": "qwen-image-3.0-pro",
+      "prompt": "[REDACTED_PROMPT]",
+      "negative_prompt": "[REDACTED_PROMPT]",
+      "n": 2,
+      "size": "1024x1024",
+      "watermark": false
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Length": "1215",
+      "Content-Type": "application/json",
+      "X-Dashscope-Finished": "true",
+      "X-Dashscope-Timeout": "3600",
+      "X-New-Api-Version": "v0.0.0",
+      "X-Oneapi-Request-Id": "202608171402373097571008268d9d6Lzi57b4w"
+    },
+    "body": {
+      "data": [
+        {
+          "url": "https://example.invalid/redacted",
+          "b64_json": "[REDACTED_IMAGE]",
+          "revised_prompt": ""
+        }
+      ],
+      "created": 1786975357,
+      "metadata": {
+        "output": {
+          "choices": [
+            {
+              "finish_reason": "stop",
+              "message": {
+                "content": [
+                  {
+                    "image": "[REDACTED_IMAGE]"
+                  },
+                  {
+                    "image": "[REDACTED_IMAGE]"
+                  }
+                ],
+                "role": "assistant"
+              }
+            }
+          ],
+          "rewrite_status": "success"
+        },
+        "usage": {
+          "input_image_count": 0,
+          "input_image_type": "qima_input_1k",
+          "output_height": 1024,
+          "output_image_count": 2,
+          "output_image_type": "qima_output_1k",
+          "output_width": 1024
+        },
+        "request_id": "ad56dcb6-f11d-9f12-a900-b6b8fa95edde"
+      }
+    }
+  }
+}

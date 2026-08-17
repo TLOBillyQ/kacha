@@ -1,0 +1,27 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/v1/models",
+    "headers": {
+      "Accept": "application/json",
+      "Authorization": "[REDACTED]"
+    },
+    "body": null
+  },
+  "response": {
+    "status": 401,
+    "headers": {
+      "Content-Type": "application/json; charset=utf-8",
+      "X-New-Api-Version": "v0.0.0",
+      "X-Oneapi-Request-Id": "202608171404319537962008268d9d6eth9f8XD",
+      "Content-Length": "124"
+    },
+    "body": {
+      "error": {
+        "code": "",
+        "message": "Invalid token (request id: 202608171404319537962008268d9d6eth9f8XD)",
+        "type": "new_api_error"
+      }
+    }
+  }
+}

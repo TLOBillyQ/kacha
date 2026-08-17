@@ -1,0 +1,117 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/v1/models",
+    "headers": {
+      "Accept": "application/json",
+      "Authorization": "[REDACTED]"
+    },
+    "body": null
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json; charset=utf-8",
+      "X-New-Api-Version": "v0.0.0",
+      "X-Oneapi-Request-Id": "202608171354269069570008268d9d6qabWg9wk",
+      "Content-Length": "1236"
+    },
+    "body": {
+      "data": [
+        {
+          "id": "deepseek-v4-flash",
+          "object": "model",
+          "created": 1626777600,
+          "owned_by": "deepseek",
+          "supported_endpoint_types": [
+            "openai",
+            "openai-response"
+          ]
+        },
+        {
+          "id": "deepseek-v4-pro",
+          "object": "model",
+          "created": 1626777600,
+          "owned_by": "deepseek",
+          "supported_endpoint_types": [
+            "openai"
+          ]
+        },
+        {
+          "id": "kimi/kimi-k3",
+          "object": "model",
+          "created": 1626777600,
+          "owned_by": "ali",
+          "supported_endpoint_types": [
+            "openai"
+          ]
+        },
+        {
+          "id": "qwen-image-3.0-pro",
+          "object": "model",
+          "created": 1626777600,
+          "owned_by": "ali",
+          "supported_endpoint_types": [
+            "openai"
+          ]
+        },
+        {
+          "id": "qwen3.8-max",
+          "object": "model",
+          "created": 1626777600,
+          "owned_by": "ali",
+          "supported_endpoint_types": [
+            "openai"
+          ]
+        },
+        {
+          "id": "wan2.6-i2v-flash",
+          "object": "model",
+          "created": 1626777600,
+          "owned_by": "ali",
+          "supported_endpoint_types": [
+            "openai"
+          ]
+        },
+        {
+          "id": "wan2.7-i2v",
+          "object": "model",
+          "created": 1626777600,
+          "owned_by": "ali",
+          "supported_endpoint_types": [
+            "openai"
+          ]
+        },
+        {
+          "id": "wan2.7-image",
+          "object": "model",
+          "created": 1626777600,
+          "owned_by": "ali",
+          "supported_endpoint_types": [
+            "openai"
+          ]
+        },
+        {
+          "id": "wan2.7-image-pro",
+          "object": "model",
+          "created": 1626777600,
+          "owned_by": "ali",
+          "supported_endpoint_types": [
+            "openai"
+          ]
+        },
+        {
+          "id": "wan2.7-t2v",
+          "object": "model",
+          "created": 1626777600,
+          "owned_by": "ali",
+          "supported_endpoint_types": [
+            "openai"
+          ]
+        }
+      ],
+      "object": "list",
+      "success": true
+    }
+  }
+}

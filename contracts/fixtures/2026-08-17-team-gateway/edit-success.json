@@ -1,0 +1,60 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/v1/images/edits",
+    "headers": {
+      "Accept": "application/json",
+      "Authorization": "[REDACTED]",
+      "Content-Type": "multipart/form-data; boundary=ugc-contract-boundary"
+    },
+    "body": "[REDACTED_MULTIPART_BODY]"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Length": "952",
+      "Content-Type": "application/json",
+      "X-Dashscope-Finished": "true",
+      "X-Dashscope-Timeout": "3600",
+      "X-New-Api-Version": "v0.0.0",
+      "X-Oneapi-Request-Id": "202608171400344687536008268d9d6na0g2qsy"
+    },
+    "body": {
+      "data": [
+        {
+          "url": "https://example.invalid/redacted",
+          "b64_json": "[REDACTED_IMAGE]",
+          "revised_prompt": ""
+        }
+      ],
+      "created": 1786975234,
+      "metadata": {
+        "output": {
+          "choices": [
+            {
+              "finish_reason": "stop",
+              "message": {
+                "content": [
+                  {
+                    "image": "[REDACTED_IMAGE]"
+                  }
+                ],
+                "role": "assistant"
+              }
+            }
+          ],
+          "rewrite_status": "success"
+        },
+        "usage": {
+          "input_image_count": 1,
+          "input_image_type": "qima_input_2k",
+          "output_height": 2048,
+          "output_image_count": 1,
+          "output_image_type": "qima_output_2k",
+          "output_width": 2048
+        },
+        "request_id": "a7c70ae1-f665-9e58-b42c-209996147e89"
+      }
+    }
+  }
+}
