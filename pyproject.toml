@@ -9,6 +9,9 @@ description = "UGC AI 生图工具"
 requires-python = ">=3.12"
 dependencies = ["PySide6>=6.8,<7"]
 
+[project.optional-dependencies]
+test = ["pytest>=8,<10"]
+
 [project.scripts]
 ugc-contracts = "ugc_image_tool.contracts.cli:main"
 ugc-image-tool = "ugc_image_tool.ui:run"

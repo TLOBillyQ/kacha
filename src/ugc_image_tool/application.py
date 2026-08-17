@@ -7,11 +7,20 @@ from threading import Lock
 from typing import Callable, Protocol
 from uuid import uuid4
 
-from .generation import GeneratedImage, GenerationStatus, GenerationTask
+from .capabilities import CapabilityRegistry
+from .generation import (
+    GeneratedImage,
+    GenerationStatus,
+    GenerationTask,
+    TextToImageDraft,
+    TextToImageRequest,
+    build_request,
+    draft_errors,
+)
 
 
 class Gateway(Protocol):
-    def generate_text(self, prompt: str) -> GeneratedImage: ...
+    def generate_text(self, request: TextToImageRequest) -> GeneratedImage: ...
 
 
 class ResultRepository(Protocol):
@@ -31,23 +40,31 @@ class GenerationApplication:
         *,
         gateway: Gateway,
         results: ResultRepository,
+        capabilities: CapabilityRegistry | None = None,
         on_task_changed: TaskListener | None = None,
     ) -> None:
         self._gateway = gateway
         self._results = results
+        self._capabilities = capabilities or CapabilityRegistry()
         self._on_task_changed = on_task_changed
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="generation")
         self._tasks: dict[str, GenerationTask] = {}
         self._futures: dict[str, Future[None]] = {}
         self._lock = Lock()
 
-    def submit_text(self, prompt: str) -> str:
-        normalized_prompt = prompt.strip()
-        if not normalized_prompt:
-            raise ValueError("请输入正向提示词")
+    def submit_text(self, draft: TextToImageDraft) -> str:
+        """按目标模型能力校验草稿并冻结为提交快照，然后排队执行。"""
+        if not draft.model_id:
+            raise ValueError("请选择模型")
+        capability = self._capabilities.capability(draft.model_id)
+        errors = draft_errors(draft, capability)
+        if errors:
+            raise ValueError("；".join(errors))
+        assert capability is not None  # draft_errors 对未配置模型必然返回错误
+        request = build_request(draft, capability, self._capabilities.version)
         task = GenerationTask(
             task_id=uuid4().hex,
-            prompt=normalized_prompt,
+            request=request,
             submitted_at=datetime.now(UTC),
         )
         with self._lock:
@@ -73,7 +90,7 @@ class GenerationApplication:
         running = task.with_status(GenerationStatus.RUNNING)
         self._replace(running)
         try:
-            image = self._gateway.generate_text(task.prompt)
+            image = self._gateway.generate_text(task.request)
             result_path = self._results.save(task, image)
             succeeded = running.with_status(
                 GenerationStatus.SUCCEEDED,

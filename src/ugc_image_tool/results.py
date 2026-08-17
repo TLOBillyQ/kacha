@@ -24,6 +24,8 @@ class FileResultRepository:
     def save_record(self, task: GenerationTask) -> None:
         task_directory = self._task_directory(task)
         task_directory.mkdir(parents=True, exist_ok=True)
+        request = task.request
+        size = request.size
         record = task_directory / "task.json"
         record.write_text(
             json.dumps(
@@ -32,8 +34,16 @@ class FileResultRepository:
                     "workflow": "text_to_image",
                     "status": task.status.value,
                     "submitted_at": task.submitted_at.isoformat(),
-                    "model": "模拟模型",
-                    "prompt": task.prompt,
+                    "model": request.model_id,
+                    "capability_version": request.capability_version,
+                    "prompt": request.prompt,
+                    "negative_prompt": request.negative_prompt,
+                    "size": {
+                        "mode": size.mode.value,
+                        "width": size.width,
+                        "height": size.height,
+                    },
+                    "image_count": request.image_count,
                     "result_files": [path.name for path in task.result_paths],
                     "error": task.error,
                 },

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -164,6 +165,7 @@ class ContractCliTests(unittest.TestCase):
         self.assertIn("网络", result.stderr)
         self.assertNotIn("Traceback", result.stderr)
 
+    @unittest.skipUnless(os.name != "nt", "POSIX 文件权限位在 Windows 上不可验证")
     def test_insecure_key_file_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             key_file = Path(directory) / "key"

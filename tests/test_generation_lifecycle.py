@@ -1,13 +1,45 @@
 from __future__ import annotations
 
+import json
 import threading
 import time
 import unittest
 from dataclasses import dataclass
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from ugc_image_tool.application import GenerationApplication
-from ugc_image_tool.generation import GenerationStatus, GeneratedImage
+from ugc_image_tool.capabilities import (
+    CAPABILITY_TABLE_VERSION,
+    CapabilityRegistry,
+)
+from ugc_image_tool.generation import (
+    GenerationStatus,
+    GeneratedImage,
+    TextToImageDraft,
+    TextToImageRequest,
+)
+
+Z_IMAGE_TURBO_OVERRIDE = {
+    "schema_version": 1,
+    "models": [
+        {
+            "model_id": "z-image-turbo",
+            "display_name": "快速写实文生图",
+            "workflows": ["text_to_image"],
+            "supports_negative_prompt": False,
+            "min_images": 1,
+            "max_images": 1,
+            "size": {"auto_allowed": True, "presets": [[1024, 1024]]},
+        }
+    ],
+}
+
+
+def make_draft(prompt: str, model_id: str = "qwen-image-3.0-pro", **overrides) -> TextToImageDraft:
+    fields = {"prompt": prompt, "model_id": model_id}
+    fields.update(overrides)
+    return TextToImageDraft(**fields)
 
 
 @dataclass
@@ -15,7 +47,13 @@ class FakeGateway:
     image: GeneratedImage
     started: threading.Event
 
-    def generate_text(self, prompt: str) -> GeneratedImage:
+    def __init__(self, image: GeneratedImage) -> None:
+        self.image = image
+        self.started = threading.Event()
+        self.requests: list[TextToImageRequest] = []
+
+    def generate_text(self, request: TextToImageRequest) -> GeneratedImage:
+        self.requests.append(request)
         self.started.set()
         return self.image
 
@@ -36,10 +74,7 @@ class InMemoryResultRepository:
 
 class GenerationLifecycleTests(unittest.TestCase):
     def test_prompt_creates_independent_task_and_saves_result(self) -> None:
-        gateway = FakeGateway(
-            image=GeneratedImage(content=b"png-data", media_type="image/png"),
-            started=threading.Event(),
-        )
+        gateway = FakeGateway(image=GeneratedImage(content=b"png-data", media_type="image/png"))
         repository = InMemoryResultRepository()
         visible_statuses = []
         application = GenerationApplication(
@@ -48,7 +83,7 @@ class GenerationLifecycleTests(unittest.TestCase):
             on_task_changed=lambda task: visible_statuses.append(task.status),
         )
 
-        task_id = application.submit_text("一只蓝色小鸟")
+        task_id = application.submit_text(make_draft("一只蓝色小鸟"))
 
         self.assertTrue(gateway.started.wait(timeout=1))
         task = application.wait_for(task_id, timeout=1)
@@ -66,7 +101,7 @@ class GenerationLifecycleTests(unittest.TestCase):
         release = threading.Event()
 
         class BlockingGateway:
-            def generate_text(self, prompt: str) -> GeneratedImage:
+            def generate_text(self, request: TextToImageRequest) -> GeneratedImage:
                 release.wait(timeout=1)
                 return GeneratedImage(b"png-data", "image/png")
 
@@ -75,7 +110,7 @@ class GenerationLifecycleTests(unittest.TestCase):
             results=InMemoryResultRepository(),
         )
 
-        task_id = application.submit_text("后台生成")
+        task_id = application.submit_text(make_draft("后台生成"))
 
         self.assertIn(
             application.task(task_id).status,
@@ -89,7 +124,7 @@ class GenerationLifecycleTests(unittest.TestCase):
 
     def test_gateway_failure_is_visible_as_failed_task(self) -> None:
         class FailingGateway:
-            def generate_text(self, prompt: str) -> GeneratedImage:
+            def generate_text(self, request: TextToImageRequest) -> GeneratedImage:
                 raise RuntimeError("模拟网关不可用")
 
         repository = InMemoryResultRepository()
@@ -100,7 +135,7 @@ class GenerationLifecycleTests(unittest.TestCase):
             on_task_changed=lambda task: visible_statuses.append(task.status),
         )
 
-        task_id = application.submit_text("测试失败")
+        task_id = application.submit_text(make_draft("测试失败"))
         task = application.wait_for(task_id, timeout=1)
 
         self.assertEqual(GenerationStatus.FAILED, task.status)
@@ -116,16 +151,12 @@ class GenerationLifecycleTests(unittest.TestCase):
             def save_record(self, task) -> None:
                 raise OSError("任务记录不可写")
 
-        gateway = FakeGateway(
-            image=GeneratedImage(content=b"png-data", media_type="image/png"),
-            started=threading.Event(),
-        )
         application = GenerationApplication(
-            gateway=gateway,
+            gateway=FakeGateway(image=GeneratedImage(content=b"png-data", media_type="image/png")),
             results=FailingRecordRepository(),
         )
 
-        task = application.wait_for(application.submit_text("记录失败"), timeout=1)
+        task = application.wait_for(application.submit_text(make_draft("记录失败")), timeout=1)
 
         self.assertEqual(GenerationStatus.FAILED, task.status)
         self.assertEqual("任务记录不可写", task.error)
@@ -135,7 +166,7 @@ class GenerationLifecycleTests(unittest.TestCase):
         release = threading.Event()
 
         class BlockingGateway:
-            def generate_text(self, prompt: str) -> GeneratedImage:
+            def generate_text(self, request: TextToImageRequest) -> GeneratedImage:
                 started.set()
                 release.wait(timeout=1)
                 return GeneratedImage(b"png-data", "image/png")
@@ -144,7 +175,7 @@ class GenerationLifecycleTests(unittest.TestCase):
             gateway=BlockingGateway(),
             results=InMemoryResultRepository(),
         )
-        application.submit_text("关闭窗口")
+        application.submit_text(make_draft("关闭窗口"))
         self.assertTrue(started.wait(timeout=1))
 
         before = time.monotonic()
@@ -153,6 +184,87 @@ class GenerationLifecycleTests(unittest.TestCase):
         release.set()
 
         self.assertLess(elapsed, 0.1)
+
+
+class SubmissionCapabilityTests(unittest.TestCase):
+    def test_gateway_receives_frozen_snapshot_with_capability_version(self) -> None:
+        gateway = FakeGateway(image=GeneratedImage(content=b"png-data", media_type="image/png"))
+        application = GenerationApplication(
+            gateway=gateway,
+            results=InMemoryResultRepository(),
+        )
+
+        task_id = application.submit_text(make_draft("快照", image_count=2))
+        application.wait_for(task_id, timeout=1)
+
+        self.assertTrue(gateway.requests)
+        request = gateway.requests[0]
+
+        self.assertEqual("快照", request.prompt)
+        self.assertEqual("qwen-image-3.0-pro", request.model_id)
+        self.assertEqual(CAPABILITY_TABLE_VERSION, request.capability_version)
+        self.assertEqual(2, request.image_count)
+        self.assertIn(("watermark", False), request.params)
+
+    def test_unsupported_draft_fields_are_filtered_before_gateway(self) -> None:
+        with TemporaryDirectory() as directory:
+            override = Path(directory) / "override.json"
+            override.write_text(json.dumps(Z_IMAGE_TURBO_OVERRIDE), encoding="utf-8")
+            gateway = FakeGateway(image=GeneratedImage(content=b"png-data", media_type="image/png"))
+            application = GenerationApplication(
+                gateway=gateway,
+                results=InMemoryResultRepository(),
+                capabilities=CapabilityRegistry(override),
+            )
+
+            task_id = application.submit_text(
+                make_draft("快速写实", model_id="z-image-turbo", negative_prompt="不要文字")
+            )
+            application.wait_for(task_id, timeout=1)
+
+        self.assertEqual(1, len(gateway.requests))
+        request = gateway.requests[0]
+        self.assertIsNone(request.negative_prompt)
+        self.assertEqual((), request.params)
+
+    def test_unknown_model_cannot_be_submitted(self) -> None:
+        application = GenerationApplication(
+            gateway=FakeGateway(image=GeneratedImage(content=b"png-data", media_type="image/png")),
+            results=InMemoryResultRepository(),
+        )
+
+        with self.assertRaises(ValueError) as raised:
+            application.submit_text(make_draft("未知模型", model_id="wan2.7-image"))
+
+        self.assertIn("模型未配置", str(raised.exception))
+
+    def test_invalid_image_count_cannot_be_submitted(self) -> None:
+        application = GenerationApplication(
+            gateway=FakeGateway(image=GeneratedImage(content=b"png-data", media_type="image/png")),
+            results=InMemoryResultRepository(),
+        )
+
+        with self.assertRaises(ValueError) as raised:
+            application.submit_text(make_draft("超量", image_count=9))
+
+        self.assertIn("出图数量", str(raised.exception))
+
+    def test_draft_mutations_after_submit_do_not_affect_snapshot(self) -> None:
+        gateway = FakeGateway(image=GeneratedImage(content=b"png-data", media_type="image/png"))
+        application = GenerationApplication(
+            gateway=gateway,
+            results=InMemoryResultRepository(),
+        )
+        draft = make_draft("原始提示词", negative_prompt="旧负向")
+        task_id = application.submit_text(draft)
+
+        draft.prompt = "改过的提示词"
+        draft.negative_prompt = None
+        application.wait_for(task_id, timeout=1)
+
+        self.assertEqual("原始提示词", gateway.requests[0].prompt)
+        self.assertEqual("旧负向", gateway.requests[0].negative_prompt)
+        self.assertEqual("原始提示词", application.task(task_id).prompt)
 
 
 if __name__ == "__main__":

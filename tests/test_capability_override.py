@@ -1,0 +1,236 @@
+from __future__ import annotations
+
+import json
+import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+from ugc_image_tool.capabilities import (
+    BUILTIN_CAPABILITIES,
+    CapabilityOverrideError,
+    CapabilityRegistry,
+    ModelCapability,
+    SizeRule,
+    Workflow,
+    enforce_special_constraints,
+    load_override_file,
+)
+
+SIZE_RULE = {
+    "auto_allowed": True,
+    "presets": [[1024, 1024]],
+    "min_total_pixels": 262144,
+    "max_total_pixels": 4194304,
+    "min_aspect_ratio": 0.125,
+    "max_aspect_ratio": 8.0,
+}
+
+QWEN_ENTRY = {
+    "model_id": "qwen-image-3.0-pro",
+    "display_name": "团队实测版 Qwen Image 3.0",
+    "workflows": ["text_to_image", "image_edit"],
+    "supports_negative_prompt": True,
+    "min_images": 1,
+    "max_images": 4,
+    "size": SIZE_RULE,
+    "extra_params": ["watermark"],
+}
+
+Z_IMAGE_TURBO_ENTRY = {
+    "model_id": "z-image-turbo",
+    "display_name": "快速写实文生图",
+    "workflows": ["text_to_image"],
+    "supports_negative_prompt": False,
+    "min_images": 1,
+    "max_images": 1,
+    "size": {"auto_allowed": True, "presets": [[1024, 1024]]},
+}
+
+
+def write_override(directory: str, models: list[dict]) -> Path:
+    path = Path(directory) / "override.json"
+    path.write_text(
+        json.dumps({"schema_version": 1, "models": models}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    return path
+
+
+def reasons_for(models: list[dict]) -> list[str]:
+    with TemporaryDirectory() as directory:
+        try:
+            load_override_file(write_override(directory, models))
+        except CapabilityOverrideError as error:
+            return error.reasons
+    raise AssertionError("预期覆盖文件被拒绝，但加载成功")
+
+
+class OverrideLoadTests(unittest.TestCase):
+    def test_valid_override_replaces_builtin_entry_by_model_id(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = write_override(directory, [QWEN_ENTRY])
+
+            table = load_override_file(path)
+
+            self.assertIn("qwen-image-3.0-pro", table)
+            capability = table["qwen-image-3.0-pro"]
+            self.assertEqual("团队实测版 Qwen Image 3.0", capability.display_name)
+            self.assertEqual(4, capability.max_images)
+            self.assertIsNot(capability, BUILTIN_CAPABILITIES["qwen-image-3.0-pro"])
+
+    def test_override_adds_new_model(self) -> None:
+        with TemporaryDirectory() as directory:
+            table = load_override_file(write_override(directory, [Z_IMAGE_TURBO_ENTRY]))
+
+        self.assertEqual(
+            {Workflow.TEXT_TO_IMAGE},
+            table["z-image-turbo"].workflows,
+        )
+        self.assertEqual("快速写实文生图", table["z-image-turbo"].display_name)
+
+    def test_override_takes_precedence_in_registry(self) -> None:
+        with TemporaryDirectory() as directory:
+            registry = CapabilityRegistry(write_override(directory, [QWEN_ENTRY]))
+
+        self.assertEqual(4, registry.capability("qwen-image-3.0-pro").max_images)  # type: ignore[union-attr]
+
+    def test_missing_file_is_rejected_with_reason(self) -> None:
+        with self.assertRaises(CapabilityOverrideError) as raised:
+            load_override_file(Path("不存在的目录") / "override.json")
+        self.assertTrue(any("override.json" in reason for reason in raised.exception.reasons))
+
+    def test_invalid_json_is_rejected_with_reason(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "override.json"
+            path.write_text("{broken json", encoding="utf-8")
+
+            with self.assertRaises(CapabilityOverrideError) as raised:
+                load_override_file(path)
+
+        self.assertTrue(any("JSON" in reason for reason in raised.exception.reasons))
+
+
+class OverrideValidationTests(unittest.TestCase):
+    def test_whole_file_rejected_on_schema_version_error(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "override.json"
+            path.write_text(json.dumps({"schema_version": 2, "models": [QWEN_ENTRY]}), encoding="utf-8")
+
+            with self.assertRaises(CapabilityOverrideError) as raised:
+                load_override_file(path)
+
+        self.assertTrue(any("schema_version" in reason for reason in raised.exception.reasons))
+
+    def test_whole_file_rejected_on_empty_models(self) -> None:
+        reasons = reasons_for([])
+        self.assertTrue(reasons)
+
+    def test_whole_file_rejected_on_duplicate_model_id(self) -> None:
+        reasons = reasons_for([QWEN_ENTRY, QWEN_ENTRY])
+        self.assertTrue(any("重复" in reason for reason in reasons))
+
+    def test_whole_file_rejected_on_unknown_workflow(self) -> None:
+        entry = dict(QWEN_ENTRY, workflows=["text_to_image", "video"])
+        reasons = reasons_for([entry])
+        self.assertTrue(any("video" in reason for reason in reasons))
+
+    def test_whole_file_rejected_when_image_range_inverted(self) -> None:
+        entry = dict(QWEN_ENTRY, min_images=3, max_images=1)
+        reasons = reasons_for([entry])
+        self.assertTrue(any("出图数量" in reason for reason in reasons))
+
+    def test_whole_file_rejected_when_preset_violates_size_rule(self) -> None:
+        entry = dict(
+            QWEN_ENTRY,
+            size={**SIZE_RULE, "presets": [[1024, 1024], [9000, 9000]]},
+        )
+        reasons = reasons_for([entry])
+        self.assertTrue(any("预设" in reason or "9000" in reason for reason in reasons))
+
+    def test_whole_file_rejected_on_invalid_custom_size_bounds(self) -> None:
+        entry = dict(
+            QWEN_ENTRY,
+            size={**SIZE_RULE, "min_total_pixels": 4194304, "max_total_pixels": 262144},
+        )
+        reasons = reasons_for([entry])
+        self.assertTrue(reasons)
+
+    def test_errors_list_all_reasons_in_whole_file(self) -> None:
+        entry = dict(QWEN_ENTRY, display_name="", min_images=3, max_images=1)
+        reasons = reasons_for([entry])
+        self.assertGreaterEqual(len(reasons), 2)
+
+
+class ZImageTurboConstraintTests(unittest.TestCase):
+    def test_override_with_image_edit_workflow_is_rejected(self) -> None:
+        entry = dict(Z_IMAGE_TURBO_ENTRY, workflows=["text_to_image", "image_edit"])
+        reasons = reasons_for([entry])
+        self.assertTrue(any("快速写实文生图" in reason for reason in reasons))
+        self.assertTrue(any("图片编辑" in reason for reason in reasons))
+
+    def test_override_with_wrong_display_name_is_rejected(self) -> None:
+        entry = dict(Z_IMAGE_TURBO_ENTRY, display_name="全能图像模型")
+        reasons = reasons_for([entry])
+        self.assertTrue(any("快速写实文生图" in reason for reason in reasons))
+
+    def test_valid_entry_merges_into_registry(self) -> None:
+        with TemporaryDirectory() as directory:
+            registry = CapabilityRegistry(write_override(directory, [Z_IMAGE_TURBO_ENTRY]))
+
+        capability = registry.capability("z-image-turbo")
+        self.assertIsNotNone(capability)
+        self.assertEqual("快速写实文生图", capability.display_name)  # type: ignore[union-attr]
+        self.assertEqual(
+            frozenset({Workflow.TEXT_TO_IMAGE}),
+            registry.for_workflow(Workflow.TEXT_TO_IMAGE)[1].workflows,
+        )
+
+    def test_override_version_identifies_applied_table(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = write_override(directory, [Z_IMAGE_TURBO_ENTRY])
+            registry = CapabilityRegistry(path)
+            first_version = registry.version
+            path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "models": [dict(Z_IMAGE_TURBO_ENTRY, supports_negative_prompt=True)],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            changed_version = CapabilityRegistry(path).version
+
+        self.assertTrue(first_version.startswith("capabilities-v1+override-"))
+        self.assertNotEqual(first_version, changed_version)
+
+
+class SpecialConstraintEnforcementTests(unittest.TestCase):
+    def test_enforcement_normalizes_z_image_turbo_from_any_entry(self) -> None:
+        wayward = ModelCapability(
+            model_id="z-image-turbo",
+            display_name="全能图像模型",
+            workflows=frozenset({Workflow.TEXT_TO_IMAGE, Workflow.IMAGE_EDIT}),
+            supports_negative_prompt=False,
+            min_images=1,
+            max_images=1,
+            size=SizeRule(auto_allowed=True, presets=((1024, 1024),)),
+        )
+
+        enforced = enforce_special_constraints(wayward)
+
+        self.assertEqual("快速写实文生图", enforced.display_name)
+        self.assertEqual(frozenset({Workflow.TEXT_TO_IMAGE}), enforced.workflows)
+
+    def test_registry_never_exposes_z_image_turbo_in_image_edit(self) -> None:
+        registry = CapabilityRegistry()
+
+        self.assertNotIn(
+            "z-image-turbo",
+            [m.model_id for m in registry.for_workflow(Workflow.IMAGE_EDIT)],
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()
