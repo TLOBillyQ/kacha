@@ -160,6 +160,7 @@ class GenerationLifecycleTests(unittest.TestCase):
 
         self.assertEqual(GenerationStatus.FAILED, task.status)
         self.assertEqual("任务记录不可写", task.error)
+        self.assertEqual((), task.result_paths)
 
     def test_close_does_not_wait_for_running_gateway_work(self) -> None:
         started = threading.Event()

@@ -1,0 +1,395 @@
+from __future__ import annotations
+
+import unittest
+from datetime import UTC, datetime
+from pathlib import Path
+from threading import Condition, Event
+from tempfile import TemporaryDirectory
+from time import monotonic
+
+from ugc_image_tool.application import GenerationApplication
+from ugc_image_tool.generation import (
+    GeneratedImage,
+    GenerationStatus,
+    GenerationTask,
+    TextToImageDraft,
+    TextToImageRequest,
+)
+from ugc_image_tool.results import FileResultRepository
+
+
+class GenerationStateTests(unittest.TestCase):
+    def test_status_transitions_reject_skipping_and_terminal_transitions(self) -> None:
+        task = GenerationTask(
+            task_id="task-1",
+            request=TextToImageRequest(
+                prompt="a test image",
+                model_id="model",
+                capability_version="test-v1",
+            ),
+            submitted_at=datetime.now(UTC),
+        )
+
+        running = task.with_status(GenerationStatus.RUNNING)
+        self.assertEqual(GenerationStatus.RUNNING, running.status)
+
+        with self.assertRaises(ValueError):
+            task.with_status(GenerationStatus.SUCCEEDED)
+
+        cancelled = task.with_status(GenerationStatus.CANCELLED)
+        with self.assertRaises(ValueError):
+            cancelled.with_status(GenerationStatus.RUNNING)
+
+
+class BlockingGateway:
+    def __init__(self) -> None:
+        self.image = GeneratedImage(content=b"png-data", media_type="image/png")
+        self.release = Event()
+        self._condition = Condition()
+        self._release_by_prompt: dict[str, Event] = {}
+        self.calls: list[str] = []
+        self.active = 0
+        self.max_active = 0
+
+    def generate_text(self, request: TextToImageRequest) -> GeneratedImage:
+        with self._condition:
+            self.calls.append(request.prompt)
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+            self._condition.notify_all()
+            prompt_release = self._release_by_prompt.setdefault(request.prompt, Event())
+        while not self.release.is_set() and not prompt_release.wait(timeout=0.01):
+            pass
+        with self._condition:
+            self.active -= 1
+            self._condition.notify_all()
+        return self.image
+
+    def wait_for_calls(self, count: int, timeout: float = 1) -> bool:
+        with self._condition:
+            return self._condition.wait_for(lambda: len(self.calls) >= count, timeout)
+
+    def release_prompt(self, prompt: str) -> None:
+        with self._condition:
+            self._release_by_prompt.setdefault(prompt, Event()).set()
+
+
+class InMemoryResults:
+    def __init__(self) -> None:
+        self.saved: list[str] = []
+        self.records: list[GenerationTask] = []
+
+    def save(self, task: GenerationTask, image: GeneratedImage) -> Path:
+        self.saved.append(task.task_id)
+        return Path(task.task_id) / "result-1.png"
+
+    def save_record(self, task: GenerationTask) -> None:
+        self.records.append(task)
+
+
+class GenerationQueueTests(unittest.TestCase):
+    def test_concurrency_limit_is_restricted_to_one_through_six(self) -> None:
+        application = GenerationApplication(
+            gateway=BlockingGateway(),
+            results=InMemoryResults(),
+        )
+        try:
+            for invalid in (0, 7):
+                with self.assertRaises(ValueError):
+                    application.set_concurrency_limit(invalid)
+        finally:
+            application.close()
+
+    def test_default_limit_runs_three_tasks_and_keeps_fifo_order(self) -> None:
+        gateway = BlockingGateway()
+        application = GenerationApplication(gateway=gateway, results=InMemoryResults())
+        task_ids = []
+        try:
+            for index in range(5):
+                task_ids.append(
+                    application.submit_text(
+                        TextToImageDraft(prompt=f"job-{index}", model_id="qwen-image-3.0-pro")
+                    )
+                )
+
+            self.assertTrue(gateway.wait_for_calls(3))
+            self.assertEqual(["job-0", "job-1", "job-2"], gateway.calls)
+            self.assertLessEqual(gateway.max_active, 3)
+
+            gateway.release_prompt("job-0")
+            self.assertTrue(gateway.wait_for_calls(4))
+            gateway.release_prompt("job-1")
+            self.assertTrue(gateway.wait_for_calls(5))
+            gateway.release_prompt("job-2")
+            gateway.release_prompt("job-3")
+            gateway.release_prompt("job-4")
+            for task_id in task_ids:
+                self.assertEqual(
+                    GenerationStatus.SUCCEEDED,
+                    application.wait_for(task_id, timeout=2).status,
+                )
+        finally:
+            gateway.release.set()
+            application.close()
+
+        self.assertEqual(
+            [f"job-{index}" for index in range(5)],
+            gateway.calls,
+        )
+
+    def test_lowering_limit_does_not_cancel_running_tasks(self) -> None:
+        gateway = BlockingGateway()
+        application = GenerationApplication(gateway=gateway, results=InMemoryResults())
+        task_ids = []
+        try:
+            for index in range(4):
+                task_ids.append(
+                    application.submit_text(
+                        TextToImageDraft(prompt=f"job-{index}", model_id="qwen-image-3.0-pro")
+                    )
+                )
+            self.assertTrue(gateway.wait_for_calls(3))
+
+            application.set_concurrency_limit(1)
+            self.assertEqual(1, application.max_concurrency)
+            gateway.release.set()
+
+            for task_id in task_ids:
+                self.assertEqual(
+                    GenerationStatus.SUCCEEDED,
+                    application.wait_for(task_id, timeout=2).status,
+                )
+        finally:
+            gateway.release.set()
+            application.close()
+
+        self.assertEqual(3, gateway.max_active)
+        self.assertEqual([f"job-{index}" for index in range(4)], gateway.calls)
+
+
+class GenerationCancellationTests(unittest.TestCase):
+    def test_queued_task_can_be_cancelled_without_calling_gateway(self) -> None:
+        gateway = BlockingGateway()
+        results = InMemoryResults()
+        application = GenerationApplication(
+            gateway=gateway,
+            results=results,
+            max_concurrency=1,
+        )
+        try:
+            first = application.submit_text(
+                TextToImageDraft(prompt="first", model_id="qwen-image-3.0-pro")
+            )
+            self.assertTrue(gateway.wait_for_calls(1))
+            second = application.submit_text(
+                TextToImageDraft(prompt="second", model_id="qwen-image-3.0-pro")
+            )
+
+            self.assertTrue(application.cancel(second))
+            self.assertEqual(GenerationStatus.CANCELLED, application.wait_for(second).status)
+            gateway.release.set()
+            self.assertEqual(
+                GenerationStatus.SUCCEEDED,
+                application.wait_for(first, timeout=2).status,
+            )
+        finally:
+            gateway.release.set()
+            application.close()
+
+        self.assertEqual(["first"], gateway.calls)
+        self.assertFalse(application.cancel(second))
+
+    def test_running_cancellation_ignores_late_gateway_result(self) -> None:
+        gateway = BlockingGateway()
+        results = InMemoryResults()
+        application = GenerationApplication(
+            gateway=gateway,
+            results=results,
+            max_concurrency=1,
+        )
+        try:
+            task_id = application.submit_text(
+                TextToImageDraft(prompt="cancel me", model_id="qwen-image-3.0-pro")
+            )
+            self.assertTrue(gateway.wait_for_calls(1))
+
+            self.assertTrue(application.cancel(task_id))
+            self.assertEqual(
+                GenerationStatus.CANCELLED,
+                application.wait_for(task_id, timeout=1).status,
+            )
+            gateway.release.set()
+        finally:
+            gateway.release.set()
+            application.close()
+
+        self.assertEqual([], results.saved)
+
+
+class GenerationUncertaintyTests(unittest.TestCase):
+    def test_wait_timeout_marks_unknown_without_retrying_generation(self) -> None:
+        started = Event()
+        release = Event()
+        calls = []
+
+        class HangingGateway:
+            def generate_text(self, request: TextToImageRequest) -> GeneratedImage:
+                calls.append(request.prompt)
+                started.set()
+                release.wait(timeout=2)
+                return GeneratedImage(b"late", "image/png")
+
+        results = InMemoryResults()
+        application = GenerationApplication(
+            gateway=HangingGateway(),
+            results=results,
+            timeout_seconds=0.03,
+        )
+        try:
+            task_id = application.submit_text(
+                TextToImageDraft(prompt="unknown", model_id="qwen-image-3.0-pro")
+            )
+            self.assertTrue(started.wait(timeout=1))
+            before = monotonic()
+            task = application.wait_for(task_id, timeout=1)
+            elapsed = monotonic() - before
+            self.assertEqual(GenerationStatus.UNKNOWN, task.status)
+            self.assertLess(elapsed, 0.5)
+            self.assertEqual(["unknown"], calls)
+            self.assertEqual([], results.saved)
+        finally:
+            release.set()
+            application.close()
+
+    def test_connection_interruption_marks_unknown_without_retrying_generation(self) -> None:
+        calls = []
+
+        class DisconnectedGateway:
+            def generate_text(self, request: TextToImageRequest) -> GeneratedImage:
+                calls.append(request.prompt)
+                raise OSError("socket closed")
+
+        application = GenerationApplication(
+            gateway=DisconnectedGateway(),
+            results=InMemoryResults(),
+        )
+        try:
+            task_id = application.submit_text(
+                TextToImageDraft(prompt="disconnected", model_id="qwen-image-3.0-pro")
+            )
+            task = application.wait_for(task_id, timeout=1)
+            self.assertEqual(GenerationStatus.UNKNOWN, task.status)
+            self.assertIn("结果未知", task.error or "")
+            self.assertEqual(["disconnected"], calls)
+        finally:
+            application.close()
+
+    def test_gateway_timeout_exception_marks_unknown_immediately(self) -> None:
+        calls = []
+
+        class TimedOutGateway:
+            def generate_text(self, request: TextToImageRequest) -> GeneratedImage:
+                calls.append(request.prompt)
+                raise TimeoutError("gateway read timed out")
+
+        application = GenerationApplication(
+            gateway=TimedOutGateway(),
+            results=InMemoryResults(),
+        )
+        try:
+            task_id = application.submit_text(
+                TextToImageDraft(prompt="gateway timeout", model_id="qwen-image-3.0-pro")
+            )
+            task = application.wait_for(task_id, timeout=1)
+            self.assertEqual(GenerationStatus.UNKNOWN, task.status)
+            self.assertEqual(["gateway timeout"], calls)
+        finally:
+            application.close()
+
+
+class GenerationResultStatusTests(unittest.TestCase):
+    def test_incomplete_gateway_response_is_unknown(self) -> None:
+        class ShortGateway:
+            def generate_text(self, request: TextToImageRequest) -> list[GeneratedImage]:
+                return [GeneratedImage(b"one", "image/png")]
+
+        results = InMemoryResults()
+        application = GenerationApplication(
+            gateway=ShortGateway(),
+            results=results,
+        )
+        try:
+            task_id = application.submit_text(
+                TextToImageDraft(
+                    prompt="uncertain response",
+                    model_id="qwen-image-3.0-pro",
+                    image_count=2,
+                )
+            )
+            task = application.wait_for(task_id, timeout=1)
+        finally:
+            application.close()
+
+        self.assertEqual(GenerationStatus.UNKNOWN, task.status)
+        self.assertEqual([], results.saved)
+
+    def test_saving_one_of_two_results_is_partially_succeeded(self) -> None:
+        images = [GeneratedImage(b"one", "image/png"), GeneratedImage(b"two", "image/png")]
+
+        class PartialGateway:
+            def generate_text(self, request: TextToImageRequest) -> list[GeneratedImage]:
+                return images
+
+        class FailingAfterOneResults(InMemoryResults):
+            def save(self, task: GenerationTask, image: GeneratedImage) -> Path:
+                if self.saved:
+                    raise OSError("第二张结果无法保存")
+                return super().save(task, image)
+
+        results = FailingAfterOneResults()
+        application = GenerationApplication(
+            gateway=PartialGateway(),
+            results=results,
+        )
+        try:
+            task_id = application.submit_text(
+                TextToImageDraft(
+                    prompt="partial",
+                    model_id="qwen-image-3.0-pro",
+                    image_count=2,
+                )
+            )
+            task = application.wait_for(task_id, timeout=1)
+        finally:
+            application.close()
+
+        self.assertEqual(GenerationStatus.PARTIALLY_SUCCEEDED, task.status)
+        self.assertEqual(1, len(task.result_paths))
+        self.assertEqual("第二张结果无法保存", task.error)
+
+    def test_removing_completed_task_keeps_disk_result(self) -> None:
+        class ImmediateGateway:
+            def generate_text(self, request: TextToImageRequest) -> GeneratedImage:
+                return GeneratedImage(b"saved", "image/png")
+
+        with TemporaryDirectory() as directory:
+            application = GenerationApplication(
+                gateway=ImmediateGateway(),
+                results=FileResultRepository(Path(directory)),
+            )
+            try:
+                task_id = application.submit_text(
+                    TextToImageDraft(prompt="keep file", model_id="qwen-image-3.0-pro")
+                )
+                task = application.wait_for(task_id, timeout=1)
+                result_path = task.result_paths[0]
+
+                self.assertTrue(application.remove_task(task_id))
+                self.assertFalse(application.remove_task(task_id))
+                self.assertTrue(result_path.is_file())
+            finally:
+                application.close()
+
+
+if __name__ == "__main__":
+    unittest.main()

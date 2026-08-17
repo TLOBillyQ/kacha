@@ -10,7 +10,9 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QListWidget,
+    QListWidgetItem,
     QMainWindow,
+    QMessageBox,
     QPushButton,
     QSpinBox,
     QTextEdit,
@@ -34,7 +36,10 @@ _STATUS_LABELS = {
     GenerationStatus.QUEUED: "排队中",
     GenerationStatus.RUNNING: "生成中",
     GenerationStatus.SUCCEEDED: "成功",
+    GenerationStatus.PARTIALLY_SUCCEEDED: "部分成功",
     GenerationStatus.FAILED: "失败",
+    GenerationStatus.UNKNOWN: "结果未知",
+    GenerationStatus.CANCELLED: "已取消",
 }
 
 _CUSTOM_SIZE_LABEL = "自定义…"
@@ -65,6 +70,7 @@ class MainWindow(QMainWindow):
             on_task_changed=self._events.changed.emit,
         )
         self._tasks: dict[str, GenerationTask] = {}
+        self._removed_task_ids: set[str] = set()
         self._has_configured_models = False
         self._draft_count = 1
         self._build_form()
@@ -137,8 +143,24 @@ class MainWindow(QMainWindow):
         self._preview.setMinimumSize(320, 320)
         self._preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
+        self._concurrency_box = QSpinBox()
+        self._concurrency_box.setRange(1, 6)
+        self._concurrency_box.setValue(self._application.max_concurrency)
+        self._concurrency_box.valueChanged.connect(self._on_concurrency_changed)
+        self._cancel_task = QPushButton("取消选中任务")
+        self._cancel_task.clicked.connect(self._cancel_selected_task)
+        self._remove_task = QPushButton("从任务中心移除")
+        self._remove_task.clicked.connect(self._remove_selected_task)
+        controls = QHBoxLayout()
+        controls.addWidget(QLabel("并发上限"))
+        controls.addWidget(self._concurrency_box)
+        controls.addWidget(self._cancel_task)
+        controls.addWidget(self._remove_task)
+        controls.addStretch(1)
+
         layout = QVBoxLayout()
         layout.addWidget(QLabel("任务中心"))
+        layout.addLayout(controls)
         layout.addWidget(self._task_list)
         layout.addWidget(self._preview)
         task_container = QWidget()
@@ -274,27 +296,74 @@ class MainWindow(QMainWindow):
         except ValueError as error:
             self.statusBar().showMessage(str(error))
 
+    @Slot(int)
+    def _on_concurrency_changed(self, value: int) -> None:
+        try:
+            self._application.set_concurrency_limit(value)
+        except ValueError as error:
+            self.statusBar().showMessage(str(error))
+
+    @Slot()
+    def _cancel_selected_task(self) -> None:
+        item = self._task_list.currentItem()
+        if item is None:
+            return
+        task_id = item.data(Qt.ItemDataRole.UserRole)
+        if task_id is not None and self._application.cancel(task_id):
+            self.statusBar().showMessage("任务已取消，本地等待已停止，网关侧计算可能仍在继续")
+
+    @Slot()
+    def _remove_selected_task(self) -> None:
+        item = self._task_list.currentItem()
+        if item is None:
+            return
+        task_id = item.data(Qt.ItemDataRole.UserRole)
+        if task_id is not None and self._application.remove_task(task_id):
+            self._tasks.pop(task_id, None)
+            self._removed_task_ids.add(task_id)
+            row = self._task_list.row(item)
+            self._task_list.takeItem(row)
+            self._preview.setText("提交任务后显示生成结果")
+            self.statusBar().showMessage("任务已从任务中心移除，磁盘结果未删除")
+
     @Slot(object)
     def _update_task(self, task: GenerationTask) -> None:
+        if task.task_id in self._removed_task_ids:
+            return
         is_new = task.task_id not in self._tasks
         self._tasks[task.task_id] = task
         label = f"{task.task_id[:8]}  {_STATUS_LABELS[task.status]}  {task.prompt}"
         if is_new:
-            self._task_list.addItem(label)
+            item = QListWidgetItem(label)
+            item.setData(Qt.ItemDataRole.UserRole, task.task_id)
+            self._task_list.addItem(item)
         else:
-            row = next(i for i in range(self._task_list.count()) if self._task_list.item(i).text().startswith(task.task_id[:8]))
+            row = next(
+                (
+                    i
+                    for i in range(self._task_list.count())
+                    if self._task_list.item(i).data(Qt.ItemDataRole.UserRole) == task.task_id
+                ),
+                None,
+            )
+            if row is None:
+                return
             self._task_list.item(row).setText(label)
         if task.status is GenerationStatus.FAILED:
             self.statusBar().showMessage(task.error or "生成失败")
         elif task.status is GenerationStatus.SUCCEEDED:
             self.statusBar().showMessage("生成结果已保存")
             self._show_result(task)
+        elif task.status is GenerationStatus.CANCELLED:
+            self.statusBar().showMessage(task.error or "任务已取消，网关侧计算可能仍在继续")
 
     @Slot(int)
     def _show_selected_result(self, row: int) -> None:
         if row >= 0:
-            task_id = next(iter(self._tasks)) if row == 0 else list(self._tasks)[row]
-            self._show_result(self._tasks[task_id])
+            item = self._task_list.item(row)
+            task_id = item.data(Qt.ItemDataRole.UserRole)
+            if task_id in self._tasks:
+                self._show_result(self._tasks[task_id])
 
     def _show_result(self, task: GenerationTask) -> None:
         if task.result_paths and task.result_paths[0].is_file():
@@ -303,6 +372,17 @@ class MainWindow(QMainWindow):
             ))
 
     def closeEvent(self, event) -> None:
+        if self._application.has_unfinished_tasks():
+            answer = QMessageBox.question(
+                self,
+                "确认关闭",
+                "仍有排队或生成中的任务，关闭后将停止本地等待。确定关闭吗？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer is not QMessageBox.StandardButton.Yes:
+                event.ignore()
+                return
         self._application.close()
         event.accept()
 

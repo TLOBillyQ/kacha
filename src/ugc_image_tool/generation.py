@@ -12,7 +12,31 @@ class GenerationStatus(StrEnum):
     QUEUED = "queued"
     RUNNING = "running"
     SUCCEEDED = "succeeded"
+    PARTIALLY_SUCCEEDED = "partially_succeeded"
     FAILED = "failed"
+    UNKNOWN = "unknown"
+    CANCELLED = "cancelled"
+
+
+_ALLOWED_STATUS_TRANSITIONS: dict[GenerationStatus, frozenset[GenerationStatus]] = {
+    GenerationStatus.QUEUED: frozenset(
+        {GenerationStatus.RUNNING, GenerationStatus.CANCELLED}
+    ),
+    GenerationStatus.RUNNING: frozenset(
+        {
+            GenerationStatus.SUCCEEDED,
+            GenerationStatus.PARTIALLY_SUCCEEDED,
+            GenerationStatus.FAILED,
+            GenerationStatus.UNKNOWN,
+            GenerationStatus.CANCELLED,
+        }
+    ),
+    GenerationStatus.SUCCEEDED: frozenset(),
+    GenerationStatus.PARTIALLY_SUCCEEDED: frozenset(),
+    GenerationStatus.FAILED: frozenset(),
+    GenerationStatus.UNKNOWN: frozenset(),
+    GenerationStatus.CANCELLED: frozenset(),
+}
 
 
 @dataclass(frozen=True)
@@ -146,6 +170,7 @@ class GenerationTask:
     status: GenerationStatus = GenerationStatus.QUEUED
     result_paths: tuple[Path, ...] = ()
     error: str | None = None
+    workflow: Workflow = Workflow.TEXT_TO_IMAGE
 
     @property
     def prompt(self) -> str:
@@ -158,6 +183,10 @@ class GenerationTask:
         result_paths: tuple[Path, ...] = (),
         error: str | None = None,
     ) -> GenerationTask:
+        if status is self.status:
+            return self
+        if status not in _ALLOWED_STATUS_TRANSITIONS[self.status]:
+            raise ValueError(f"非法任务状态迁移：{self.status.value} -> {status.value}")
         return GenerationTask(
             task_id=self.task_id,
             request=self.request,
@@ -165,4 +194,5 @@ class GenerationTask:
             status=status,
             result_paths=result_paths,
             error=error,
+            workflow=self.workflow,
         )

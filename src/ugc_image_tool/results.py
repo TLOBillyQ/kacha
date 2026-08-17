@@ -15,8 +15,11 @@ class FileResultRepository:
         task_directory = self._task_directory(task)
         task_directory.mkdir(parents=True, exist_ok=True)
         suffix = ".png" if image.media_type == "image/png" else ".jpg"
-        temporary = task_directory / f"result-1{suffix}.tmp"
-        result = task_directory / f"result-1{suffix}"
+        index = 1
+        while any(task_directory.glob(f"result-{index}.*")):
+            index += 1
+        temporary = task_directory / f"result-{index}{suffix}.tmp"
+        result = task_directory / f"result-{index}{suffix}"
         temporary.write_bytes(image.content)
         temporary.replace(result)
         return result
@@ -31,7 +34,7 @@ class FileResultRepository:
             json.dumps(
                 {
                     "task_id": task.task_id,
-                    "workflow": "text_to_image",
+                    "workflow": task.workflow.value,
                     "status": task.status.value,
                     "submitted_at": task.submitted_at.isoformat(),
                     "model": request.model_id,
