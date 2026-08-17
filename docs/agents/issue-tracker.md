@@ -1,30 +1,28 @@
-# Issue tracker: Local Markdown
+# Issue tracker: Gitea
 
-Issues and specs for this repo live as markdown files in `.scratch/`.
+Issues and specs for this repo live in Gitea Issues at `http://lzxsvn:3000/qinyuanj/ugc-image-tool`.
 
-## Conventions
+## CLI
 
-- One feature per directory: `.scratch/<feature-slug>/`
-- The spec is `.scratch/<feature-slug>/spec.md`
-- Implementation issues are one file per ticket at `.scratch/<feature-slug>/issues/<NN>-<slug>.md`, numbered from `01` — never a single combined tickets file
-- Triage state is recorded as a `Status:` line near the top of each issue file (see `triage-labels.md` for the role strings)
-- Comments and conversation history append to the bottom of the file under a `## Comments` heading
+Use the authenticated `tea` CLI with login `lzxsvn` and repository `qinyuanj/ugc-image-tool`.
+
+- List issues: `tea issues list --login lzxsvn --repo qinyuanj/ugc-image-tool`
+- View an issue: `tea issues <number> --login lzxsvn --repo qinyuanj/ugc-image-tool`
+- Create an issue: `tea issues create --login lzxsvn --repo qinyuanj/ugc-image-tool`
+- Add a comment: `tea comment --login lzxsvn --repo qinyuanj/ugc-image-tool <number>`
+
+Prefer repository discovery through the configured `origin` remote when it is reliable, but pass `--login` and `--repo` explicitly in automation.
 
 ## When a skill says "publish to the issue tracker"
 
-Create a new file under `.scratch/<feature-slug>/` (creating the directory if needed).
+Create a Gitea Issue. Put the concise feature or task name in the title and the complete specification or ticket in the description. Apply the requested triage label when one is specified.
+
+Do not publish tracker files from `.scratch/`. That directory is a local ignored workspace and is not part of Git history.
 
 ## When a skill says "fetch the relevant ticket"
 
-Read the file at the referenced path. The user will normally pass the path or the issue number directly.
+Read the referenced Gitea Issue with `tea`. The user will normally provide an issue number or URL.
 
-## Wayfinding operations
+## Pull requests as a request surface
 
-Used by `/wayfinder`. The **map** is a file with one **child** file per ticket.
-
-- **Map**: `.scratch/<effort>/map.md` — the Notes / Decisions-so-far / Fog body.
-- **Child ticket**: `.scratch/<effort>/issues/NN-<slug>.md`, numbered from `01`, with the question in the body. A `Type:` line records the ticket type (`research`/`prototype`/`grilling`/`task`); a `Status:` line records `claimed`/`resolved`.
-- **Blocking**: a `Blocked by: NN, NN` line near the top. A ticket is unblocked when every file it lists is `resolved`.
-- **Frontier**: scan `.scratch/<effort>/issues/` for files that are open, unblocked, and unclaimed; first by number wins.
-- **Claim**: set `Status: claimed` and save before any work.
-- **Resolve**: append the answer under an `## Answer` heading, set `Status: resolved`, then append a context pointer (gist + link) to the map's Decisions-so-far in `map.md`.
+Pull requests are not part of the issue-triage queue unless the user explicitly asks to include one.

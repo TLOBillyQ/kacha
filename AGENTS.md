@@ -6,11 +6,7 @@
 
 ### Issue tracker
 
-项目使用 `.scratch/` 下的本地 Markdown 文件跟踪工作。详见 `docs/agents/issue-tracker.md`。
-
-### Triage labels
-
-项目使用五个默认 triage 标签。详见 `docs/agents/triage-labels.md`。
+项目使用 Gitea Issues 跟踪工作，并通过 `tea` CLI 读写。详见 `docs/agents/issue-tracker.md`。
 
 ### Domain docs
 
