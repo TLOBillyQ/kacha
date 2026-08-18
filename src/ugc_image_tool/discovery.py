@@ -3,8 +3,9 @@
 启动时通过网关获取模型列表；成功后把列表写入本地缓存并与能力表匹配。
 获取失败时回退到上次成功缓存，并明确标记其可能过期和当前离线状态。
 
-网关错误按类别分类，供界面区分配置错误、网络不可达、鉴权失败、网关拒绝和
-服务错误。模型列表等只读请求只做有限重试；生成请求不继承该重试策略。
+网关错误按类别分类，供界面区分配置错误、网络不可达、鉴权失败、限流、
+网关拒绝和服务错误。模型列表等只读请求只做有限重试；生成请求不继承该
+重试策略。
 """
 
 from __future__ import annotations
@@ -36,7 +37,8 @@ class GatewayErrorCategory(StrEnum):
     CONFIG = "config"  # 配置错误（无效地址等）
     NETWORK = "network"  # 网络不可达、DNS、连接、超时
     AUTH = "auth"  # 鉴权失败
-    REJECTED = "rejected"  # 网关拒绝（4xx 非鉴权）
+    RATE_LIMIT = "rate_limit"  # 网关限流（请求过密，稍后重试）
+    REJECTED = "rejected"  # 网关拒绝（4xx 非鉴权、非限流）
     SERVER = "server"  # 网关服务错误（5xx，可短暂重试）
     UNKNOWN = "unknown"  # 结果未知
 
@@ -63,19 +65,25 @@ class GatewayError(Exception):
         super().__init__(message)
 
 
+def category_for_status(status: int) -> GatewayErrorCategory:
+    """按 HTTP 状态码给出网关错误类别；适配器与异常分类共用同一映射。"""
+    if status == 401:
+        return GatewayErrorCategory.AUTH
+    if status == 429:
+        return GatewayErrorCategory.RATE_LIMIT
+    if 400 <= status < 500:
+        return GatewayErrorCategory.REJECTED
+    if status >= 500:
+        return GatewayErrorCategory.SERVER
+    return GatewayErrorCategory.UNKNOWN
+
+
 def classify_exception(error: Exception) -> GatewayErrorCategory:
     """把未知异常归类为网关错误类别；GatewayError 保持原类别。"""
     if isinstance(error, GatewayError):
         return error.category
     if isinstance(error, httpx.HTTPStatusError):
-        status = error.response.status_code
-        if status == 401:
-            return GatewayErrorCategory.AUTH
-        if 400 <= status < 500:
-            return GatewayErrorCategory.REJECTED
-        if status >= 500:
-            return GatewayErrorCategory.SERVER
-        return GatewayErrorCategory.UNKNOWN
+        return category_for_status(error.response.status_code)
     if isinstance(error, httpx.HTTPError):
         return GatewayErrorCategory.NETWORK
     if isinstance(error, (OSError, ConnectionError)):

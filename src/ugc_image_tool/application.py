@@ -658,6 +658,8 @@ def _gateway_error_message(
         return f"鉴权失败：{error}"
     if category is GatewayErrorCategory.CONFIG:
         return f"配置错误：{error}"
+    if category is GatewayErrorCategory.RATE_LIMIT:
+        return f"网关限流，请稍后重试：{error}"
     if category in {GatewayErrorCategory.NETWORK, GatewayErrorCategory.UNKNOWN}:
         return f"{CONNECTION_ERROR}：{error}"
     if category is GatewayErrorCategory.SERVER:

@@ -50,7 +50,7 @@ from .generation import (
 )
 from .results import FileResultRepository
 from .references import inspect_reference_image
-from .simulated_gateway import SimulatedGateway
+from .team_gateway import TeamGateway
 from .settings import (
     DEFAULT_BASE_URL,
     MAX_CONCURRENCY_LIMIT,
@@ -168,7 +168,12 @@ class MainWindow(QMainWindow):
             diagnostics=self._diagnostics,
         )
         self._updating_prompt_controls = False
-        self._gateway = SimulatedGateway()
+        gateway_key = self._settings.api_key or ""
+        self._gateway = TeamGateway(
+            self._settings.base_url,
+            gateway_key,
+            diagnostics=self._diagnostics,
+        )
         self._discovery_events = _DiscoveryEvents()
         self._discovery_events.discovered.connect(self._on_discovery_state)
         self._discovery_events.checked.connect(self._show_connection_check)
@@ -596,8 +601,10 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(str(error))
             self._base_url_edit.setText(self._settings.base_url)
             return
+        self._gateway.set_base_url(self._settings.base_url)
         self._update_base_url_warning()
-        self.statusBar().showMessage("网关基础地址已保存")
+        self._restart_discovery()
+        self.statusBar().showMessage(f"网关基础地址已保存：{self._settings.base_url}")
 
     @Slot()
     def _reset_base_url_clicked(self) -> None:
@@ -642,6 +649,8 @@ class MainWindow(QMainWindow):
             return
         self._api_key_edit.clear()
         self._update_api_key_status()
+        self._gateway.set_api_key(self._settings.api_key or "")
+        self._restart_discovery()
         self.statusBar().showMessage("API 密钥已保存到当前用户凭据库")
 
     @Slot()
@@ -653,6 +662,8 @@ class MainWindow(QMainWindow):
             return
         self._api_key_edit.clear()
         self._update_api_key_status()
+        self._gateway.set_api_key("")
+        self._restart_discovery()
         self.statusBar().showMessage("API 密钥已清除")
 
     def _update_api_key_status(self) -> None:
@@ -710,6 +721,12 @@ class MainWindow(QMainWindow):
 
     def _start_discovery(self) -> None:
         Thread(target=self._refresh_discovery, name="model-discovery", daemon=True).start()
+
+    def _restart_discovery(self) -> None:
+        """设置页修改地址或密钥后重新发现模型并刷新连接状态。"""
+        self._connection_status.setText("正在连接网关…")
+        self._connection_status.setStyleSheet("")
+        self._start_discovery()
 
     def _refresh_discovery(self) -> None:
         state = self._discovery.refresh()
@@ -1379,6 +1396,7 @@ class MainWindow(QMainWindow):
                 return
         self._diagnostics.system("应用关闭")
         self._application.close()
+        self._gateway.close()
         event.accept()
 
 

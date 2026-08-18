@@ -49,13 +49,14 @@ class ImageFetcher(Protocol):
 class UrlImageFetcher:
     """下载临时图片地址；不携带网关认证信息。"""
 
-    def __init__(self, timeout_seconds: float = 60.0) -> None:
+    def __init__(self, timeout_seconds: float = 60.0, *, verify: bool = True) -> None:
         if timeout_seconds <= 0:
             raise ValueError("图片下载超时必须大于 0 秒")
         self._client = httpx.Client(
             timeout=timeout_seconds,
             follow_redirects=True,
             headers={"Accept": "image/*"},
+            verify=verify,
         )
 
     def fetch(self, url: str) -> DownloadedImage:

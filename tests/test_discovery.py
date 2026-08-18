@@ -198,7 +198,7 @@ class ClassifyExceptionTests(unittest.TestCase):
             return httpx.HTTPStatusError("boom", request=request, response=response)
 
         self.assertIs(GatewayErrorCategory.AUTH, classify_exception(status_error(401)))
-        self.assertIs(GatewayErrorCategory.REJECTED, classify_exception(status_error(429)))
+        self.assertIs(GatewayErrorCategory.RATE_LIMIT, classify_exception(status_error(429)))
         self.assertIs(GatewayErrorCategory.REJECTED, classify_exception(status_error(400)))
         self.assertIs(GatewayErrorCategory.SERVER, classify_exception(status_error(503)))
 
