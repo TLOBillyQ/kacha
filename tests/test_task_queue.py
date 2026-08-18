@@ -394,6 +394,45 @@ class GenerationResultStatusTests(unittest.TestCase):
         self.assertEqual(1, len(task.result_paths))
         self.assertEqual("第二张结果无法保存", task.error)
 
+    def test_later_result_is_saved_when_an_earlier_result_fails(self) -> None:
+        images = [GeneratedImage(b"one", "image/png"), GeneratedImage(b"two", "image/png")]
+
+        class PartialGateway:
+            def generate_text(self, request: TextToImageRequest) -> list[GeneratedImage]:
+                return images
+
+        class FailingBeforeFirstResults(InMemoryResults):
+            def __init__(self) -> None:
+                super().__init__()
+                self.failed = False
+
+            def save(self, task: GenerationTask, image: GeneratedImage) -> Path:
+                if not self.failed:
+                    self.failed = True
+                    raise OSError("第一张结果无法保存")
+                return super().save(task, image)
+
+        results = FailingBeforeFirstResults()
+        application = GenerationApplication(
+            gateway=PartialGateway(),
+            results=results,
+        )
+        try:
+            task_id = application.submit_text(
+                TextToImageDraft(
+                    prompt="first failure",
+                    model_id="qwen-image-3.0-pro",
+                    image_count=2,
+                )
+            )
+            task = application.wait_for(task_id, timeout=1)
+        finally:
+            application.close()
+
+        self.assertEqual(GenerationStatus.PARTIALLY_SUCCEEDED, task.status)
+        self.assertEqual(1, len(task.result_paths))
+        self.assertIn("第一张结果无法保存", task.error or "")
+
     def test_removing_completed_task_keeps_disk_result(self) -> None:
         class ImmediateGateway:
             def generate_text(self, request: TextToImageRequest) -> GeneratedImage:

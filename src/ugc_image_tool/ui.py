@@ -99,6 +99,7 @@ class MainWindow(QMainWindow):
         )
         self._tasks: dict[str, GenerationTask] = {}
         self._removed_task_ids: set[str] = set()
+        self._selected_task_id: str | None = None
         self._has_configured_models = False
         self._draft_count = 1
         self._build_form()
@@ -523,6 +524,7 @@ class MainWindow(QMainWindow):
         if task_id is not None and self._application.remove_task(task_id):
             self._tasks.pop(task_id, None)
             self._removed_task_ids.add(task_id)
+            self._selected_task_id = None
             row = self._task_list.row(item)
             self._task_list.takeItem(row)
             self._result_list.clear()
@@ -541,6 +543,8 @@ class MainWindow(QMainWindow):
             item = QListWidgetItem(label)
             item.setData(Qt.ItemDataRole.UserRole, task.task_id)
             self._task_list.addItem(item)
+            if self._selected_task_id is None:
+                self._task_list.setCurrentRow(self._task_list.count() - 1)
         else:
             row = next(
                 (
@@ -557,20 +561,25 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(task.error or "生成失败")
         elif task.status is GenerationStatus.SUCCEEDED:
             self.statusBar().showMessage("生成结果已保存")
-            self._show_result(task)
+            if task.task_id == self._selected_task_id:
+                self._show_result(task)
         elif task.status is GenerationStatus.PARTIALLY_SUCCEEDED:
             self.statusBar().showMessage(task.error or "部分生成结果已保存")
-            self._show_result(task)
+            if task.task_id == self._selected_task_id:
+                self._show_result(task)
         elif task.status is GenerationStatus.CANCELLED:
             self.statusBar().showMessage(task.error or "任务已取消，网关侧计算可能仍在继续")
 
     @Slot(int)
     def _show_selected_result(self, row: int) -> None:
-        if row >= 0:
-            item = self._task_list.item(row)
-            task_id = item.data(Qt.ItemDataRole.UserRole)
-            if task_id in self._tasks:
-                self._show_result(self._tasks[task_id])
+        if row < 0:
+            self._selected_task_id = None
+            return
+        item = self._task_list.item(row)
+        task_id = item.data(Qt.ItemDataRole.UserRole)
+        if task_id in self._tasks:
+            self._selected_task_id = task_id
+            self._show_result(self._tasks[task_id])
 
     def _show_result(self, task: GenerationTask) -> None:
         current_path = self._selected_result_path()

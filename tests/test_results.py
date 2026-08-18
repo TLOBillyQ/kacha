@@ -150,7 +150,10 @@ class FileResultRepositoryTests(unittest.TestCase):
                 ),
                 submitted_at=datetime(2026, 8, 17, 12, 0, tzinfo=UTC),
                 status=GenerationStatus.FAILED,
-                error="Authorization: Bearer secret-token; api_key=another-secret",
+                error=(
+                    "Authorization: Bearer secret-token; api_key=another-secret; "
+                    "Cookie: cookie-secret; X-Api-Key: header-secret"
+                ),
                 gateway_request_id="gateway-request-123",
             )
 
@@ -162,6 +165,8 @@ class FileResultRepositoryTests(unittest.TestCase):
             self.assertEqual("gateway-request-123", record["gateway_request_id"])
             self.assertNotIn("secret-token", serialized)
             self.assertNotIn("another-secret", serialized)
+            self.assertNotIn("cookie-secret", serialized)
+            self.assertNotIn("header-secret", serialized)
             self.assertNotIn("Authorization:", serialized)
 
 

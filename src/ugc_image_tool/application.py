@@ -360,21 +360,26 @@ class GenerationApplication:
                     task.task_id,
                     GenerationStatus.FAILED,
                     "网关未返回生成结果",
+                    gateway_request_id=request_id,
                 )
                 return
 
             paths: list[Path] = []
-            save_error: Exception | None = None
+            save_errors: list[str] = []
             for image in images:
                 try:
                     paths.append(self._results.save(task, image))
                 except Exception as error:
-                    save_error = error
-                    break
+                    save_errors.append(str(error))
 
             if not paths:
-                error = str(save_error) if save_error is not None else "生成结果无法保存"
-                self._finish_without_results(task.task_id, GenerationStatus.FAILED, error)
+                error = "；".join(save_errors) or "生成结果无法保存"
+                self._finish_without_results(
+                    task.task_id,
+                    GenerationStatus.FAILED,
+                    error,
+                    gateway_request_id=request_id,
+                )
                 return
 
             count_error = None
@@ -382,10 +387,10 @@ class GenerationApplication:
                 count_error = (
                     f"网关返回 {len(images)} 张结果，请求期望 {task.request.image_count} 张"
                 )
-            if save_error is not None or count_error is not None:
+            if save_errors or count_error is not None:
                 errors = [
                     message
-                    for message in (count_error, str(save_error) if save_error is not None else None)
+                    for message in (count_error, *save_errors)
                     if message
                 ]
                 self._finish_with_results(
@@ -409,8 +414,15 @@ class GenerationApplication:
         task_id: str,
         status: GenerationStatus,
         error: str,
+        gateway_request_id: str | None = None,
     ) -> None:
-        self._finish_with_results(task_id, status, (), error)
+        self._finish_with_results(
+            task_id,
+            status,
+            (),
+            error,
+            gateway_request_id=gateway_request_id,
+        )
 
     def _finish_with_results(
         self,
@@ -442,7 +454,7 @@ class GenerationApplication:
             }:
                 candidate = current.with_status(
                     GenerationStatus.FAILED,
-                    result_paths=(),
+                    result_paths=result_paths,
                     error=str(record_error),
                     gateway_request_id=gateway_request_id,
                 )
@@ -533,7 +545,3 @@ def _response_details(response: GatewayResponse) -> tuple[tuple[GeneratedImage, 
     ):
         return tuple(response), None
     raise TypeError("网关返回了无法识别的生成结果")
-
-
-def _response_images(response: GatewayResponse) -> tuple[GeneratedImage, ...]:
-    return _response_details(response)[0]

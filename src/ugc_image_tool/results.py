@@ -19,6 +19,7 @@ from .references import ReferenceImage
 
 
 MAX_RESULT_DOWNLOAD_ATTEMPTS = 3
+_DOWNLOAD_CHUNK_BYTES = 64 * 1024
 _TASK_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
 _MEDIA_FORMATS = {
     "png": ("image/png", ".png"),
@@ -58,7 +59,10 @@ class UrlImageFetcher:
             method="GET",
         )
         with urllib.request.urlopen(request, timeout=self._timeout_seconds) as response:
-            content = response.read()
+            chunks: list[bytes] = []
+            while chunk := response.read(_DOWNLOAD_CHUNK_BYTES):
+                chunks.append(chunk)
+            content = b"".join(chunks)
             content_length = response.headers.get("Content-Length")
             if content_length is not None:
                 try:
@@ -424,7 +428,7 @@ def _json_safe(value: object) -> object:
 
 
 _AUTH_RE = re.compile(
-    r"(?i)[\"']?(authorization|proxy-authorization|x-api-key|api[_ -]?key|token)[\"']?"
+    r"(?i)[\"']?(authorization|proxy-authorization|x-api-key|api[_ -]?key|token|cookie|set-cookie|x-auth-token)[\"']?"
     r"(?:\s+header)?\s*[:=]\s*[\"']?(?:bearer\s+)?[^\s,;}\"']+[\"']?"
 )
 _BEARER_RE = re.compile(r"(?i)\bbearer\s+[^\s,;]+")
