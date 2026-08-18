@@ -349,78 +349,73 @@ class GenerationApplication:
                 continue
 
     def _save_response(self, task: GenerationTask, response: GatewayResponse) -> None:
-        with self._lock:
+        if not self._is_running(task.task_id):
+            return
+        try:
+            images, request_id = _response_details(response)
+        except TypeError as error:
+            request_id = (
+                response.request_id
+                if isinstance(response, GatewayGenerationResult)
+                else None
+            )
+            self._finish_without_results(
+                task.task_id,
+                GenerationStatus.FAILED,
+                str(error),
+                gateway_request_id=request_id,
+            )
+            return
+
+        if not images:
+            self._finish_without_results(
+                task.task_id,
+                GenerationStatus.FAILED,
+                "网关未返回生成结果",
+                gateway_request_id=request_id,
+            )
+            return
+
+        paths: list[Path] = []
+        save_errors: list[str] = []
+        for image in images:
             if not self._is_running(task.task_id):
                 return
             try:
-                images, request_id = _response_details(response)
-            except TypeError as error:
-                request_id = (
-                    response.request_id
-                    if isinstance(response, GatewayGenerationResult)
-                    else None
-                )
-                self._finish_without_results(
-                    task.task_id,
-                    GenerationStatus.FAILED,
-                    str(error),
-                    gateway_request_id=request_id,
-                )
-                return
+                paths.append(self._results.save(task, image))
+            except Exception as error:
+                save_errors.append(str(error))
 
-            if not images:
-                self._finish_without_results(
-                    task.task_id,
-                    GenerationStatus.FAILED,
-                    "网关未返回生成结果",
-                    gateway_request_id=request_id,
-                )
-                return
-
-            paths: list[Path] = []
-            save_errors: list[str] = []
-            for image in images:
-                try:
-                    paths.append(self._results.save(task, image))
-                except Exception as error:
-                    save_errors.append(str(error))
-
-            if not paths:
-                error = "；".join(save_errors) or "生成结果无法保存"
-                self._finish_without_results(
-                    task.task_id,
-                    GenerationStatus.FAILED,
-                    error,
-                    gateway_request_id=request_id,
-                )
-                return
-
-            count_error = None
-            if len(images) != task.request.image_count:
-                count_error = (
-                    f"网关返回 {len(images)} 张结果，请求期望 {task.request.image_count} 张"
-                )
-            if save_errors or count_error is not None:
-                errors = [
-                    message
-                    for message in (count_error, *save_errors)
-                    if message
-                ]
-                self._finish_with_results(
-                    task.task_id,
-                    GenerationStatus.PARTIALLY_SUCCEEDED,
-                    tuple(paths),
-                    "；".join(errors),
-                    gateway_request_id=request_id,
-                )
-                return
-            self._finish_with_results(
+        if not paths:
+            error = "；".join(save_errors) or "生成结果无法保存"
+            self._finish_without_results(
                 task.task_id,
-                GenerationStatus.SUCCEEDED,
-                tuple(paths),
-                None,
+                GenerationStatus.FAILED,
+                error,
                 gateway_request_id=request_id,
             )
+            return
+
+        count_error = None
+        if len(images) != task.request.image_count:
+            count_error = f"网关返回 {len(images)} 张结果，请求期望 {task.request.image_count} 张"
+        if save_errors or count_error is not None:
+            errors = [message for message in (count_error, *save_errors) if message]
+            self._finish_with_results(
+                task.task_id,
+                GenerationStatus.PARTIALLY_SUCCEEDED,
+                tuple(paths),
+                "；".join(errors),
+                gateway_request_id=request_id,
+            )
+            return
+        self._finish_with_results(
+            task.task_id,
+            GenerationStatus.SUCCEEDED,
+            tuple(paths),
+            None,
+            gateway_request_id=request_id,
+        )
 
     def _finish_without_results(
         self,
@@ -465,10 +460,15 @@ class GenerationApplication:
                 GenerationStatus.SUCCEEDED,
                 GenerationStatus.PARTIALLY_SUCCEEDED,
             }:
+                combined_error = "；".join(
+                    message
+                    for message in (error, f"任务记录保存失败：{record_error}")
+                    if message
+                )
                 candidate = current.with_status(
-                    GenerationStatus.FAILED,
+                    status,
                     result_paths=result_paths,
-                    error=str(record_error),
+                    error=combined_error,
                     gateway_request_id=gateway_request_id,
                 )
                 self._try_save_record(candidate)

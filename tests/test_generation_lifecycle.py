@@ -147,7 +147,7 @@ class GenerationLifecycleTests(unittest.TestCase):
             visible_statuses,
         )
 
-    def test_record_failure_does_not_report_success(self) -> None:
+    def test_record_failure_keeps_saved_result_status(self) -> None:
         class FailingRecordRepository(InMemoryResultRepository):
             def save_record(self, task) -> None:
                 raise OSError("任务记录不可写")
@@ -159,8 +159,8 @@ class GenerationLifecycleTests(unittest.TestCase):
 
         task = application.wait_for(application.submit_text(make_draft("记录失败")), timeout=1)
 
-        self.assertEqual(GenerationStatus.FAILED, task.status)
-        self.assertEqual("任务记录不可写", task.error)
+        self.assertEqual(GenerationStatus.SUCCEEDED, task.status)
+        self.assertIn("任务记录不可写", task.error or "")
         self.assertEqual(1, len(task.result_paths))
 
     def test_close_does_not_wait_for_running_gateway_work(self) -> None:

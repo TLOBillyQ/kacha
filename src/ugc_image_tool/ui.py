@@ -560,7 +560,7 @@ class MainWindow(QMainWindow):
         if task.status is GenerationStatus.FAILED:
             self.statusBar().showMessage(task.error or "生成失败")
         elif task.status is GenerationStatus.SUCCEEDED:
-            self.statusBar().showMessage("生成结果已保存")
+            self.statusBar().showMessage(task.error or "生成结果已保存")
             if task.task_id == self._selected_task_id:
                 self._show_result(task)
         elif task.status is GenerationStatus.PARTIALLY_SUCCEEDED:

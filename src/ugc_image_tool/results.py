@@ -49,7 +49,6 @@ class UrlImageFetcher:
     def __init__(self, timeout_seconds: float = 60.0) -> None:
         if timeout_seconds <= 0:
             raise ValueError("图片下载超时必须大于 0 秒")
-        self._timeout_seconds = timeout_seconds
         self._client = httpx.Client(
             timeout=timeout_seconds,
             follow_redirects=True,
@@ -74,6 +73,28 @@ class UrlImageFetcher:
                 if expected_length != len(content):
                     raise OSError("图片下载不完整")
             return DownloadedImage(content, response.headers.get("Content-Type"))
+
+    def fetch_to(self, url: str, target: Path) -> str | None:
+        if urlparse(url).scheme.lower() not in {"http", "https"}:
+            raise ValueError("图片临时地址仅支持 HTTP 或 HTTPS")
+        with self._client.stream("GET", url) as response:
+            response.raise_for_status()
+            total = 0
+            with target.open("xb") as stream:
+                for chunk in response.iter_bytes(_DOWNLOAD_CHUNK_BYTES):
+                    stream.write(chunk)
+                    total += len(chunk)
+                stream.flush()
+                os.fsync(stream.fileno())
+            content_length = response.headers.get("Content-Length")
+            if content_length is not None:
+                try:
+                    expected_length = int(content_length)
+                except ValueError as error:
+                    raise OSError("图片下载响应的 Content-Length 无效") from error
+                if expected_length != total:
+                    raise OSError("图片下载不完整")
+            return response.headers.get("Content-Type")
 
     def close(self) -> None:
         self._client.close()
@@ -106,12 +127,16 @@ class FileResultRepository:
                 temporary: Path | None = None
                 reserved_result: Path | None = None
                 try:
-                    content, declared_media_type = self._image_payload(image)
                     temporary = task_directory / f".result-{uuid4().hex}.tmp"
-                    with temporary.open("xb") as stream:
-                        stream.write(content)
-                        stream.flush()
-                        os.fsync(stream.fileno())
+                    fetch_to = getattr(self._image_fetcher, "fetch_to", None)
+                    if image.url and callable(fetch_to):
+                        declared_media_type = fetch_to(image.url, temporary)
+                    else:
+                        content, declared_media_type = self._image_payload(image)
+                        with temporary.open("xb") as stream:
+                            stream.write(content)
+                            stream.flush()
+                            os.fsync(stream.fileno())
 
                     media_type, suffix = _validate_image(temporary, declared_media_type)
                     last_media_type = media_type
@@ -449,20 +474,20 @@ def _json_safe(value: object) -> object:
     try:
         json.dumps(value)
     except (TypeError, ValueError):
-        return str(value)
+        return _redact_error(str(value))
     return value
 
 
 def _is_sensitive_key(normalized_key: str) -> bool:
-    return normalized_key in {"token", "secret", "password"} or any(
-        fragment in normalized_key
+    compact_key = normalized_key.replace("_", "")
+    return compact_key in {"token", "secret", "password"} or any(
+        fragment in compact_key
         for fragment in (
             "authorization",
-            "proxy_authorization",
-            "api_key",
+            "proxyauthorization",
             "apikey",
-            "access_token",
-            "auth_token",
+            "accesstoken",
+            "authtoken",
             "cookie",
         )
     )
@@ -470,7 +495,7 @@ def _is_sensitive_key(normalized_key: str) -> bool:
 
 _AUTH_RE = re.compile(
     r"(?i)[\"']?(authorization|proxy-authorization|x-api-key|api[_ -]?key|x-access-token|access-token|auth-token|token|cookie|set-cookie)[\"']?"
-    r"(?:\s+header)?\s*[:=]\s*[\"']?(?:bearer\s+)?[^\s,;}\"']+[\"']?"
+    r"(?:\s+header)?\s*[:=]\s*[\"']?(?:(?:[A-Za-z][A-Za-z0-9_-]*)\s+)?[^\s,;}\"']+[\"']?"
 )
 _BEARER_RE = re.compile(r"(?i)\bbearer\s+[^\s,;]+")
 _URL_RE = re.compile(r"https?://[^\s\"']+")
