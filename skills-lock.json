@@ -73,6 +73,12 @@
       "skillPath": "skills/engineering/prototype/SKILL.md",
       "computedHash": "73862de6cd32acf30799bfb2220357b96c1a58ab0e3d01126b769fd659d6555a"
     },
+    "reclaim-code-entropy": {
+      "source": "Yevanchen/reclaim-code-entropy",
+      "sourceType": "github",
+      "skillPath": "skills/reclaim-code-entropy/SKILL.md",
+      "computedHash": "5c0c071e003baaed0ec9e4221ae26d53538ffa05411d62bc01a7b3c1052b79c8"
+    },
     "research": {
       "source": "mattpocock/skills",
       "sourceType": "github",
