@@ -16,6 +16,8 @@ from typing import Protocol
 from urllib.parse import urlparse
 from uuid import uuid4
 
+from .storage import atomic_write_text
+
 
 DEFAULT_BASE_URL = "http://lzxsvn.com:3001"
 DEFAULT_CONCURRENCY_LIMIT = 3
@@ -174,23 +176,10 @@ class SettingsStore:
             ensure_ascii=False,
             indent=2,
         ) + "\n"
-        temporary: Path | None = None
         try:
-            self._user_data_dir.mkdir(parents=True, exist_ok=True)
-            temporary = self._user_data_dir / f".{self.FILENAME}.{uuid4().hex}.tmp"
-            with temporary.open("x", encoding="utf-8", newline="") as stream:
-                stream.write(content)
-                stream.flush()
-                os.fsync(stream.fileno())
-            temporary.replace(self._storage_path)
+            atomic_write_text(self._storage_path, content)
         except OSError as error:
             raise SettingsStoreError(f"无法保存设置：{error}") from error
-        finally:
-            if temporary is not None:
-                try:
-                    temporary.unlink(missing_ok=True)
-                except OSError:
-                    pass
 
 
 class CredentialService(Protocol):

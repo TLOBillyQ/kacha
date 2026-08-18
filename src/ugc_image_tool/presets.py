@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 from dataclasses import dataclass, replace
 from enum import StrEnum
@@ -10,6 +9,7 @@ from typing import Any, Callable, Iterable, cast
 from uuid import uuid4
 
 from .settings import default_user_data_dir
+from .storage import atomic_write_text
 
 
 _PRESET_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -292,23 +292,10 @@ class PresetStore:
             ensure_ascii=False,
             indent=2,
         ) + "\n"
-        temporary: Path | None = None
         try:
-            self._user_data_dir.mkdir(parents=True, exist_ok=True)
-            temporary = self._user_data_dir / f".{self.FILENAME}.{uuid4().hex}.tmp"
-            with temporary.open("x", encoding="utf-8", newline="") as stream:
-                stream.write(content)
-                stream.flush()
-                os.fsync(stream.fileno())
-            temporary.replace(self._storage_path)
+            atomic_write_text(self._storage_path, content)
         except OSError as error:
             raise PresetStoreError(f"无法保存个人预设：{error}") from error
-        finally:
-            if temporary is not None:
-                try:
-                    temporary.unlink(missing_ok=True)
-                except OSError:
-                    pass
 
 
 class PresetApplication:

@@ -11,20 +11,19 @@
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 from time import monotonic, sleep
 from typing import Protocol
-from uuid import uuid4
 
 import httpx
 
 from .capabilities import CapabilityRegistry
 from .diagnostics import DiagnosticSink
 from .settings import default_user_data_dir
+from .storage import atomic_write_text
 
 
 DEFAULT_READONLY_RETRIES = 3
@@ -139,16 +138,7 @@ class ModelCache:
             )
             + "\n"
         )
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = self._path.parent / f".{self.FILENAME}.{uuid4().hex}.tmp"
-        try:
-            with temporary.open("x", encoding="utf-8", newline="") as stream:
-                stream.write(content)
-                stream.flush()
-                os.fsync(stream.fileno())
-            temporary.replace(self._path)
-        finally:
-            temporary.unlink(missing_ok=True)
+        atomic_write_text(self._path, content)
 
     def load(self) -> CachedModels | None:
         try:

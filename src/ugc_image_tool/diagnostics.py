@@ -17,7 +17,7 @@ import os
 import shutil
 import tempfile
 import zipfile
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
@@ -26,7 +26,7 @@ from typing import Protocol
 from uuid import uuid4
 
 from . import __version__
-from .sanitize import json_safe, sanitize_text
+from .sanitize import redact_value, sanitize_text
 from .settings import default_user_data_dir
 
 
@@ -87,15 +87,57 @@ class DiagnosticSink(Protocol):
     def system(self, message: str) -> None: ...
 
 
-def _sanitize_field(value: object) -> object:
-    """递归清洁日志字段的字符串内容；无法序列化的对象转为脱敏字符串。"""
-    if isinstance(value, str):
-        return sanitize_text(value)
-    if isinstance(value, dict):
-        return {str(key): _sanitize_field(child) for key, child in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_sanitize_field(child) for child in value]
-    return json_safe(value)
+@dataclass(frozen=True)
+class TaskTransitionEvent:
+    """生成任务状态迁移的结构化事件字段。
+
+    status 与 to_status 保持同值，供日志阅读者直接定位终态。
+    """
+
+    task_id: str
+    model: str
+    from_status: str | None
+    to_status: str
+    status: str
+    workflow: str | None = None
+    gateway_request_id: str | None = None
+    category: str | None = None
+    status_code: int | None = None
+    message: str | None = None
+
+
+@dataclass(frozen=True)
+class ConnectionEvent:
+    """模型发现或连接检查的一个结构化结果。"""
+
+    stage: str | None = None
+    ok: bool | None = None
+    category: str | None = None
+    status_code: int | None = None
+    message: str | None = None
+
+
+@dataclass(frozen=True)
+class DownloadEvent:
+    """结果下载/保存的结构化事件字段。"""
+
+    task_id: str | None = None
+    model: str | None = None
+    ok: bool = True
+    attempts: int | None = None
+    category: str | None = None
+    status_code: int | None = None
+    message: str | None = None
+
+
+@dataclass(frozen=True)
+class SystemEvent:
+    """应用启动、关闭或导出诊断包等系统事件。"""
+
+    message: str
+
+
+DiagnosticEvent = TaskTransitionEvent | ConnectionEvent | DownloadEvent | SystemEvent
 
 
 class DiagnosticLogger:
@@ -148,7 +190,11 @@ class DiagnosticLogger:
             return tuple(path for _, path in self._segment_paths())
 
     def log(self, event: str, **fields: object) -> None:
-        """写一条脱敏日志；event 为事件类别，全部字符串字段统一脱敏。"""
+        """写一条脱敏日志；event 为事件类别，字段级脱敏集中在本方法。
+
+        所有字段在写入前统一经过 sanitize 模块的 redact_value，按同一敏感
+        字段名单做字段级替换；无法序列化的对象转为脱敏字符串。
+        """
         record: dict[str, object] = {
             "ts": datetime.now(UTC).isoformat(timespec="milliseconds"),
             "app_version": app_version(),
@@ -156,11 +202,15 @@ class DiagnosticLogger:
         }
         for key, value in fields.items():
             if value is not None:
-                record[key] = _sanitize_field(value)
+                record[key] = redact_value(value, str(key))
         try:
             self._write(json.dumps(record, ensure_ascii=False) + "\n")
         except (OSError, TypeError):
             pass
+
+    def _emit(self, event: str, value: DiagnosticEvent) -> None:
+        """把结构化事件值展开为字段后写入；仅本处负责把事件转成日志。"""
+        self.log(event, **asdict(value))
 
     def task_transition(
         self,
@@ -176,18 +226,20 @@ class DiagnosticLogger:
         message: str | None = None,
     ) -> None:
         """记录一次生成任务状态迁移（含提交、运行、终态与取消）。"""
-        self.log(
+        self._emit(
             "task",
-            task_id=task_id,
-            model=model,
-            from_status=from_status,
-            to_status=to_status,
-            status=to_status,
-            workflow=workflow,
-            gateway_request_id=gateway_request_id,
-            category=category,
-            status_code=status_code,
-            message=message,
+            TaskTransitionEvent(
+                task_id=task_id,
+                model=model,
+                from_status=from_status,
+                to_status=to_status,
+                status=to_status,
+                workflow=workflow,
+                gateway_request_id=gateway_request_id,
+                category=category,
+                status_code=status_code,
+                message=message,
+            ),
         )
 
     def connection(
@@ -200,13 +252,15 @@ class DiagnosticLogger:
         message: str | None = None,
     ) -> None:
         """记录模型发现或连接检查的一个结果。"""
-        self.log(
+        self._emit(
             "connection",
-            stage=stage,
-            ok=ok,
-            category=category,
-            status_code=status_code,
-            message=message,
+            ConnectionEvent(
+                stage=stage,
+                ok=ok,
+                category=category,
+                status_code=status_code,
+                message=message,
+            ),
         )
 
     def download(
@@ -221,20 +275,22 @@ class DiagnosticLogger:
         message: str | None = None,
     ) -> None:
         """记录一次结果下载/保存的结果（失败时附带脱敏原因）。"""
-        self.log(
+        self._emit(
             "download",
-            task_id=task_id,
-            model=model,
-            ok=ok,
-            attempts=attempts,
-            category=category,
-            status_code=status_code,
-            message=message,
+            DownloadEvent(
+                task_id=task_id,
+                model=model,
+                ok=ok,
+                attempts=attempts,
+                category=category,
+                status_code=status_code,
+                message=message,
+            ),
         )
 
     def system(self, message: str) -> None:
         """记录应用启动、关闭或导出诊断包等系统事件。"""
-        self.log("system", message=message)
+        self._emit("system", SystemEvent(message=message))
 
     def _current_path(self) -> Path:
         return self._directory / LOG_FILENAME
@@ -427,7 +483,12 @@ def _file_size(path: Path) -> int:
 
 
 def _sanitize_file(path: Path) -> str:
-    """整份日志再次脱敏：逐行清洁后拼接，保证原样保留或替换敏感内容。"""
+    """整份日志再次脱敏：按行解析字段级清洁后拼接。
+
+    与 DiagnosticLogger.log 使用同一个递归脱敏器与同一敏感字段名单；
+    无法解析为结构化记录的残行退回到整行字符串脱敏，保证导出包不会
+    明显泄漏密钥或临时地址。
+    """
     try:
         text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
@@ -436,5 +497,19 @@ def _sanitize_file(path: Path) -> str:
     for line in text.splitlines():
         if not line.strip():
             continue
-        lines.append(sanitize_text(line))
+        lines.append(_sanitize_record_line(line))
     return "\n".join(lines) + "\n"
+
+
+def _sanitize_record_line(line: str) -> str:
+    """把一行日志按结构化记录做字段级脱敏；非 JSON 残行做整行脱敏。"""
+    try:
+        record = json.loads(line)
+    except json.JSONDecodeError:
+        return sanitize_text(line)
+    if not isinstance(record, dict):
+        return sanitize_text(line)
+    cleaned = redact_value(record)
+    if not isinstance(cleaned, dict):
+        return sanitize_text(line)
+    return json.dumps(cleaned, ensure_ascii=False)
