@@ -13,6 +13,7 @@ from ugc_image_tool.capabilities import (
     CAPABILITY_TABLE_VERSION,
     CapabilityRegistry,
 )
+from ugc_image_tool.discovery import GatewayError, GatewayErrorCategory
 from ugc_image_tool.generation import (
     GatewayGenerationResult,
     GenerationStatus,
@@ -313,6 +314,83 @@ class SubmissionCapabilityTests(unittest.TestCase):
         self.assertEqual(GenerationStatus.FAILED, task.status)
         self.assertEqual("gateway-request-invalid", task.gateway_request_id)
         self.assertEqual("gateway-request-invalid", results.records[0].gateway_request_id)
+
+
+class GatewayErrorHandlingTests(unittest.TestCase):
+    def _run_with_error(self, error: Exception) -> GenerationTask:
+        class RaisingGateway:
+            def generate_text(self, request: TextToImageRequest) -> None:
+                raise error
+
+        application = GenerationApplication(
+            gateway=RaisingGateway(),
+            results=InMemoryResultRepository(),
+        )
+        try:
+            task_id = application.submit_text(make_draft("网关错误分类"))
+            return application.wait_for(task_id, timeout=1)
+        finally:
+            application.close()
+
+    def test_auth_error_fails_task_with_auth_message(self) -> None:
+        task = self._run_with_error(
+            GatewayError(GatewayErrorCategory.AUTH, "无效令牌")
+        )
+
+        self.assertEqual(GenerationStatus.FAILED, task.status)
+        self.assertIn("鉴权失败", task.error or "")
+
+    def test_network_error_marks_task_unknown(self) -> None:
+        task = self._run_with_error(
+            GatewayError(GatewayErrorCategory.NETWORK, "连接中断")
+        )
+
+        self.assertEqual(GenerationStatus.UNKNOWN, task.status)
+        self.assertIn("连接中断", task.error or "")
+
+    def test_rejected_error_fails_task_with_rejection_message(self) -> None:
+        task = self._run_with_error(
+            GatewayError(GatewayErrorCategory.REJECTED, "模型不可用")
+        )
+
+        self.assertEqual(GenerationStatus.FAILED, task.status)
+        self.assertIn("网关拒绝", task.error or "")
+
+    def test_server_error_fails_task_with_server_message(self) -> None:
+        task = self._run_with_error(
+            GatewayError(GatewayErrorCategory.SERVER, "网关繁忙")
+        )
+
+        self.assertEqual(GenerationStatus.FAILED, task.status)
+        self.assertIn("网关服务错误", task.error or "")
+
+    def test_config_error_fails_task_with_config_message(self) -> None:
+        task = self._run_with_error(
+            GatewayError(GatewayErrorCategory.CONFIG, "地址无效")
+        )
+
+        self.assertEqual(GenerationStatus.FAILED, task.status)
+        self.assertIn("配置错误", task.error or "")
+
+    def test_unknown_category_error_marks_task_unknown(self) -> None:
+        task = self._run_with_error(
+            GatewayError(GatewayErrorCategory.UNKNOWN, "结果未知")
+        )
+
+        self.assertEqual(GenerationStatus.UNKNOWN, task.status)
+        self.assertIn("结果未知", task.error or "")
+
+    def test_gateway_error_request_id_is_kept_in_failed_task(self) -> None:
+        task = self._run_with_error(
+            GatewayError(
+                GatewayErrorCategory.AUTH,
+                "无效令牌",
+                gateway_request_id="gw-req-456",
+            )
+        )
+
+        self.assertEqual(GenerationStatus.FAILED, task.status)
+        self.assertEqual("gw-req-456", task.gateway_request_id)
 
 
 if __name__ == "__main__":

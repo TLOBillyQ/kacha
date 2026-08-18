@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import shutil
 from pathlib import Path
+from threading import Thread
 from typing import cast
 
 from PySide6.QtCore import QObject, QUrl, Qt, Signal, Slot
@@ -29,6 +30,14 @@ from PySide6.QtWidgets import (
 
 from .application import GenerationApplication
 from .capabilities import CapabilityRegistry, Workflow
+from .discovery import (
+    ConnectionCheck,
+    ConnectionStage,
+    DiscoveryState,
+    ModelCache,
+    ModelDiscovery,
+    run_connection_check,
+)
 from .generation import (
     GenerationStatus,
     GenerationTask,
@@ -72,9 +81,21 @@ _STATUS_LABELS = {
 
 _CUSTOM_SIZE_LABEL = "自定义…"
 
+_STAGE_LABELS = {
+    ConnectionStage.DNS_OR_CONNECT: "DNS/连接",
+    ConnectionStage.AUTH: "鉴权",
+    ConnectionStage.MODEL_LIST: "模型列表",
+    ConnectionStage.CAPABILITY: "能力匹配",
+}
+
 
 class _TaskEvents(QObject):
     changed = Signal(object)
+
+
+class _DiscoveryEvents(QObject):
+    discovered = Signal(object)
+    checked = Signal(object)
 
 
 class _ReferenceListWidget(QListWidget):
@@ -131,30 +152,40 @@ class MainWindow(QMainWindow):
             self._settings.set_output_root(output_root)
         self._results = FileResultRepository(self._settings.output_root)
         self._updating_prompt_controls = False
-        gateway = SimulatedGateway()
+        self._gateway = SimulatedGateway()
+        self._discovery_events = _DiscoveryEvents()
+        self._discovery_events.discovered.connect(self._on_discovery_state)
+        self._discovery_events.checked.connect(self._show_connection_check)
+        self._discovery = ModelDiscovery(
+            self._gateway,
+            cache=ModelCache(user_data_dir),
+        )
         self._application = GenerationApplication(
-            gateway=gateway,
+            gateway=self._gateway,
             results=self._results,
             capabilities=self._capabilities,
             on_task_changed=self._events.changed.emit,
             max_concurrency=self._settings.concurrency_limit,
-            submission_guard=self._output_directory_guard,
+            submission_guard=self._submission_guard,
         )
         self._tasks: dict[str, GenerationTask] = {}
         self._removed_task_ids: set[str] = set()
         self._selected_task_id: str | None = None
         self._has_configured_models = False
+        self._has_edit_models = False
         self._draft_count = 1
         self._output_error: str | None = None
+        self._connection_status = QLabel("正在连接网关…")
+        self._connection_status.setWordWrap(True)
         self._build_form()
         self._build_edit_form()
         self._build_settings_page()
         self._build_task_center()
-        self._populate_models(gateway.list_models())
-        self._populate_edit_models(gateway.list_models())
         self._populate_presets()
         self._refresh_output_state()
         self._revalidate()
+        self._update_connection_status()
+        self._start_discovery()
 
     def _build_form(self) -> None:
         self._model_combo = QComboBox()
@@ -471,6 +502,11 @@ class MainWindow(QMainWindow):
         key_row.addWidget(self._save_api_key)
         key_row.addWidget(self._clear_api_key)
 
+        self._connection_test = QPushButton("测试网关连接")
+        self._connection_test.clicked.connect(self._start_connection_check)
+        self._connection_results = QLabel()
+        self._connection_results.setWordWrap(True)
+
         layout = QVBoxLayout()
         layout.addWidget(QLabel("输出根目录"))
         layout.addLayout(output_row)
@@ -482,6 +518,9 @@ class MainWindow(QMainWindow):
         layout.addWidget(QLabel("API 密钥（保存到当前 Windows 用户凭据库）"))
         layout.addLayout(key_row)
         layout.addWidget(self._api_key_status)
+        layout.addWidget(QLabel("网关连接测试"))
+        layout.addWidget(self._connection_test)
+        layout.addWidget(self._connection_results)
         layout.addStretch(1)
         self._settings_container = QWidget()
         self._settings_container.setLayout(layout)
@@ -590,14 +629,87 @@ class MainWindow(QMainWindow):
             self._api_key_status.setText("已保存 API 密钥")
             self._api_key_status.setStyleSheet("color: #2e7d32;")
 
-    def _output_directory_guard(self) -> str | None:
-        # 提交时重新探测：会话中途目录变不可写（如磁盘被移除）时仍能拦截提交。
-        return self._settings.output_directory_error()
+    def _submission_guard(self) -> str | None:
+        # 提交时重新探测：会话中途目录变不可写（如磁盘被移除）时仍能拦截提交；
+        # 网关离线或尚未完成发现时同样阻止提交，且不会创建离线排队任务。
+        output_error = self._settings.output_directory_error()
+        if output_error:
+            return output_error
+        return self._discovery.submission_block_reason()
 
     def _refresh_output_state(self) -> None:
         self._output_error = self._settings.output_directory_error()
-        self._edit_edit_submit.setEnabled(self._output_error is None)
         self._revalidate()
+        self._update_submit_state()
+
+    def _update_submit_state(self) -> None:
+        """网关离线或输出目录不可写时禁用提交，避免创建排队任务。"""
+        block = self._submission_guard()
+        self._edit_edit_submit.setEnabled(block is None and self._has_edit_models)
+        if block is not None:
+            self._submit.setEnabled(False)
+
+    def _update_connection_status(self) -> None:
+        state = self._discovery.state
+        if state.pending:
+            text = "正在连接网关…"
+            style = ""
+        elif state.online:
+            text = f"网关在线：发现 {len(state.model_ids)} 个可用模型"
+            style = "color: #2e7d32;"
+        elif state.from_cache:
+            fetched = state.fetched_at
+            when = (
+                fetched.astimezone().strftime("%Y-%m-%d %H:%M")
+                if fetched is not None
+                else "未知时间"
+            )
+            text = f"网关离线：正在使用可能过期的缓存模型（获取于 {when}）"
+            style = "color: #c62828;"
+        else:
+            text = "网关离线：无法获取模型列表"
+            style = "color: #c62828;"
+        if state.error:
+            text = f"{text}；{state.error}"
+        self._connection_status.setText(text)
+        self._connection_status.setStyleSheet(style)
+
+    def _start_discovery(self) -> None:
+        Thread(target=self._refresh_discovery, name="model-discovery", daemon=True).start()
+
+    def _refresh_discovery(self) -> None:
+        state = self._discovery.refresh()
+        self._discovery_events.discovered.emit(state)
+
+    @Slot(object)
+    def _on_discovery_state(self, state: DiscoveryState) -> None:
+        self._populate_models(state.model_ids)
+        self._populate_edit_models(state.model_ids)
+        self._update_connection_status()
+
+    @Slot()
+    def _start_connection_check(self) -> None:
+        self._connection_test.setEnabled(False)
+        self._connection_results.setText("正在检查网关连接…")
+        Thread(target=self._run_connection_check, name="connection-check", daemon=True).start()
+
+    def _run_connection_check(self) -> None:
+        checks = run_connection_check(self._gateway, self._capabilities)
+        self._discovery_events.checked.emit(checks)
+
+    @Slot(object)
+    def _show_connection_check(self, checks: tuple[ConnectionCheck, ...]) -> None:
+        self._connection_test.setEnabled(True)
+        lines = []
+        for check in checks:
+            if check.ok is True:
+                mark = "通过"
+            elif check.ok is False:
+                mark = "失败"
+            else:
+                mark = "跳过"
+            lines.append(f"{_STAGE_LABELS[check.stage]}：{mark} — {check.message}")
+        self._connection_results.setText("\n".join(lines))
 
     def _build_task_center(self) -> None:
         self._task_list = QListWidget()
@@ -647,6 +759,7 @@ class MainWindow(QMainWindow):
         tabs.addTab(self._edit_form_container, "图片编辑")
         tabs.addTab(self._settings_container, "设置")
         root = QVBoxLayout()
+        root.addWidget(self._connection_status)
         root.addWidget(tabs)
         root.addWidget(task_container)
         container = QWidget()
@@ -708,6 +821,10 @@ class MainWindow(QMainWindow):
         self._edit_form_container.setLayout(layout)
 
     def _populate_edit_models(self, gateway_model_ids: tuple[str, ...]) -> None:
+        selected_id = self._edit_model_combo.currentData()
+        self._edit_model_combo.blockSignals(True)
+        self._edit_model_combo.clear()
+        added = 0
         for entry in self._capabilities.merge(gateway_model_ids):
             capability = entry.capability
             if capability is None or Workflow.IMAGE_EDIT not in capability.workflows:
@@ -715,6 +832,16 @@ class MainWindow(QMainWindow):
             self._edit_model_combo.addItem(
                 f"{entry.model_id}（{capability.display_name}）", entry.model_id
             )
+            added += 1
+        self._has_edit_models = added > 0
+        if isinstance(selected_id, str):
+            for index in range(self._edit_model_combo.count()):
+                if self._edit_model_combo.itemData(index) == selected_id:
+                    self._edit_model_combo.setCurrentIndex(index)
+                    break
+        self._edit_model_combo.blockSignals(False)
+        self._on_edit_model_changed(self._edit_model_combo.currentIndex())
+        self._update_submit_state()
 
     @Slot(int)
     def _on_edit_model_changed(self, index: int) -> None:
@@ -813,7 +940,10 @@ class MainWindow(QMainWindow):
             self._edit_validation.setText(str(error))
 
     def _populate_models(self, gateway_model_ids: tuple[str, ...]) -> None:
+        selected_id = self._model_combo.currentData()
         enabled_indices: list[int] = []
+        self._model_combo.blockSignals(True)
+        self._model_combo.clear()
         for entry in self._capabilities.merge(gateway_model_ids):
             capability = entry.capability
             if capability is not None and Workflow.TEXT_TO_IMAGE not in capability.workflows:
@@ -832,8 +962,16 @@ class MainWindow(QMainWindow):
             else:
                 enabled_indices.append(index)
         self._has_configured_models = bool(enabled_indices)
-        if enabled_indices:
+        if isinstance(selected_id, str):
+            for index in range(self._model_combo.count()):
+                if self._model_combo.itemData(index) == selected_id:
+                    self._model_combo.setCurrentIndex(index)
+                    break
+        elif enabled_indices:
             self._model_combo.setCurrentIndex(enabled_indices[0])
+        self._model_combo.blockSignals(False)
+        self._on_model_changed(self._model_combo.currentIndex())
+        self._update_submit_state()
 
     @Slot(int)
     def _on_model_changed(self, index: int) -> None:
@@ -913,6 +1051,11 @@ class MainWindow(QMainWindow):
     def _revalidate(self) -> None:
         if self._output_error:
             self._validation_label.setText(self._output_error)
+            self._submit.setEnabled(False)
+            return
+        block = self._discovery.submission_block_reason()
+        if block is not None:
+            self._validation_label.setText(block)
             self._submit.setEnabled(False)
             return
         if not self._has_configured_models:

@@ -11,6 +11,7 @@ from uuid import uuid4
 
 from .capabilities import CapabilityRegistry
 from .capabilities import Workflow
+from .discovery import GatewayError, GatewayErrorCategory
 from .generation import (
     GeneratedImage,
     GatewayGenerationResult,
@@ -301,6 +302,16 @@ class GenerationApplication:
                     f"{CONNECTION_ERROR}：{error}",
                 )
                 return
+            except GatewayError as error:
+                if not self._is_running(task_id):
+                    return
+                self._finish_without_results(
+                    task_id,
+                    _gateway_error_status(error.category),
+                    _gateway_error_message(error.category, error),
+                    gateway_request_id=error.gateway_request_id,
+                )
+                return
             except Exception as error:
                 if not self._is_running(task_id):
                     return
@@ -564,3 +575,23 @@ def _response_details(response: GatewayResponse) -> tuple[tuple[GeneratedImage, 
     ):
         return tuple(response), None
     raise TypeError("网关返回了无法识别的生成结果")
+
+
+def _gateway_error_status(category: GatewayErrorCategory) -> GenerationStatus:
+    if category in {GatewayErrorCategory.NETWORK, GatewayErrorCategory.UNKNOWN}:
+        return GenerationStatus.UNKNOWN
+    return GenerationStatus.FAILED
+
+
+def _gateway_error_message(
+    category: GatewayErrorCategory, error: GatewayError
+) -> str:
+    if category is GatewayErrorCategory.AUTH:
+        return f"鉴权失败：{error}"
+    if category is GatewayErrorCategory.CONFIG:
+        return f"配置错误：{error}"
+    if category in {GatewayErrorCategory.NETWORK, GatewayErrorCategory.UNKNOWN}:
+        return f"{CONNECTION_ERROR}：{error}"
+    if category is GatewayErrorCategory.SERVER:
+        return f"网关服务错误：{error}"
+    return f"网关拒绝：{error}"
