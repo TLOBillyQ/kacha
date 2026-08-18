@@ -10,6 +10,7 @@ from typing import Callable, Protocol
 from uuid import uuid4
 
 from .capabilities import CapabilityRegistry
+from .capabilities import Workflow
 from .generation import (
     GeneratedImage,
     GenerationStatus,
@@ -18,7 +19,12 @@ from .generation import (
     TextToImageRequest,
     build_request,
     draft_errors,
+    ImageEditDraft,
+    ImageEditRequest,
+    _snapshot_size,
+    _size_errors,
 )
+from .references import inspect_reference_image
 
 
 DEFAULT_CONCURRENCY_LIMIT = 3
@@ -35,11 +41,15 @@ GatewayResponse = GeneratedImage | tuple[GeneratedImage, ...] | list[GeneratedIm
 class Gateway(Protocol):
     def generate_text(self, request: TextToImageRequest) -> GatewayResponse: ...
 
+    def generate_image_edit(self, request: ImageEditRequest) -> GatewayResponse: ...
+
 
 class ResultRepository(Protocol):
     def save(self, task: GenerationTask, image: GeneratedImage) -> Path: ...
 
     def save_record(self, task: GenerationTask) -> None: ...
+
+    def save_reference_snapshot(self, task_id: str, submitted_at: datetime, reference, index: int): ...
 
 
 TaskListener = Callable[[GenerationTask], None]
@@ -125,6 +135,58 @@ class GenerationApplication:
             task_id=uuid4().hex,
             request=request,
             submitted_at=datetime.now(UTC),
+        )
+        with self._lock:
+            self._ensure_open()
+            self._tasks[task.task_id] = task
+            self._completion_futures[task.task_id] = Future()
+            self._stop_events[task.task_id] = Event()
+            self._queue.append(task.task_id)
+            self._notify(task)
+            self._schedule_locked()
+        return task.task_id
+
+    def submit_edit(self, draft: ImageEditDraft) -> str:
+        if not draft.model_id:
+            raise ValueError("请选择模型")
+        capability = self._capabilities.capability(draft.model_id)
+        if capability is None or Workflow.IMAGE_EDIT not in capability.workflows:
+            raise ValueError("该模型不支持图片编辑")
+        if not draft.prompt.strip():
+            raise ValueError("请输入正向提示词")
+        if not capability.min_images <= draft.image_count <= capability.max_images:
+            raise ValueError(f"出图数量需在 {capability.min_images}～{capability.max_images} 之间")
+        if not 1 <= len(draft.reference_paths) <= 3:
+            raise ValueError("参考图数量需为 1～3 张")
+        errors = _size_errors(
+            TextToImageDraft(size_mode=draft.size_mode, size_width=draft.size_width, size_height=draft.size_height),
+            capability,
+        )
+        if errors:
+            raise ValueError("；".join(errors))
+        references = tuple(inspect_reference_image(path) for path in draft.reference_paths)
+        task_id = uuid4().hex
+        submitted_at = datetime.now(UTC)
+        references = tuple(
+            self._results.save_reference_snapshot(task_id, submitted_at, reference, index)
+            for index, reference in enumerate(references, 1)
+        )
+        request = ImageEditRequest(
+            prompt=draft.prompt.strip(),
+            model_id=draft.model_id,
+            capability_version=self._capabilities.version,
+            references=references,
+            negative_prompt=(draft.negative_prompt or "").strip() or None
+            if capability.supports_negative_prompt
+            else None,
+            size=_snapshot_size(draft),
+            image_count=draft.image_count,
+        )
+        task = GenerationTask(
+            task_id=task_id,
+            request=request,
+            submitted_at=submitted_at,
+            workflow=Workflow.IMAGE_EDIT,
         )
         with self._lock:
             self._ensure_open()
@@ -248,7 +310,11 @@ class GenerationApplication:
 
         def invoke() -> None:
             try:
-                response = self._gateway.generate_text(task.request)
+                response = (
+                    self._gateway.generate_image_edit(task.request)
+                    if task.workflow is Workflow.IMAGE_EDIT
+                    else self._gateway.generate_text(task.request)
+                )
             except Exception as error:
                 result.set_exception(error)
             else:

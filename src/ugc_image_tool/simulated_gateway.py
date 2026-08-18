@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 import time
 
-from .generation import GeneratedImage, TextToImageRequest
+from .generation import GeneratedImage, ImageEditRequest, TextToImageRequest
 
 
 _PREVIEW_PNG = base64.b64decode(
@@ -28,4 +28,16 @@ class SimulatedGateway:
 
     def generate_text(self, request: TextToImageRequest) -> GeneratedImage:
         time.sleep(self._delay_seconds)
-        return GeneratedImage(content=_PREVIEW_PNG, media_type="image/png")
+        images = tuple(
+            GeneratedImage(content=_PREVIEW_PNG, media_type="image/png")
+            for _ in range(request.image_count)
+        )
+        return images[0] if len(images) == 1 else images
+
+    def generate_image_edit(self, request: ImageEditRequest) -> GeneratedImage | tuple[GeneratedImage, ...]:
+        time.sleep(self._delay_seconds)
+        images = tuple(
+            GeneratedImage(content=_PREVIEW_PNG, media_type="image/png")
+            for _ in range(request.image_count)
+        )
+        return images[0] if len(images) == 1 else images

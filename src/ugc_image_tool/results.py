@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from .generation import GeneratedImage, GenerationTask
+from .references import ReferenceImage
 
 
 class FileResultRepository:
@@ -49,12 +50,42 @@ class FileResultRepository:
                     "image_count": request.image_count,
                     "result_files": [path.name for path in task.result_paths],
                     "error": task.error,
+                    "reference_files": [reference.path.name for reference in getattr(request, "references", ())],
+                    "reference_metadata": [
+                        {
+                            "file": reference.path.name,
+                            "media_type": reference.media_type,
+                            "width": reference.width,
+                            "height": reference.height,
+                            "size_bytes": reference.size_bytes,
+                            "warnings": list(reference.warnings),
+                        }
+                        for reference in getattr(request, "references", ())
+                    ],
                 },
                 ensure_ascii=False,
                 indent=2,
             )
             + "\n",
             encoding="utf-8",
+        )
+
+    def save_reference_snapshot(
+        self, task_id: str, submitted_at: datetime, reference: ReferenceImage, index: int
+    ) -> ReferenceImage:
+        task_directory = self._output_root / submitted_at.astimezone(UTC).date().isoformat() / task_id
+        task_directory.mkdir(parents=True, exist_ok=True)
+        suffix = ".png" if reference.media_type == "image/png" else ".jpg"
+        path = task_directory / f"reference-{index}{suffix}"
+        path.write_bytes(reference.content)
+        return ReferenceImage(
+            path=path,
+            media_type=reference.media_type,
+            width=reference.width,
+            height=reference.height,
+            size_bytes=reference.size_bytes,
+            warnings=reference.warnings,
+            content=reference.content,
         )
 
     def _task_directory(self, task: GenerationTask) -> Path:

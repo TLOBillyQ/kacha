@@ -6,6 +6,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from .capabilities import ModelCapability, Workflow
+from .references import ReferenceImage
 
 
 class GenerationStatus(StrEnum):
@@ -80,6 +81,30 @@ class TextToImageRequest:
     prompt: str
     model_id: str
     capability_version: str
+    negative_prompt: str | None = None
+    size: SizeSpec = SizeSpec(SizeMode.AUTO)
+    image_count: int = 1
+    params: tuple[tuple[str, object], ...] = ()
+
+
+@dataclass
+class ImageEditDraft:
+    prompt: str = ""
+    model_id: str | None = None
+    negative_prompt: str | None = None
+    size_mode: SizeMode = SizeMode.AUTO
+    size_width: int | None = None
+    size_height: int | None = None
+    image_count: int = 1
+    reference_paths: tuple[Path, ...] = ()
+
+
+@dataclass(frozen=True)
+class ImageEditRequest:
+    prompt: str
+    model_id: str
+    capability_version: str
+    references: tuple[ReferenceImage, ...]
     negative_prompt: str | None = None
     size: SizeSpec = SizeSpec(SizeMode.AUTO)
     image_count: int = 1
@@ -165,7 +190,7 @@ def _snapshot_size(draft: TextToImageDraft) -> SizeSpec:
 @dataclass(frozen=True)
 class GenerationTask:
     task_id: str
-    request: TextToImageRequest
+    request: TextToImageRequest | ImageEditRequest
     submitted_at: datetime
     status: GenerationStatus = GenerationStatus.QUEUED
     result_paths: tuple[Path, ...] = ()
