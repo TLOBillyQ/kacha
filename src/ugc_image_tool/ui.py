@@ -182,6 +182,8 @@ class MainWindow(QMainWindow):
             cache=ModelCache(user_data_dir),
             diagnostics=self._diagnostics,
         )
+        # 发现代际计数：快速连续改地址/密钥时只采纳最新一次刷新的结果。
+        self._discovery_epoch = 0
         self._application = GenerationApplication(
             gateway=self._gateway,
             results=self._results,
@@ -720,7 +722,14 @@ class MainWindow(QMainWindow):
         self._connection_status.setStyleSheet(style)
 
     def _start_discovery(self) -> None:
-        Thread(target=self._refresh_discovery, name="model-discovery", daemon=True).start()
+        self._discovery_epoch += 1
+        epoch = self._discovery_epoch
+        Thread(
+            target=self._refresh_discovery,
+            args=(epoch,),
+            name="model-discovery",
+            daemon=True,
+        ).start()
 
     def _restart_discovery(self) -> None:
         """设置页修改地址或密钥后重新发现模型并刷新连接状态。"""
@@ -728,9 +737,11 @@ class MainWindow(QMainWindow):
         self._connection_status.setStyleSheet("")
         self._start_discovery()
 
-    def _refresh_discovery(self) -> None:
+    def _refresh_discovery(self, epoch: int) -> None:
         state = self._discovery.refresh()
-        self._discovery_events.discovered.emit(state)
+        # 期间又发起过更晚的刷新时，丢弃本次过期结果，避免跨线程信号串扰。
+        if epoch == self._discovery_epoch:
+            self._discovery_events.discovered.emit(state)
 
     @Slot(object)
     def _on_discovery_state(self, state: DiscoveryState) -> None:
