@@ -200,7 +200,7 @@ class MainWindow(QMainWindow):
         self._has_configured_models = False
         self._has_edit_models = False
         self._draft_count = 1
-        self._edit_max_references = 3
+        self._edit_max_references = 0
         self._output_error: str | None = None
         self._connection_status = QLabel("正在连接网关…")
         self._connection_status.setWordWrap(True)
@@ -909,6 +909,11 @@ class MainWindow(QMainWindow):
         self._edit_references.setToolTip("拖动条目可调整参考图顺序")
         self._edit_add = QPushButton("添加 PNG/JPEG 参考图")
         self._edit_add.clicked.connect(self._choose_edit_references)
+        self._edit_reference_hint = QLabel(
+            "当前团队网关契约仅验证 1 张参考图，超出部分已禁用"
+        )
+        self._edit_reference_hint.setWordWrap(True)
+        self._edit_reference_hint.setVisible(False)
         self._edit_count = QSpinBox()
         self._edit_count.setRange(1, 2)
         self._edit_edit_submit = QPushButton("提交图片编辑")
@@ -931,6 +936,7 @@ class MainWindow(QMainWindow):
         size_row.addWidget(self._edit_height_box)
         layout.addLayout(size_row)
         layout.addWidget(self._edit_references)
+        layout.addWidget(self._edit_reference_hint)
         controls = QHBoxLayout()
         controls.addWidget(self._edit_add)
         controls.addWidget(QLabel("出图数量"))
@@ -979,6 +985,9 @@ class MainWindow(QMainWindow):
         )
         self._edit_max_references = (
             edit.reference_limits.max_references if edit is not None else 0
+        )
+        self._edit_reference_hint.setVisible(
+            edit is not None and edit.reference_limits.max_references == 1
         )
         if edit is None:
             return
