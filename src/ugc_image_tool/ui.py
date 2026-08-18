@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
+from typing import cast
 
 from PySide6.QtCore import QObject, QUrl, Qt, Signal, Slot
-from PySide6.QtGui import QDesktopServices, QIcon, QPixmap
+from PySide6.QtGui import QDesktopServices, QIcon, QPixmap, QStandardItemModel
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -17,6 +18,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSpinBox,
     QTextEdit,
+    QInputDialog,
     QVBoxLayout,
     QWidget,
     QFileDialog,
@@ -36,6 +38,13 @@ from .generation import (
 from .results import FileResultRepository
 from .references import inspect_reference_image
 from .simulated_gateway import SimulatedGateway
+from .presets import (
+    PresetProject,
+    PresetApplication,
+    PresetStore,
+    PresetStoreError,
+    ProjectPreset,
+)
 
 _STATUS_LABELS = {
     GenerationStatus.QUEUED: "排队中",
@@ -82,6 +91,8 @@ class MainWindow(QMainWindow):
         self,
         output_root: Path | None = None,
         capabilities: CapabilityRegistry | None = None,
+        preset_store: PresetStore | None = None,
+        user_data_dir: Path | None = None,
     ) -> None:
         super().__init__()
         self.setWindowTitle("UGC AI 生图工具")
@@ -90,6 +101,10 @@ class MainWindow(QMainWindow):
         self._events.changed.connect(self._update_task)
         root = output_root or Path.home() / "Pictures" / "UGC AI 生图工具"
         self._capabilities = capabilities or CapabilityRegistry()
+        self._preset_application = PresetApplication(
+            preset_store or PresetStore(user_data_dir)
+        )
+        self._updating_prompt_controls = False
         gateway = SimulatedGateway()
         self._application = GenerationApplication(
             gateway=gateway,
@@ -107,6 +122,7 @@ class MainWindow(QMainWindow):
         self._build_task_center()
         self._populate_models(gateway.list_models())
         self._populate_edit_models(gateway.list_models())
+        self._populate_presets()
         self._revalidate()
 
     def _build_form(self) -> None:
@@ -115,11 +131,25 @@ class MainWindow(QMainWindow):
 
         self._prompt = QTextEdit()
         self._prompt.setPlaceholderText("输入正向提示词")
-        self._prompt.textChanged.connect(self._revalidate)
+        self._prompt.textChanged.connect(self._on_prompt_changed)
 
         self._negative_prompt = QTextEdit()
         self._negative_prompt.setPlaceholderText("输入负向提示词（可留空）")
-        self._negative_prompt.textChanged.connect(self._revalidate)
+        self._negative_prompt.textChanged.connect(self._on_prompt_changed)
+
+        self._preset_combo = QComboBox()
+        self._preset_combo.setPlaceholderText("选择项目预设")
+        self._preset_combo.currentIndexChanged.connect(self._update_preset_actions)
+        self._apply_preset = QPushButton("应用项目预设")
+        self._apply_preset.clicked.connect(self._apply_selected_preset)
+        self._copy_preset = QPushButton("复制为个人预设")
+        self._copy_preset.clicked.connect(self._copy_selected_preset)
+        self._save_preset = QPushButton("新建个人预设")
+        self._save_preset.clicked.connect(self._save_personal_preset)
+        self._edit_preset = QPushButton("编辑个人预设")
+        self._edit_preset.clicked.connect(self._edit_selected_preset)
+        self._delete_preset = QPushButton("删除个人预设")
+        self._delete_preset.clicked.connect(self._delete_selected_preset)
 
         self._size_combo = QComboBox()
         self._size_combo.currentIndexChanged.connect(self._on_size_mode_changed)
@@ -157,6 +187,15 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout()
         layout.addWidget(QLabel("模型"))
         layout.addWidget(self._model_combo)
+        preset_row = QHBoxLayout()
+        preset_row.addWidget(self._preset_combo, 1)
+        preset_row.addWidget(self._apply_preset)
+        preset_row.addWidget(self._copy_preset)
+        preset_row.addWidget(self._save_preset)
+        preset_row.addWidget(self._edit_preset)
+        preset_row.addWidget(self._delete_preset)
+        layout.addWidget(QLabel("项目预设"))
+        layout.addLayout(preset_row)
         layout.addWidget(QLabel("文生图"))
         layout.addWidget(self._prompt)
         layout.addWidget(self._negative_prompt)
@@ -166,6 +205,200 @@ class MainWindow(QMainWindow):
         layout.addWidget(self._submit)
         self._form_container = QWidget()
         self._form_container.setLayout(layout)
+
+    def _populate_presets(self) -> None:
+        selected_id = self._preset_combo.currentData()
+        self._preset_combo.blockSignals(True)
+        self._preset_combo.clear()
+        for project, presets in self._preset_application.grouped_presets().items():
+            self._preset_combo.addItem(project.display_name)
+            model = cast(QStandardItemModel, self._preset_combo.model())
+            header = model.item(self._preset_combo.count() - 1)
+            if header is not None:
+                header.setEnabled(False)
+            for preset in presets:
+                source = "内置" if preset.read_only else "个人"
+                self._preset_combo.addItem(
+                    f"  {preset.display_name}（{source}）",
+                    preset.preset_id,
+                )
+        restored = -1
+        if isinstance(selected_id, str):
+            for index in range(self._preset_combo.count()):
+                if self._preset_combo.itemData(index) == selected_id:
+                    restored = index
+                    break
+        self._preset_combo.setCurrentIndex(restored)
+        self._preset_combo.blockSignals(False)
+        self._update_preset_actions()
+
+    def _selected_preset(self) -> ProjectPreset | None:
+        preset_id = self._preset_combo.currentData()
+        if not isinstance(preset_id, str):
+            return None
+        return self._preset_application.get(preset_id)
+
+    @Slot(int)
+    def _update_preset_actions(self, _index: int = -1) -> None:
+        preset = self._selected_preset()
+        self._apply_preset.setEnabled(preset is not None)
+        self._copy_preset.setEnabled(preset is not None and preset.read_only)
+        self._edit_preset.setEnabled(preset is not None and not preset.read_only)
+        self._delete_preset.setEnabled(preset is not None and not preset.read_only)
+
+    @Slot()
+    def _on_prompt_changed(self) -> None:
+        if not self._updating_prompt_controls:
+            self._preset_application.update_prompt(
+                self._prompt.toPlainText(),
+                self._negative_prompt.toPlainText() or None,
+            )
+        self._revalidate()
+
+    def _set_prompt_values(self) -> None:
+        values = self._preset_application.prompt_values
+        self._updating_prompt_controls = True
+        self._prompt.blockSignals(True)
+        self._negative_prompt.blockSignals(True)
+        try:
+            self._prompt.setPlainText(values.prompt)
+            self._negative_prompt.setPlainText(values.negative_prompt or "")
+        finally:
+            self._negative_prompt.blockSignals(False)
+            self._prompt.blockSignals(False)
+            self._updating_prompt_controls = False
+        self._revalidate()
+
+    def _confirm_discard_prompt_changes(self) -> bool:
+        answer = QMessageBox.question(
+            self,
+            "确认应用预设",
+            "当前提示词有未提交修改，应用预设会覆盖这些修改。确定继续吗？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return answer is QMessageBox.StandardButton.Yes
+
+    @Slot()
+    def _apply_selected_preset(self) -> None:
+        preset = self._selected_preset()
+        if preset is None:
+            return
+        if not self._preset_application.apply_preset(
+            preset.preset_id,
+            confirm_discard=self._confirm_discard_prompt_changes,
+        ):
+            self.statusBar().showMessage("已取消应用项目预设")
+            return
+        self._set_prompt_values()
+        self.statusBar().showMessage(f"已应用项目预设：{preset.display_name}")
+
+    @Slot()
+    def _save_personal_preset(self) -> None:
+        name, accepted = QInputDialog.getText(self, "新建个人预设", "显示名称")
+        if not accepted:
+            return
+        project_name, accepted = QInputDialog.getItem(
+            self,
+            "选择项目",
+            "项目",
+            [project.display_name for project in PresetProject],
+            0,
+            False,
+        )
+        if not accepted:
+            return
+        project = next(project for project in PresetProject if project.display_name == project_name)
+        try:
+            preset = self._preset_application.create_personal(
+                name,
+                project,
+                self._prompt.toPlainText(),
+                self._negative_prompt.toPlainText() or None,
+            )
+        except (ValueError, PresetStoreError) as error:
+            self.statusBar().showMessage(f"新建个人预设失败：{error}")
+            return
+        self._populate_presets()
+        self._select_preset(preset.preset_id)
+        self.statusBar().showMessage(f"个人预设已保存：{preset.display_name}")
+
+    @Slot()
+    def _copy_selected_preset(self) -> None:
+        source = self._selected_preset()
+        if source is None:
+            return
+        name, accepted = QInputDialog.getText(
+            self,
+            "复制为个人预设",
+            "显示名称",
+            text=source.display_name,
+        )
+        if not accepted:
+            return
+        try:
+            preset = self._preset_application.copy_builtin_as_personal(source.preset_id, name)
+        except (ValueError, PresetStoreError, KeyError) as error:
+            self.statusBar().showMessage(f"复制个人预设失败：{error}")
+            return
+        self._populate_presets()
+        self._select_preset(preset.preset_id)
+        self.statusBar().showMessage(f"个人预设已创建：{preset.display_name}")
+
+    @Slot()
+    def _edit_selected_preset(self) -> None:
+        source = self._selected_preset()
+        if source is None or source.read_only:
+            return
+        name, accepted = QInputDialog.getText(
+            self,
+            "编辑个人预设",
+            "显示名称",
+            text=source.display_name,
+        )
+        if not accepted:
+            return
+        try:
+            preset = self._preset_application.update_personal(
+                source.preset_id,
+                display_name=name,
+                prompt=self._prompt.toPlainText(),
+                negative_prompt=self._negative_prompt.toPlainText() or None,
+            )
+        except (ValueError, PresetStoreError, KeyError) as error:
+            self.statusBar().showMessage(f"编辑个人预设失败：{error}")
+            return
+        self._populate_presets()
+        self._select_preset(preset.preset_id)
+        self.statusBar().showMessage(f"个人预设已更新：{preset.display_name}")
+
+    @Slot()
+    def _delete_selected_preset(self) -> None:
+        preset = self._selected_preset()
+        if preset is None or preset.read_only:
+            return
+        answer = QMessageBox.question(
+            self,
+            "删除个人预设",
+            f"确定删除个人预设“{preset.display_name}”吗？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer is not QMessageBox.StandardButton.Yes:
+            return
+        try:
+            self._preset_application.delete_personal(preset.preset_id)
+        except (KeyError, PermissionError, PresetStoreError) as error:
+            self.statusBar().showMessage(f"删除个人预设失败：{error}")
+            return
+        self._populate_presets()
+        self.statusBar().showMessage(f"个人预设已删除：{preset.display_name}")
+
+    def _select_preset(self, preset_id: str) -> None:
+        for index in range(self._preset_combo.count()):
+            if self._preset_combo.itemData(index) == preset_id:
+                self._preset_combo.setCurrentIndex(index)
+                return
 
     def _build_task_center(self) -> None:
         self._task_list = QListWidget()
@@ -498,6 +731,8 @@ class MainWindow(QMainWindow):
             self._application.submit_text(self._read_draft())
         except ValueError as error:
             self.statusBar().showMessage(str(error))
+        else:
+            self._preset_application.mark_prompt_submitted()
 
     @Slot(int)
     def _on_concurrency_changed(self, value: int) -> None:
@@ -700,6 +935,10 @@ class MainWindow(QMainWindow):
 
 def run() -> int:
     app = QApplication.instance() or QApplication([])
-    window = MainWindow()
+    try:
+        window = MainWindow()
+    except PresetStoreError as error:
+        QMessageBox.critical(None, "项目预设不可用", str(error))
+        return 1
     window.show()
     return app.exec()
