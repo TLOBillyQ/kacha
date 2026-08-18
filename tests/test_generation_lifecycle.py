@@ -23,16 +23,20 @@ from ugc_image_tool.generation import (
 )
 
 Z_IMAGE_TURBO_OVERRIDE = {
-    "schema_version": 1,
+    "schema_version": 2,
     "models": [
         {
             "model_id": "z-image-turbo",
             "display_name": "快速写实文生图",
-            "workflows": ["text_to_image"],
-            "supports_negative_prompt": False,
-            "min_images": 1,
-            "max_images": 1,
-            "size": {"auto_allowed": True, "presets": [[1024, 1024]]},
+            "workflows": [
+                {
+                    "workflow": "text_to_image",
+                    "supports_negative_prompt": False,
+                    "min_images": 1,
+                    "max_images": 1,
+                    "size": {"auto_allowed": True, "presets": [[1024, 1024]]},
+                }
+            ],
         }
     ],
 }

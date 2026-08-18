@@ -5,7 +5,7 @@ from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
 
-from .capabilities import ModelCapability, Workflow
+from .capabilities import ModelCapability, Workflow, WorkflowCapability
 from .references import ReferenceImage
 
 
@@ -122,18 +122,30 @@ class ImageEditRequest:
     params: tuple[tuple[str, object], ...] = ()
 
 
+def _text_workflow_capability(
+    capability: ModelCapability | None,
+) -> WorkflowCapability | None:
+    """解析文生图工作流约束；未知模型或不支持文生图时返回 None。"""
+    if capability is None:
+        return None
+    return capability.for_workflow(Workflow.TEXT_TO_IMAGE)
+
+
 def draft_errors(draft: TextToImageDraft, capability: ModelCapability | None) -> list[str]:
-    """按模型能力校验表单草稿，返回全部具体错误；空列表表示可提交。"""
+    """按模型文生图工作流能力校验表单草稿，返回全部具体错误。"""
     if capability is None:
         return ["模型未配置，无法提交"]
-    if Workflow.TEXT_TO_IMAGE not in capability.workflows:
+    workflow_capability = _text_workflow_capability(capability)
+    if workflow_capability is None:
         return ["该模型不支持文生图"]
     errors: list[str] = []
     if not draft.prompt.strip():
         errors.append("请输入正向提示词")
-    if not capability.min_images <= draft.image_count <= capability.max_images:
-        errors.append(f"出图数量需在 {capability.min_images}～{capability.max_images} 之间")
-    errors.extend(_size_errors(draft, capability))
+    if not workflow_capability.min_images <= draft.image_count <= workflow_capability.max_images:
+        errors.append(
+            f"出图数量需在 {workflow_capability.min_images}～{workflow_capability.max_images} 之间"
+        )
+    errors.extend(_size_errors(draft, workflow_capability))
     return errors
 
 
@@ -148,12 +160,14 @@ def build_request(
         raise ValueError("；".join(errors))
     if draft.model_id != capability.model_id:
         raise ValueError("模型与能力不匹配，无法提交")
+    workflow_capability = _text_workflow_capability(capability)
+    assert workflow_capability is not None  # draft_errors 已确认支持文生图
     size = _snapshot_size(draft)
     negative_prompt: str | None = None
-    if capability.supports_negative_prompt and draft.negative_prompt:
+    if workflow_capability.supports_negative_prompt and draft.negative_prompt:
         negative_prompt = draft.negative_prompt.strip() or None
     params: tuple[tuple[str, object], ...] = ()
-    if "watermark" in capability.extra_params:
+    if "watermark" in workflow_capability.extra_params:
         # 水印在第一版固定关闭，不在普通界面暴露。
         params = (("watermark", False),)
     return TextToImageRequest(
@@ -167,7 +181,9 @@ def build_request(
     )
 
 
-def _size_errors(draft: TextToImageDraft, capability: ModelCapability) -> list[str]:
+def _size_errors(
+    draft: TextToImageDraft | ImageEditDraft, capability: WorkflowCapability
+) -> list[str]:
     errors: list[str] = []
     if draft.size_mode is SizeMode.AUTO:
         if not capability.size.auto_allowed:
@@ -185,6 +201,9 @@ def _size_errors(draft: TextToImageDraft, capability: ModelCapability) -> list[s
         or height <= 0
     ):
         errors.append("请输入有效的自定义宽高")
+        return errors
+    if not capability.size.custom_size_allowed:
+        errors.append("该模型不支持自定义尺寸")
         return errors
     return capability.size.custom_size_errors(width, height)
 

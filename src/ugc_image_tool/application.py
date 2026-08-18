@@ -166,19 +166,21 @@ class GenerationApplication:
         self._ensure_submission_allowed()
         if not draft.model_id:
             raise ValueError("请选择模型")
-        capability = self._capabilities.capability(draft.model_id)
-        if capability is None or Workflow.IMAGE_EDIT not in capability.workflows:
+        edit_capability = self._capabilities.workflow_capability(
+            draft.model_id, Workflow.IMAGE_EDIT
+        )
+        if edit_capability is None:
             raise ValueError("该模型不支持图片编辑")
         if not draft.prompt.strip():
             raise ValueError("请输入正向提示词")
-        if not capability.min_images <= draft.image_count <= capability.max_images:
-            raise ValueError(f"出图数量需在 {capability.min_images}～{capability.max_images} 之间")
+        if not edit_capability.min_images <= draft.image_count <= edit_capability.max_images:
+            raise ValueError(
+                f"出图数量需在 {edit_capability.min_images}～{edit_capability.max_images} 之间"
+            )
+        # ticket #18 将收紧为能力表声明的参考图范围；在此之前保留 1～3 的硬范围。
         if not 1 <= len(draft.reference_paths) <= 3:
             raise ValueError("参考图数量需为 1～3 张")
-        errors = _size_errors(
-            TextToImageDraft(size_mode=draft.size_mode, size_width=draft.size_width, size_height=draft.size_height),
-            capability,
-        )
+        errors = _size_errors(draft, edit_capability)
         if errors:
             raise ValueError("；".join(errors))
         references = tuple(inspect_reference_image(path) for path in draft.reference_paths)
@@ -194,7 +196,7 @@ class GenerationApplication:
             capability_version=self._capabilities.version,
             references=references,
             negative_prompt=(draft.negative_prompt or "").strip() or None
-            if capability.supports_negative_prompt
+            if edit_capability.supports_negative_prompt
             else None,
             size=_snapshot_size(draft),
             image_count=draft.image_count,
