@@ -13,6 +13,7 @@ import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import cast
 
 from ugc_image_tool.application import GenerationApplication
 from ugc_image_tool.capabilities import CapabilityRegistry
@@ -74,7 +75,8 @@ class RecordingGatewayHandler(BaseHTTPRequestHandler):
         return "http"
 
     def _base(self) -> str:
-        return f"{self._scheme()}://127.0.0.1:{self.server.server_port}"
+        server = cast(ThreadingHTTPServer, self.server)
+        return f"{self._scheme()}://127.0.0.1:{server.server_port}"
 
     def do_GET(self) -> None:
         if self.path == "/v1/models":
@@ -104,7 +106,9 @@ class RecordingGatewayHandler(BaseHTTPRequestHandler):
         if self.path == "/v1/images/generations":
             behavior = self.behavior
             behavior.generation_calls += 1
-            behavior.generation_request_ids.append(self.headers.get("X-Oneapi-Request-Id"))
+            request_id = self.headers.get("X-Oneapi-Request-Id")
+            if request_id is not None:
+                behavior.generation_request_ids.append(request_id)
             if behavior.generation_status >= 400:
                 self._json(behavior.generation_status, {"error": {"message": "网关繁忙，请稍后重试"}})
                 return
@@ -255,6 +259,23 @@ class TeamGatewayEndToEndTests(unittest.TestCase):
         self.assertEqual(GenerationStatus.FAILED, task.status)
         self.assertIn("网关繁忙，请稍后重试", task.error or "")
         self.assertEqual("e2e-503", task.gateway_request_id)
+
+    def test_ambiguous_server_error_maps_to_unknown_without_retry(self) -> None:
+        for status in (502, 504):
+            with self.subTest(status=status):
+                self._behavior.reset()
+                self._behavior.generation_status = status
+                with TemporaryDirectory() as directory:
+                    application = self._application(directory)
+                    task_id = application.submit_text(
+                        TextToImageDraft(prompt="x", model_id="qwen-image-3.0-pro")
+                    )
+                    task = application.wait_for(task_id, timeout=5)
+
+                self.assertEqual(GenerationStatus.UNKNOWN, task.status)
+                self.assertIn("结果未知", task.error or "")
+                self.assertEqual(f"e2e-{status}", task.gateway_request_id)
+                self.assertEqual(1, self._behavior.generation_calls)
 
     def test_rate_limit_maps_to_failed_with_retry_guidance(self) -> None:
         self._behavior.generation_status = 429

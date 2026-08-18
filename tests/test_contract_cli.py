@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from typing import cast
 
 
 class ContractCliTests(unittest.TestCase):
@@ -79,7 +80,9 @@ class ContractCliTests(unittest.TestCase):
                 "verified_models": ["verified-model"],
                 "unsafe_to_enable": ["未实测模型"],
             }
-            manifest["interfaces"]["image_edit"]["request_shape"] = {
+            interfaces = cast(dict[str, object], manifest["interfaces"])
+            image_edit = cast(dict[str, object], interfaces["image_edit"])
+            image_edit["request_shape"] = {
                 "encoding": "multipart/form-data",
                 "fields": [{"name": "image", "kind": "file"}],
             }

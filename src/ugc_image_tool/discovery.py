@@ -38,12 +38,18 @@ class GatewayErrorCategory(StrEnum):
     AUTH = "auth"  # 鉴权失败
     RATE_LIMIT = "rate_limit"  # 网关限流（请求过密，稍后重试）
     REJECTED = "rejected"  # 网关拒绝（4xx 非鉴权、非限流）
-    SERVER = "server"  # 网关服务错误（5xx，可短暂重试）
+    SERVER = "server"  # 网关服务错误（503 等可确定未开始，任务保持失败）
+    SERVER_UNKNOWN = "server_unknown"  # 网关服务错误但结果未知（500/502/504 等模糊 5xx）
     UNKNOWN = "unknown"  # 结果未知
 
 
+_AMBIGUOUS_SERVER_STATUSES = frozenset({500, 502, 504})
 _TRANSIENT_CATEGORIES = frozenset(
-    {GatewayErrorCategory.NETWORK, GatewayErrorCategory.SERVER}
+    {
+        GatewayErrorCategory.NETWORK,
+        GatewayErrorCategory.SERVER,
+        GatewayErrorCategory.SERVER_UNKNOWN,
+    }
 )
 
 
@@ -65,13 +71,19 @@ class GatewayError(Exception):
 
 
 def category_for_status(status: int) -> GatewayErrorCategory:
-    """按 HTTP 状态码给出网关错误类别；适配器与异常分类共用同一映射。"""
+    """按 HTTP 状态码给出网关错误类别；适配器与异常分类共用同一映射。
+
+    生成接口对 5xx 的语义做区分：503 可以确定生成未开始（任务保持失败），
+    而 502/504 等模糊 5xx 无法判断是否已生成（任务标记为结果未知）。
+    """
     if status == 401:
         return GatewayErrorCategory.AUTH
     if status == 429:
         return GatewayErrorCategory.RATE_LIMIT
     if 400 <= status < 500:
         return GatewayErrorCategory.REJECTED
+    if status in _AMBIGUOUS_SERVER_STATUSES:
+        return GatewayErrorCategory.SERVER_UNKNOWN
     if status >= 500:
         return GatewayErrorCategory.SERVER
     return GatewayErrorCategory.UNKNOWN

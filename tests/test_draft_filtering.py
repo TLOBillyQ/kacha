@@ -30,10 +30,11 @@ TEXT_ONLY_NO_NEGATIVE = ModelCapability(
 )
 
 
-def qwen_draft(**overrides) -> TextToImageDraft:
-    fields = {"prompt": "一只蓝色小鸟", "model_id": "qwen-image-3.0-pro"}
-    fields.update(overrides)
-    return TextToImageDraft(**fields)
+def qwen_draft(**overrides: object) -> TextToImageDraft:
+    draft = TextToImageDraft(prompt="一只蓝色小鸟", model_id="qwen-image-3.0-pro")
+    for key, value in overrides.items():
+        setattr(draft, key, value)
+    return draft
 
 
 class DraftValidationTests(unittest.TestCase):

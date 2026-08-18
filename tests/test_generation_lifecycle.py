@@ -18,6 +18,8 @@ from ugc_image_tool.generation import (
     GatewayGenerationResult,
     GenerationStatus,
     GeneratedImage,
+    GenerationTask,
+    ImageEditRequest,
     TextToImageDraft,
     TextToImageRequest,
 )
@@ -38,10 +40,11 @@ Z_IMAGE_TURBO_OVERRIDE = {
 }
 
 
-def make_draft(prompt: str, model_id: str = "qwen-image-3.0-pro", **overrides) -> TextToImageDraft:
-    fields = {"prompt": prompt, "model_id": model_id}
-    fields.update(overrides)
-    return TextToImageDraft(**fields)
+def make_draft(prompt: str, model_id: str = "qwen-image-3.0-pro", **overrides: object) -> TextToImageDraft:
+    draft = TextToImageDraft(prompt=prompt, model_id=model_id)
+    for key, value in overrides.items():
+        setattr(draft, key, value)
+    return draft
 
 
 @dataclass
@@ -54,16 +57,19 @@ class FakeGateway:
         self.started = threading.Event()
         self.requests: list[TextToImageRequest] = []
 
-    def generate_text(self, request: TextToImageRequest) -> GeneratedImage:
+    def generate_image_edit(self, request: ImageEditRequest) -> GatewayGenerationResult:
+        raise AssertionError("该测试替身只支持文生图")
+
+    def generate_text(self, request: TextToImageRequest) -> GatewayGenerationResult:
         self.requests.append(request)
         self.started.set()
-        return self.image
+        return GatewayGenerationResult(images=(self.image,))
 
 
 class InMemoryResultRepository:
     def __init__(self) -> None:
         self.saved: list[tuple[str, str, GeneratedImage]] = []
-        self.records = []
+        self.records: list[GenerationTask] = []
 
     def save(self, task, image: GeneratedImage) -> Path:
         path = Path("2026-08-17") / task.task_id / "result-1.png"
@@ -72,6 +78,9 @@ class InMemoryResultRepository:
 
     def save_record(self, task) -> None:
         self.records.append(task)
+
+    def save_reference_snapshot(self, task_id, submitted_at, reference, index):
+        return reference
 
 
 class GenerationLifecycleTests(unittest.TestCase):
@@ -103,9 +112,14 @@ class GenerationLifecycleTests(unittest.TestCase):
         release = threading.Event()
 
         class BlockingGateway:
-            def generate_text(self, request: TextToImageRequest) -> GeneratedImage:
+            def generate_image_edit(self, request: ImageEditRequest) -> GatewayGenerationResult:
+                raise AssertionError("该测试替身只支持文生图")
+
+            def generate_text(self, request: TextToImageRequest) -> GatewayGenerationResult:
                 release.wait(timeout=1)
-                return GeneratedImage(b"png-data", "image/png")
+                return GatewayGenerationResult(
+                    images=(GeneratedImage(b"png-data", "image/png"),)
+                )
 
         application = GenerationApplication(
             gateway=BlockingGateway(),
@@ -126,7 +140,10 @@ class GenerationLifecycleTests(unittest.TestCase):
 
     def test_gateway_failure_is_visible_as_failed_task(self) -> None:
         class FailingGateway:
-            def generate_text(self, request: TextToImageRequest) -> GeneratedImage:
+            def generate_image_edit(self, request: ImageEditRequest) -> GatewayGenerationResult:
+                raise AssertionError("该测试替身只支持文生图")
+
+            def generate_text(self, request: TextToImageRequest) -> GatewayGenerationResult:
                 raise RuntimeError("模拟网关不可用")
 
         repository = InMemoryResultRepository()
@@ -169,10 +186,15 @@ class GenerationLifecycleTests(unittest.TestCase):
         release = threading.Event()
 
         class BlockingGateway:
-            def generate_text(self, request: TextToImageRequest) -> GeneratedImage:
+            def generate_image_edit(self, request: ImageEditRequest) -> GatewayGenerationResult:
+                raise AssertionError("该测试替身只支持文生图")
+
+            def generate_text(self, request: TextToImageRequest) -> GatewayGenerationResult:
                 started.set()
                 release.wait(timeout=1)
-                return GeneratedImage(b"png-data", "image/png")
+                return GatewayGenerationResult(
+                    images=(GeneratedImage(b"png-data", "image/png"),)
+                )
 
         application = GenerationApplication(
             gateway=BlockingGateway(),
@@ -271,6 +293,9 @@ class SubmissionCapabilityTests(unittest.TestCase):
 
     def test_gateway_request_id_is_kept_in_task_record(self) -> None:
         class IdentifiedGateway:
+            def generate_image_edit(self, request: ImageEditRequest) -> GatewayGenerationResult:
+                raise AssertionError("该测试替身只支持文生图")
+
             def generate_text(self, request: TextToImageRequest) -> GatewayGenerationResult:
                 return GatewayGenerationResult(
                     images=(GeneratedImage(b"png-data", "image/png"),),
@@ -294,6 +319,9 @@ class SubmissionCapabilityTests(unittest.TestCase):
 
     def test_invalid_result_with_request_id_keeps_that_id_in_failed_record(self) -> None:
         class InvalidIdentifiedGateway:
+            def generate_image_edit(self, request: ImageEditRequest) -> GatewayGenerationResult:
+                raise AssertionError("该测试替身只支持文生图")
+
             def generate_text(self, request: TextToImageRequest) -> GatewayGenerationResult:
                 return GatewayGenerationResult(
                     images=(object(),),  # type: ignore[arg-type]
@@ -319,7 +347,10 @@ class SubmissionCapabilityTests(unittest.TestCase):
 class GatewayErrorHandlingTests(unittest.TestCase):
     def _run_with_error(self, error: Exception) -> GenerationTask:
         class RaisingGateway:
-            def generate_text(self, request: TextToImageRequest) -> None:
+            def generate_image_edit(self, request: ImageEditRequest) -> GatewayGenerationResult:
+                raise AssertionError("该测试替身只支持文生图")
+
+            def generate_text(self, request: TextToImageRequest) -> GatewayGenerationResult:
                 raise error
 
         application = GenerationApplication(
@@ -363,6 +394,34 @@ class GatewayErrorHandlingTests(unittest.TestCase):
 
         self.assertEqual(GenerationStatus.FAILED, task.status)
         self.assertIn("网关服务错误", task.error or "")
+
+    def test_503_no_available_channel_stays_failed(self) -> None:
+        task = self._run_with_error(
+            GatewayError(
+                GatewayErrorCategory.SERVER,
+                "无可用渠道",
+                status_code=503,
+            )
+        )
+
+        self.assertEqual(GenerationStatus.FAILED, task.status)
+        self.assertIn("网关服务错误", task.error or "")
+        self.assertIn("无可用渠道", task.error or "")
+
+    def test_ambiguous_server_errors_mark_task_unknown(self) -> None:
+        for status in (500, 502, 504):
+            with self.subTest(status=status):
+                task = self._run_with_error(
+                    GatewayError(
+                        GatewayErrorCategory.SERVER_UNKNOWN,
+                        f"网关返回 {status}",
+                        status_code=status,
+                    )
+                )
+
+                self.assertEqual(GenerationStatus.UNKNOWN, task.status)
+                self.assertIn("结果未知", task.error or "")
+                self.assertIn(str(status), task.error or "")
 
     def test_config_error_fails_task_with_config_message(self) -> None:
         task = self._run_with_error(
