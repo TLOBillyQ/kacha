@@ -1,7 +1,8 @@
 """本地模型能力表：决定每个模型允许的工作流、参数与取值范围。
 
 网关模型列表只决定模型当前是否可用；本模块决定可提交的内容。未知模型
-默认禁用，不按模型名称猜测能力。
+默认禁用，不按模型名称猜测能力。能力按工作流表达：同一模型可以为文生图
+与图片编辑分别声明负向提示词、出图数量、生成尺寸与参考图限制。
 """
 
 from __future__ import annotations
@@ -30,6 +31,8 @@ class SizeRule:
 
     auto_allowed: bool
     presets: tuple[tuple[int, int], ...]
+    # 是否允许用户在有效边界内自定义宽高；图片编辑仅实测了自动尺寸时为 False。
+    custom_size_allowed: bool = True
     min_total_pixels: int | None = None
     max_total_pixels: int | None = None
     # 宽高比按 width / height 计算；None 表示该方向无约束。
@@ -61,37 +64,87 @@ class SizeRule:
 
 
 @dataclass(frozen=True)
-class ModelCapability:
-    model_id: str
-    display_name: str
-    workflows: frozenset[Workflow]
+class ReferenceLimits:
+    """工作流接受的参考图数量范围；全 0 表示该工作流不接收参考图。"""
+
+    min_references: int
+    max_references: int
+
+
+@dataclass(frozen=True)
+class WorkflowCapability:
+    """单个工作流下的参数约束。"""
+
+    workflow: Workflow
     supports_negative_prompt: bool
     min_images: int
     max_images: int
     size: SizeRule
+    reference_limits: ReferenceLimits
     # 模型专属参数名；水印等固定值由应用层按规则填充。
     extra_params: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class ModelCapability:
+    """一个模型按工作流拆分的全部能力。"""
+
+    model_id: str
+    display_name: str
+    workflow_capabilities: tuple[WorkflowCapability, ...]
+
+    @property
+    def workflows(self) -> frozenset[Workflow]:
+        """该模型声明支持的工作流集合。"""
+        return frozenset(c.workflow for c in self.workflow_capabilities)
+
+    def for_workflow(self, workflow: Workflow) -> WorkflowCapability | None:
+        """返回目标工作流的能力；模型不支持该工作流时返回 None。"""
+        return next(
+            (
+                capability
+                for capability in self.workflow_capabilities
+                if capability.workflow is workflow
+            ),
+            None,
+        )
+
+
+# 依据 contracts/fixtures/2026-08-17-team-gateway 实测结果配置文生图：
+# n 仅实测到 1 与 2；negative_prompt/size/watermark 字段实测可用。
+QWEN_TEXT_WORKFLOW = WorkflowCapability(
+    workflow=Workflow.TEXT_TO_IMAGE,
+    supports_negative_prompt=True,
+    min_images=1,
+    max_images=2,
+    size=SizeRule(
+        auto_allowed=True,
+        presets=((1024, 1024), (2048, 2048), (1920, 1080), (1080, 1920)),
+        min_total_pixels=262_144,
+        max_total_pixels=4_194_304,
+        min_aspect_ratio=1 / 8,
+        max_aspect_ratio=8.0,
+    ),
+    reference_limits=ReferenceLimits(min_references=0, max_references=0),
+    extra_params=("watermark",),
+)
+
+# 图片编辑依据同一夹具的实测结果：仅验证过 1 张参考图、模型自动决定尺寸、
+# 单张出图且无负向提示词，其他组合未实测，不在内置能力中开放。
+QWEN_EDIT_WORKFLOW = WorkflowCapability(
+    workflow=Workflow.IMAGE_EDIT,
+    supports_negative_prompt=False,
+    min_images=1,
+    max_images=1,
+    size=SizeRule(auto_allowed=True, presets=(), custom_size_allowed=False),
+    reference_limits=ReferenceLimits(min_references=1, max_references=1),
+)
+
 BUILTIN_CAPABILITIES: dict[str, ModelCapability] = {
-    # 依据 contracts/fixtures/2026-08-17-team-gateway 实测结果配置：
-    # n 仅实测到 1 与 2；negative_prompt/size/watermark 字段实测可用。
     "qwen-image-3.0-pro": ModelCapability(
         model_id="qwen-image-3.0-pro",
         display_name="Qwen Image 3.0",
-        workflows=frozenset({Workflow.TEXT_TO_IMAGE, Workflow.IMAGE_EDIT}),
-        supports_negative_prompt=True,
-        min_images=1,
-        max_images=2,
-        size=SizeRule(
-            auto_allowed=True,
-            presets=((1024, 1024), (2048, 2048), (1920, 1080), (1080, 1920)),
-            min_total_pixels=262_144,
-            max_total_pixels=4_194_304,
-            min_aspect_ratio=1 / 8,
-            max_aspect_ratio=8.0,
-        ),
-        extra_params=("watermark",),
+        workflow_capabilities=(QWEN_TEXT_WORKFLOW, QWEN_EDIT_WORKFLOW),
     ),
 }
 
@@ -108,10 +161,15 @@ def enforce_special_constraints(capability: ModelCapability) -> ModelCapability:
     """把特殊模型约束作为能力表规则的一部分，任何入口都不能绕过。"""
     if capability.model_id != "z-image-turbo":
         return capability
+    text_only = tuple(
+        workflow
+        for workflow in capability.workflow_capabilities
+        if workflow.workflow is Workflow.TEXT_TO_IMAGE
+    )
     return dataclasses.replace(
         capability,
         display_name=Z_IMAGE_TURBO_DISPLAY_NAME,
-        workflows=frozenset({Workflow.TEXT_TO_IMAGE}),
+        workflow_capabilities=text_only,
     )
 
 
@@ -142,6 +200,15 @@ class CapabilityRegistry:
     def capability(self, model_id: str) -> ModelCapability | None:
         return self._table.get(model_id)
 
+    def workflow_capability(
+        self, model_id: str, workflow: Workflow
+    ) -> WorkflowCapability | None:
+        """按模型与工作流解析约束；未知模型或不支持该工作流时返回 None。"""
+        capability = self._table.get(model_id)
+        if capability is None:
+            return None
+        return capability.for_workflow(workflow)
+
     def for_workflow(self, workflow: Workflow) -> tuple[ModelCapability, ...]:
         return tuple(
             capability
@@ -166,9 +233,8 @@ class CapabilityOverrideError(ValueError):
 
 # z-image-turbo 只能标记为“快速写实文生图”且不进入图片编辑工作流。
 Z_IMAGE_TURBO_DISPLAY_NAME = "快速写实文生图"
-Z_IMAGE_TURBO_WORKFLOWS = frozenset({Workflow.TEXT_TO_IMAGE})
 
-_OVERRIDE_SCHEMA_VERSION = 1
+_OVERRIDE_SCHEMA_VERSION = 2
 
 
 def load_override_file(path: Path) -> dict[str, ModelCapability]:
@@ -231,6 +297,59 @@ def _parse_capability(entry: dict[str, Any], prefix: str) -> ModelCapability:
         display_name = ""
 
     workflows = _parse_workflows(entry.get("workflows"), f"{prefix}.workflows", errors)
+
+    if errors:
+        raise _EntryError(errors)
+
+    capability = ModelCapability(
+        model_id=model_id,
+        display_name=display_name,
+        workflow_capabilities=workflows,
+    )
+    _validate_special_model_constraint(capability, prefix, errors)
+    if errors:
+        raise _EntryError(errors)
+    return capability
+
+
+def _parse_workflows(
+    value: Any, prefix: str, errors: list[str]
+) -> tuple[WorkflowCapability, ...]:
+    if not isinstance(value, list) or not value:
+        errors.append(f"{prefix} 必须是非空数组")
+        return ()
+    workflows: list[WorkflowCapability] = []
+    seen: set[Workflow] = set()
+    for index, entry in enumerate(value):
+        entry_prefix = f"{prefix}[{index}]"
+        if not isinstance(entry, dict):
+            errors.append(f"{entry_prefix} 必须是对象")
+            continue
+        workflow = _parse_workflow(entry.get("workflow"), f"{entry_prefix}.workflow", errors)
+        if workflow is None:
+            continue
+        if workflow in seen:
+            errors.append(f"{entry_prefix} 工作流 {workflow.value} 重复定义")
+            continue
+        seen.add(workflow)
+        workflows.append(_parse_workflow_capability(workflow, entry, entry_prefix, errors))
+    return tuple(workflows)
+
+
+def _parse_workflow(value: Any, prefix: str, errors: list[str]) -> Workflow | None:
+    if not isinstance(value, str):
+        errors.append(f"{prefix} 必须是字符串")
+        return None
+    try:
+        return Workflow(value)
+    except ValueError:
+        errors.append(f"{prefix} 包含不受支持的工作流：{value!r}")
+        return None
+
+
+def _parse_workflow_capability(
+    workflow: Workflow, entry: dict[str, Any], prefix: str, errors: list[str]
+) -> WorkflowCapability:
     supports_negative_prompt = entry.get("supports_negative_prompt")
     if not isinstance(supports_negative_prompt, bool):
         errors.append(f"{prefix}.supports_negative_prompt 必须是布尔值")
@@ -243,38 +362,22 @@ def _parse_capability(entry: dict[str, Any], prefix: str) -> ModelCapability:
     ):
         errors.append(f"{prefix} 出图数量范围无效：1 ≤ min ≤ max")
     size = _parse_size_rule(entry.get("size"), f"{prefix}.size", errors)
-    extra_params = _parse_extra_params(entry.get("extra_params"), f"{prefix}.extra_params", errors)
+    reference_limits = _parse_reference_limits(
+        entry.get("reference_limits"), f"{prefix}.reference_limits", errors
+    )
+    extra_params = _parse_extra_params(
+        entry.get("extra_params"), f"{prefix}.extra_params", errors
+    )
 
-    if errors:
-        raise _EntryError(errors)
-
-    capability = ModelCapability(
-        model_id=model_id,
-        display_name=display_name,
-        workflows=workflows,
+    return WorkflowCapability(
+        workflow=workflow,
         supports_negative_prompt=cast(bool, supports_negative_prompt),
         min_images=min_images,
         max_images=max_images,
         size=size,
+        reference_limits=reference_limits,
         extra_params=extra_params,
     )
-    _validate_special_model_constraint(capability, prefix, errors)
-    if errors:
-        raise _EntryError(errors)
-    return capability
-
-
-def _parse_workflows(value: Any, prefix: str, errors: list[str]) -> frozenset[Workflow]:
-    if not isinstance(value, list) or not value:
-        errors.append(f"{prefix} 必须是非空数组")
-        return frozenset()
-    workflows: list[Workflow] = []
-    for workflow in value:
-        try:
-            workflows.append(Workflow(workflow))
-        except ValueError:
-            errors.append(f"{prefix} 包含不受支持的工作流：{workflow!r}")
-    return frozenset(workflows)
 
 
 def _parse_int(value: Any, prefix: str, errors: list[str]) -> int:
@@ -284,6 +387,25 @@ def _parse_int(value: Any, prefix: str, errors: list[str]) -> int:
     return value
 
 
+def _parse_reference_limits(
+    value: Any, prefix: str, errors: list[str]
+) -> ReferenceLimits:
+    if value is None:
+        return ReferenceLimits(min_references=0, max_references=0)
+    if not isinstance(value, dict):
+        errors.append(f"{prefix} 必须是对象")
+        return ReferenceLimits(min_references=0, max_references=0)
+    min_refs = _parse_int(value.get("min_references"), f"{prefix}.min_references", errors)
+    max_refs = _parse_int(value.get("max_references"), f"{prefix}.max_references", errors)
+    if (
+        isinstance(min_refs, int)
+        and isinstance(max_refs, int)
+        and not 0 <= min_refs <= max_refs
+    ):
+        errors.append(f"{prefix} 参考图数量范围无效：0 ≤ min ≤ max")
+    return ReferenceLimits(min_references=min_refs, max_references=max_refs)
+
+
 def _parse_size_rule(value: Any, prefix: str, errors: list[str]) -> SizeRule:
     if not isinstance(value, dict):
         errors.append(f"{prefix} 必须是对象")
@@ -291,6 +413,9 @@ def _parse_size_rule(value: Any, prefix: str, errors: list[str]) -> SizeRule:
     auto_allowed = value.get("auto_allowed")
     if not isinstance(auto_allowed, bool):
         errors.append(f"{prefix}.auto_allowed 必须是布尔值")
+    custom_size_allowed = value.get("custom_size_allowed")
+    if custom_size_allowed is not None and not isinstance(custom_size_allowed, bool):
+        errors.append(f"{prefix}.custom_size_allowed 必须是布尔值")
     presets = _parse_presets(value.get("presets"), f"{prefix}.presets", errors)
     min_pixels = _parse_positive_int(value.get("min_total_pixels"), f"{prefix}.min_total_pixels", errors)
     max_pixels = _parse_positive_int(value.get("max_total_pixels"), f"{prefix}.max_total_pixels", errors)
@@ -308,6 +433,11 @@ def _parse_size_rule(value: Any, prefix: str, errors: list[str]) -> SizeRule:
     size = SizeRule(
         auto_allowed=cast(bool, auto_allowed),
         presets=presets,
+        custom_size_allowed=(
+            cast(bool, custom_size_allowed)
+            if custom_size_allowed is not None
+            else True
+        ),
         min_total_pixels=min_pixels,
         max_total_pixels=max_pixels,
         min_aspect_ratio=min_ratio,
@@ -324,8 +454,10 @@ def _parse_size_rule(value: Any, prefix: str, errors: list[str]) -> SizeRule:
 
 
 def _parse_presets(value: Any, prefix: str, errors: list[str]) -> tuple[tuple[int, int], ...]:
-    if not isinstance(value, list) or not value:
-        errors.append(f"{prefix} 必须是非空数组")
+    if value is None:
+        return ()
+    if not isinstance(value, list):
+        errors.append(f"{prefix} 必须是数组")
         return ()
     presets: list[tuple[int, int]] = []
     for index, preset in enumerate(value):

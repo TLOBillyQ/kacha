@@ -6,8 +6,10 @@ from ugc_image_tool.capabilities import (
     BUILTIN_CAPABILITIES,
     CAPABILITY_TABLE_VERSION,
     ModelCapability,
+    ReferenceLimits,
     SizeRule,
     Workflow,
+    WorkflowCapability,
 )
 from ugc_image_tool.generation import (
     SizeMode,
@@ -19,14 +21,36 @@ from ugc_image_tool.generation import (
 
 QWEN = BUILTIN_CAPABILITIES["qwen-image-3.0-pro"]
 
-TEXT_ONLY_NO_NEGATIVE = ModelCapability(
-    model_id="z-image-turbo",
-    display_name="快速写实文生图",
-    workflows=frozenset({Workflow.TEXT_TO_IMAGE}),
-    supports_negative_prompt=False,
-    min_images=1,
-    max_images=1,
-    size=SizeRule(auto_allowed=True, presets=((1024, 1024),)),
+
+def text_capability(
+    model_id: str,
+    display_name: str,
+    *,
+    supports_negative_prompt: bool = False,
+    min_images: int = 1,
+    max_images: int = 1,
+    size: SizeRule | None = None,
+    extra_params: tuple[str, ...] = (),
+) -> ModelCapability:
+    """构造只提供文生图工作流的模型能力，用于草稿过滤测试。"""
+    return ModelCapability(
+        model_id=model_id,
+        display_name=display_name,
+        workflow_capabilities=(WorkflowCapability(
+            workflow=Workflow.TEXT_TO_IMAGE,
+            supports_negative_prompt=supports_negative_prompt,
+            min_images=min_images,
+            max_images=max_images,
+            size=size or SizeRule(auto_allowed=True, presets=((1024, 1024),)),
+            reference_limits=ReferenceLimits(min_references=0, max_references=0),
+            extra_params=extra_params,
+        ),),
+    )
+
+
+TEXT_ONLY_NO_NEGATIVE = text_capability(
+    "z-image-turbo",
+    "快速写实文生图",
 )
 
 
@@ -52,11 +76,14 @@ class DraftValidationTests(unittest.TestCase):
         edit_only = ModelCapability(
             model_id="edit-only",
             display_name="仅编辑",
-            workflows=frozenset({Workflow.IMAGE_EDIT}),
-            supports_negative_prompt=True,
-            min_images=1,
-            max_images=1,
-            size=SizeRule(auto_allowed=True, presets=((1024, 1024),)),
+            workflow_capabilities=(WorkflowCapability(
+                workflow=Workflow.IMAGE_EDIT,
+                supports_negative_prompt=True,
+                min_images=1,
+                max_images=1,
+                size=SizeRule(auto_allowed=True, presets=((1024, 1024),)),
+                reference_limits=ReferenceLimits(min_references=1, max_references=1),
+            ),),
         )
         self.assertIn("不支持文生图", draft_errors(qwen_draft(model_id="edit-only"), edit_only)[0])
 
@@ -101,13 +128,10 @@ class DraftValidationTests(unittest.TestCase):
         self.assertTrue(any("预设" in error for error in errors))
 
     def test_auto_mode_rejected_when_not_allowed(self) -> None:
-        no_auto = ModelCapability(
-            model_id="no-auto",
-            display_name="不允许自动",
-            workflows=frozenset({Workflow.TEXT_TO_IMAGE}),
+        no_auto = text_capability(
+            "no-auto",
+            "不允许自动",
             supports_negative_prompt=True,
-            min_images=1,
-            max_images=1,
             size=SizeRule(auto_allowed=False, presets=((1024, 1024),)),
         )
         errors = draft_errors(qwen_draft(model_id="no-auto"), no_auto)
@@ -155,14 +179,11 @@ class DraftSnapshotFilteringTests(unittest.TestCase):
         self.assertIsNone(request.negative_prompt)
 
     def test_watermark_only_when_capability_declares_it(self) -> None:
-        no_watermark = ModelCapability(
-            model_id="plain",
-            display_name="无水印参数",
-            workflows=frozenset({Workflow.TEXT_TO_IMAGE}),
+        no_watermark = text_capability(
+            "plain",
+            "无水印参数",
             supports_negative_prompt=True,
-            min_images=1,
             max_images=2,
-            size=SizeRule(auto_allowed=True, presets=((1024, 1024),)),
         )
         request = build_request(qwen_draft(model_id="plain"), no_watermark, "v-test")
         self.assertEqual((), request.params)

@@ -200,6 +200,7 @@ class MainWindow(QMainWindow):
         self._has_configured_models = False
         self._has_edit_models = False
         self._draft_count = 1
+        self._edit_max_references = 3
         self._output_error: str | None = None
         self._connection_status = QLabel("正在连接网关…")
         self._connection_status.setWordWrap(True)
@@ -968,18 +969,27 @@ class MainWindow(QMainWindow):
     @Slot(int)
     def _on_edit_model_changed(self, index: int) -> None:
         capability = self._capabilities.capability(self._edit_model_combo.itemData(index))
-        self._edit_negative_prompt.setVisible(
-            capability is not None and capability.supports_negative_prompt
+        edit = (
+            capability.for_workflow(Workflow.IMAGE_EDIT)
+            if capability is not None
+            else None
         )
-        if capability is None:
+        self._edit_negative_prompt.setVisible(
+            edit is not None and edit.supports_negative_prompt
+        )
+        self._edit_max_references = (
+            edit.reference_limits.max_references if edit is not None else 0
+        )
+        if edit is None:
             return
-        self._edit_count.setRange(capability.min_images, capability.max_images)
+        self._edit_count.setRange(edit.min_images, edit.max_images)
         self._edit_size_combo.clear()
-        if capability.size.auto_allowed:
+        if edit.size.auto_allowed:
             self._edit_size_combo.addItem("模型自动决定", (SizeMode.AUTO, None))
-        for width, height in capability.size.presets:
+        for width, height in edit.size.presets:
             self._edit_size_combo.addItem(f"{width}×{height}", (SizeMode.PRESET, (width, height)))
-        self._edit_size_combo.addItem("自定义…", (SizeMode.CUSTOM, None))
+        if edit.size.custom_size_allowed:
+            self._edit_size_combo.addItem("自定义…", (SizeMode.CUSTOM, None))
         self._edit_size_combo.setCurrentIndex(0)
         self._on_edit_size_changed()
 
@@ -1002,7 +1012,7 @@ class MainWindow(QMainWindow):
     def _add_edit_paths(self, paths: list[str]) -> None:
         existing = [self._edit_references.item(i).data(Qt.ItemDataRole.UserRole) for i in range(self._edit_references.count())]
         for path in paths:
-            if path in existing or self._edit_references.count() >= 3:
+            if path in existing or self._edit_references.count() >= self._edit_max_references:
                 continue
             try:
                 reference = inspect_reference_image(Path(path))
@@ -1098,21 +1108,26 @@ class MainWindow(QMainWindow):
     @Slot(int)
     def _on_model_changed(self, index: int) -> None:
         capability = self._capabilities.capability(self._model_combo.itemData(index))
-        self._negative_prompt.setVisible(
-            capability is not None and capability.supports_negative_prompt
+        text = (
+            capability.for_workflow(Workflow.TEXT_TO_IMAGE)
+            if capability is not None
+            else None
         )
-        min_count = capability.min_images if capability is not None else 1
-        max_count = capability.max_images if capability is not None else 1
+        self._negative_prompt.setVisible(
+            text is not None and text.supports_negative_prompt
+        )
+        min_count = text.min_images if text is not None else 1
+        max_count = text.max_images if text is not None else 1
         # 保留草稿出图数量：超出新模型范围时按边界显示，切回原模型后恢复。
         self._count_box.blockSignals(True)
         self._count_box.setRange(min_count, max_count)
         self._count_box.setValue(min(max(self._draft_count, min_count), max_count))
         self._count_box.blockSignals(False)
-        if capability is None:
+        if text is None:
             self._size_combo.clear()
             self._revalidate()
             return
-        self._refresh_size_controls(capability)
+        self._refresh_size_controls(text)
         self._revalidate()
 
     @Slot(int)
@@ -1132,8 +1147,9 @@ class MainWindow(QMainWindow):
         for width, height in capability.size.presets:
             self._size_combo.addItem(f"{width}×{height}", (SizeMode.PRESET, (width, height)))
             modes.append(SizeMode.PRESET)
-        self._size_combo.addItem(_CUSTOM_SIZE_LABEL, (SizeMode.CUSTOM, None))
-        modes.append(SizeMode.CUSTOM)
+        if capability.size.custom_size_allowed:
+            self._size_combo.addItem(_CUSTOM_SIZE_LABEL, (SizeMode.CUSTOM, None))
+            modes.append(SizeMode.CUSTOM)
         target = current_mode if current_mode in modes else modes[0]
         self._size_combo.setCurrentIndex(modes.index(target))
         self._size_combo.blockSignals(False)

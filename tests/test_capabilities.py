@@ -6,6 +6,7 @@ from ugc_image_tool.capabilities import (
     CAPABILITY_TABLE_VERSION,
     BUILTIN_CAPABILITIES,
     CapabilityRegistry,
+    ReferenceLimits,
     SizeRule,
     Workflow,
 )
@@ -16,7 +17,7 @@ class BuiltinCapabilityTableTests(unittest.TestCase):
         self.assertIsInstance(CAPABILITY_TABLE_VERSION, str)
         self.assertTrue(CAPABILITY_TABLE_VERSION.strip())
 
-    def test_qwen_image_3_0_pro_is_configured_from_verified_contract(self) -> None:
+    def test_qwen_image_3_0_pro_registers_both_workflows(self) -> None:
         capability = BUILTIN_CAPABILITIES["qwen-image-3.0-pro"]
 
         self.assertEqual("Qwen Image 3.0", capability.display_name)
@@ -24,14 +25,29 @@ class BuiltinCapabilityTableTests(unittest.TestCase):
             frozenset({Workflow.TEXT_TO_IMAGE, Workflow.IMAGE_EDIT}),
             capability.workflows,
         )
-        self.assertTrue(capability.supports_negative_prompt)
-        self.assertEqual((1, 2), (capability.min_images, capability.max_images))
-        self.assertIn("watermark", capability.extra_params)
 
-    def test_qwen_image_3_0_size_rule_matches_verified_constraints(self) -> None:
-        size = BUILTIN_CAPABILITIES["qwen-image-3.0-pro"].size
+    def test_qwen_text_to_image_capability_matches_verified_contract(self) -> None:
+        text = BUILTIN_CAPABILITIES["qwen-image-3.0-pro"].for_workflow(
+            Workflow.TEXT_TO_IMAGE
+        )
 
-        self.assertTrue(size.auto_allowed)
+        self.assertIsNotNone(text)
+        assert text is not None
+        self.assertEqual(Workflow.TEXT_TO_IMAGE, text.workflow)
+        self.assertTrue(text.supports_negative_prompt)
+        self.assertEqual((1, 2), (text.min_images, text.max_images))
+        self.assertIn("watermark", text.extra_params)
+        self.assertTrue(text.size.auto_allowed)
+        self.assertTrue(text.size.custom_size_allowed)
+        self.assertEqual(ReferenceLimits(0, 0), text.reference_limits)
+
+    def test_qwen_text_to_image_size_rule_matches_verified_constraints(self) -> None:
+        size = (
+            BUILTIN_CAPABILITIES["qwen-image-3.0-pro"]
+            .for_workflow(Workflow.TEXT_TO_IMAGE)
+            .size  # type: ignore[union-attr]
+        )
+
         self.assertEqual(
             ((1024, 1024), (2048, 2048), (1920, 1080), (1080, 1920)),
             size.presets,
@@ -41,15 +57,43 @@ class BuiltinCapabilityTableTests(unittest.TestCase):
         self.assertEqual(1 / 8, size.min_aspect_ratio)
         self.assertEqual(8.0, size.max_aspect_ratio)
 
-    def test_size_rule_is_immutable(self) -> None:
-        size = BUILTIN_CAPABILITIES["qwen-image-3.0-pro"].size
+    def test_qwen_image_edit_capability_matches_verified_contract(self) -> None:
+        edit = BUILTIN_CAPABILITIES["qwen-image-3.0-pro"].for_workflow(
+            Workflow.IMAGE_EDIT
+        )
+
+        self.assertIsNotNone(edit)
+        assert edit is not None
+        self.assertEqual(Workflow.IMAGE_EDIT, edit.workflow)
+        # 已实测契约：无负向提示词、单张出图、仅模型自动决定尺寸、1 张参考图。
+        self.assertFalse(edit.supports_negative_prompt)
+        self.assertEqual((1, 1), (edit.min_images, edit.max_images))
+        self.assertEqual((), edit.extra_params)
+        self.assertTrue(edit.size.auto_allowed)
+        self.assertEqual((), edit.size.presets)
+        self.assertFalse(edit.size.custom_size_allowed)
+        self.assertEqual(ReferenceLimits(1, 1), edit.reference_limits)
+
+    def test_workflow_capabilities_are_immutable(self) -> None:
+        text = BUILTIN_CAPABILITIES["qwen-image-3.0-pro"].for_workflow(
+            Workflow.TEXT_TO_IMAGE
+        )
+        assert text is not None
 
         with self.assertRaises(AttributeError):
-            size.presets = ((512, 512),)  # type: ignore[misc]
+            text.min_images = 5  # type: ignore[misc]
+        with self.assertRaises(AttributeError):
+            text.size.presets = ((512, 512),)  # type: ignore[misc]
 
     def test_unknown_model_has_no_builtin_capability(self) -> None:
         self.assertNotIn("wan2.7-image", BUILTIN_CAPABILITIES)
         self.assertNotIn("z-image-turbo", BUILTIN_CAPABILITIES)
+
+
+class SizeRuleCustomFlagTests(unittest.TestCase):
+    def test_custom_size_allowed_defaults_to_true(self) -> None:
+        rule = SizeRule(auto_allowed=True, presets=((1024, 1024),))
+        self.assertTrue(rule.custom_size_allowed)
 
 
 class CapabilityRegistryMergeTests(unittest.TestCase):
@@ -87,6 +131,24 @@ class CapabilityRegistryMergeTests(unittest.TestCase):
 
         self.assertEqual(["qwen-image-3.0-pro"], [m.model_id for m in text_to_image])
         self.assertEqual(["qwen-image-3.0-pro"], [m.model_id for m in image_edit])
+
+    def test_workflow_capability_lookup_resolves_per_workflow(self) -> None:
+        registry = CapabilityRegistry()
+
+        text = registry.workflow_capability(
+            "qwen-image-3.0-pro", Workflow.TEXT_TO_IMAGE
+        )
+        edit = registry.workflow_capability(
+            "qwen-image-3.0-pro", Workflow.IMAGE_EDIT
+        )
+
+        self.assertIsNotNone(text)
+        self.assertIsNotNone(edit)
+        assert text is not None and edit is not None
+        self.assertEqual(2, text.max_images)
+        self.assertEqual(1, edit.max_images)
+        self.assertNotEqual(text, edit)
+        self.assertIsNone(registry.workflow_capability("wan2.7-image", Workflow.TEXT_TO_IMAGE))
 
     def test_capability_version_is_stable(self) -> None:
         self.assertEqual(CAPABILITY_TABLE_VERSION, CapabilityRegistry().version)
