@@ -5,6 +5,9 @@ config.json
 output/
 .scratch/
 
+# Release build artifacts (portable dir, zip, checksums, build info)
+/release/
+
 # Python caches, environments, and build artifacts
 __pycache__/
 *.py[cod]
@@ -13,6 +16,7 @@ venv/
 build/
 dist/
 *.spec
+!packaging/ugc-image-tool.spec
 
 # OS and editor files
 .DS_Store
