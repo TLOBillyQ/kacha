@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import shutil
+from datetime import datetime
 from pathlib import Path
 from threading import Thread
 from typing import cast
@@ -30,6 +31,7 @@ from PySide6.QtWidgets import (
 
 from .application import GenerationApplication
 from .capabilities import CapabilityRegistry, Workflow
+from .diagnostics import DiagnosticExporter, DiagnosticLogger
 from .discovery import (
     ConnectionCheck,
     ConnectionStage,
@@ -87,6 +89,15 @@ _STAGE_LABELS = {
     ConnectionStage.MODEL_LIST: "模型列表",
     ConnectionStage.CAPABILITY: "能力匹配",
 }
+
+
+def _format_bytes(size: int) -> str:
+    """把字节数格式化为可读文本；日志容量通常不超过 1 MB。"""
+    if size >= 1024 * 1024:
+        return f"{size / (1024 * 1024):.1f} MB"
+    if size >= 1024:
+        return f"{size / 1024:.1f} KB"
+    return f"{size} B"
 
 
 class _TaskEvents(QObject):
@@ -150,7 +161,12 @@ class MainWindow(QMainWindow):
         self._settings = settings
         if output_root is not None:
             self._settings.set_output_root(output_root)
-        self._results = FileResultRepository(self._settings.output_root)
+        self._diagnostics = DiagnosticLogger(user_data_dir)
+        self._diagnostics.system("应用启动")
+        self._results = FileResultRepository(
+            self._settings.output_root,
+            diagnostics=self._diagnostics,
+        )
         self._updating_prompt_controls = False
         self._gateway = SimulatedGateway()
         self._discovery_events = _DiscoveryEvents()
@@ -159,6 +175,7 @@ class MainWindow(QMainWindow):
         self._discovery = ModelDiscovery(
             self._gateway,
             cache=ModelCache(user_data_dir),
+            diagnostics=self._diagnostics,
         )
         self._application = GenerationApplication(
             gateway=self._gateway,
@@ -167,7 +184,9 @@ class MainWindow(QMainWindow):
             on_task_changed=self._events.changed.emit,
             max_concurrency=self._settings.concurrency_limit,
             submission_guard=self._submission_guard,
+            diagnostics=self._diagnostics,
         )
+        self._diagnostic_exporter = DiagnosticExporter(user_data_dir)
         self._tasks: dict[str, GenerationTask] = {}
         self._removed_task_ids: set[str] = set()
         self._selected_task_id: str | None = None
@@ -507,6 +526,13 @@ class MainWindow(QMainWindow):
         self._connection_results = QLabel()
         self._connection_results.setWordWrap(True)
 
+        self._diagnostics_status = QLabel()
+        self._diagnostics_status.setWordWrap(True)
+        self._preview_diagnostics = QPushButton("查看诊断包内容")
+        self._preview_diagnostics.clicked.connect(self._show_diagnostics_preview)
+        self._export_diagnostics = QPushButton("导出诊断包")
+        self._export_diagnostics.clicked.connect(self._export_diagnostics_package)
+
         layout = QVBoxLayout()
         layout.addWidget(QLabel("输出根目录"))
         layout.addLayout(output_row)
@@ -521,11 +547,19 @@ class MainWindow(QMainWindow):
         layout.addWidget(QLabel("网关连接测试"))
         layout.addWidget(self._connection_test)
         layout.addWidget(self._connection_results)
+        layout.addWidget(QLabel("本地诊断（脱敏日志与诊断包）"))
+        layout.addWidget(self._diagnostics_status)
+        diagnostics_row = QHBoxLayout()
+        diagnostics_row.addWidget(self._preview_diagnostics)
+        diagnostics_row.addWidget(self._export_diagnostics)
+        diagnostics_row.addStretch(1)
+        layout.addLayout(diagnostics_row)
         layout.addStretch(1)
         self._settings_container = QWidget()
         self._settings_container.setLayout(layout)
         self._update_api_key_status()
         self._update_base_url_warning()
+        self._update_diagnostics_status()
 
     @Slot()
     def _apply_output_root(self) -> None:
@@ -694,7 +728,11 @@ class MainWindow(QMainWindow):
         Thread(target=self._run_connection_check, name="connection-check", daemon=True).start()
 
     def _run_connection_check(self) -> None:
-        checks = run_connection_check(self._gateway, self._capabilities)
+        checks = run_connection_check(
+            self._gateway,
+            self._capabilities,
+            self._diagnostics,
+        )
         self._discovery_events.checked.emit(checks)
 
     @Slot(object)
@@ -710,6 +748,62 @@ class MainWindow(QMainWindow):
                 mark = "跳过"
             lines.append(f"{_STAGE_LABELS[check.stage]}：{mark} — {check.message}")
         self._connection_results.setText("\n".join(lines))
+
+    def _update_diagnostics_status(self) -> None:
+        total = self._diagnostics.total_bytes
+        segments = len(self._diagnostics.segments())
+        self._diagnostics_status.setText(
+            f"日志位置：{self._diagnostics.directory}\n"
+            f"当前占用 {_format_bytes(total)}，"
+            f"总容量上限 {_format_bytes(self._diagnostics.max_total_bytes)}（"
+            f"{segments} 个日志文件，超出后自动删除最旧日志）。\n"
+            "日志只记录定位所需的时间、版本、任务编号、模型、状态码、网关请求"
+            "编号、状态迁移与脱敏错误类别，不包含密钥、认证头、图片内容、完整"
+            "提示词或临时下载地址。"
+        )
+
+    @Slot()
+    def _show_diagnostics_preview(self) -> None:
+        entries = self._diagnostic_exporter.preview()
+        if not entries:
+            QMessageBox.information(self, "诊断包内容", "当前没有任何日志文件")
+            return
+        lines = [
+            "导出诊断包时将只包含以下文件；不会收集任务记录、设置、凭据、图片"
+            "或提示词等额外用户数据：",
+            "",
+        ]
+        for entry in entries:
+            lines.append(
+                f"• {entry.name}（{_format_bytes(entry.size)}）—— {entry.description}"
+            )
+        QMessageBox.information(self, "诊断包内容（导出前清单）", "\n".join(lines))
+
+    @Slot()
+    def _export_diagnostics_package(self) -> None:
+        default_name = (
+            f"ugc-image-tool-diagnostics-"
+            f"{datetime.now().strftime('%Y%m%d-%H%M%S')}.zip"
+        )
+        target_name, _ = QFileDialog.getSaveFileName(
+            self,
+            "导出诊断包",
+            default_name,
+            "ZIP 压缩包 (*.zip);;所有文件 (*)",
+        )
+        if not target_name:
+            return
+        target = Path(target_name)
+        try:
+            entries = self._diagnostic_exporter.export(target)
+        except OSError as error:
+            QMessageBox.warning(self, "导出诊断包失败", f"无法导出诊断包：{error}")
+            return
+        self._diagnostics.system("诊断包已导出")
+        self._update_diagnostics_status()
+        self.statusBar().showMessage(
+            f"诊断包已导出：{target}（含 {len(entries)} 个文件）"
+        )
 
     def _build_task_center(self) -> None:
         self._task_list = QListWidget()
@@ -1283,6 +1377,7 @@ class MainWindow(QMainWindow):
             if answer is not QMessageBox.StandardButton.Yes:
                 event.ignore()
                 return
+        self._diagnostics.system("应用关闭")
         self._application.close()
         event.accept()
 

@@ -22,6 +22,7 @@ from uuid import uuid4
 import httpx
 
 from .capabilities import CapabilityRegistry
+from .diagnostics import DiagnosticSink
 from .settings import default_user_data_dir
 
 
@@ -54,9 +55,11 @@ class GatewayError(Exception):
         message: str,
         *,
         gateway_request_id: str | None = None,
+        status_code: int | None = None,
     ) -> None:
         self.category = category
         self.gateway_request_id = gateway_request_id
+        self.status_code = status_code
         super().__init__(message)
 
 
@@ -80,6 +83,15 @@ def classify_exception(error: Exception) -> GatewayErrorCategory:
     if isinstance(error, ValueError):
         return GatewayErrorCategory.CONFIG
     return GatewayErrorCategory.UNKNOWN
+
+
+def error_status_code(error: Exception) -> int | None:
+    """提取网关错误的 HTTP 状态码；没有状态码时返回 None。"""
+    if isinstance(error, GatewayError):
+        return error.status_code
+    if isinstance(error, httpx.HTTPStatusError):
+        return error.response.status_code
+    return None
 
 
 class ModelProvider(Protocol):
@@ -179,6 +191,7 @@ class ModelDiscovery:
         cache: ModelCache | None = None,
         max_retries: int = DEFAULT_READONLY_RETRIES,
         retry_delay: float = RETRY_DELAY_SECONDS,
+        diagnostics: DiagnosticSink | None = None,
     ) -> None:
         if max_retries < 1:
             raise ValueError("只读请求重试次数必须大于 0")
@@ -186,6 +199,7 @@ class ModelDiscovery:
         self._cache = cache if cache is not None else ModelCache(default_user_data_dir())
         self._max_retries = max_retries
         self._retry_delay = retry_delay
+        self._diagnostics = diagnostics
         self._state = DiscoveryState()
 
     @property
@@ -218,6 +232,10 @@ class ModelDiscovery:
                 pending=False,
                 fetched_at=fetched_at,
             )
+            self._log_connection(
+                ok=True,
+                message=f"获取到 {len(model_ids)} 个可用模型",
+            )
             return self._state
 
         cached = self._cache.load()
@@ -236,7 +254,31 @@ class ModelDiscovery:
                 pending=False,
                 error=_error_message(last_error),
             )
+        self._log_connection(
+            ok=False,
+            category=classify_exception(last_error).value if last_error is not None else None,
+            status_code=error_status_code(last_error) if last_error is not None else None,
+            message=_error_message(last_error),
+        )
         return self._state
+
+    def _log_connection(
+        self,
+        *,
+        ok: bool,
+        category: str | None = None,
+        status_code: int | None = None,
+        message: str | None = None,
+    ) -> None:
+        if self._diagnostics is None:
+            return
+        self._diagnostics.connection(
+            stage=ConnectionStage.MODEL_LIST.value,
+            ok=ok,
+            category=category,
+            status_code=status_code,
+            message=message,
+        )
 
     def submission_block_reason(self) -> str | None:
         """返回阻止提交的可操作原因；网关在线时返回 None。"""
@@ -276,40 +318,64 @@ class ConnectionCheck:
 def run_connection_check(
     provider: ModelProvider,
     registry: CapabilityRegistry,
+    diagnostics: DiagnosticSink | None = None,
 ) -> tuple[ConnectionCheck, ...]:
     """分阶段检查网关连接，逐项报告 DNS/连接、鉴权、模型列表与能力匹配。"""
     checks: list[ConnectionCheck] = []
+    last_error: Exception | None = None
 
     def add(stage: ConnectionStage, ok: bool | None, message: str) -> None:
         checks.append(ConnectionCheck(stage, ok, message))
 
+    def log(stage: ConnectionStage, ok: bool | None, message: str) -> None:
+        if diagnostics is None:
+            return
+        category: str | None = None
+        status_code: int | None = None
+        if ok is False and last_error is not None:
+            category = classify_exception(last_error).value
+            status_code = error_status_code(last_error)
+        diagnostics.connection(
+            stage=stage.value,
+            ok=ok,
+            category=category,
+            status_code=status_code,
+            message=message,
+        )
+
+    def finish() -> tuple[ConnectionCheck, ...]:
+        for check in checks:
+            log(check.stage, check.ok, check.message)
+        return tuple(checks)
+
     try:
         models = provider.list_models()
     except Exception as error:
+        last_error = error
         category = classify_exception(error)
         if category is GatewayErrorCategory.NETWORK:
             add(ConnectionStage.DNS_OR_CONNECT, False, f"无法连接网关：{error}")
             add(ConnectionStage.AUTH, None, "未到达鉴权阶段")
             add(ConnectionStage.MODEL_LIST, None, "未到达模型列表阶段")
             add(ConnectionStage.CAPABILITY, None, "未到达能力匹配阶段")
-            return tuple(checks)
+            return finish()
         if category is GatewayErrorCategory.CONFIG:
             add(ConnectionStage.DNS_OR_CONNECT, False, f"网关配置错误：{error}")
             add(ConnectionStage.AUTH, None, "未到达鉴权阶段")
             add(ConnectionStage.MODEL_LIST, None, "未到达模型列表阶段")
             add(ConnectionStage.CAPABILITY, None, "未到达能力匹配阶段")
-            return tuple(checks)
+            return finish()
         if category is GatewayErrorCategory.AUTH:
             add(ConnectionStage.DNS_OR_CONNECT, True, "网关连接正常")
             add(ConnectionStage.AUTH, False, f"鉴权失败：{error}")
             add(ConnectionStage.MODEL_LIST, None, "鉴权未通过，跳过")
             add(ConnectionStage.CAPABILITY, None, "鉴权未通过，跳过")
-            return tuple(checks)
+            return finish()
         add(ConnectionStage.DNS_OR_CONNECT, True, "网关连接正常")
         add(ConnectionStage.AUTH, True, "鉴权通过")
         add(ConnectionStage.MODEL_LIST, False, f"获取模型列表失败：{error}")
         add(ConnectionStage.CAPABILITY, None, "模型列表未获取，跳过")
-        return tuple(checks)
+        return finish()
 
     model_ids = tuple(models)
     add(ConnectionStage.DNS_OR_CONNECT, True, "网关连接正常")
@@ -317,7 +383,7 @@ def run_connection_check(
     if not model_ids:
         add(ConnectionStage.MODEL_LIST, False, "网关返回的模型列表为空")
         add(ConnectionStage.CAPABILITY, None, "模型列表为空，跳过")
-        return tuple(checks)
+        return finish()
     add(ConnectionStage.MODEL_LIST, True, f"获取到 {len(model_ids)} 个模型")
     configured = [
         entry for entry in registry.merge(model_ids) if entry.capability is not None
@@ -326,7 +392,7 @@ def run_connection_check(
         add(ConnectionStage.CAPABILITY, False, "网关模型均未配置能力，无法提交")
     else:
         add(ConnectionStage.CAPABILITY, True, f"{len(configured)} 个模型已配置，可提交")
-    return tuple(checks)
+    return finish()
 
 
 def _is_transient(error: Exception) -> bool:

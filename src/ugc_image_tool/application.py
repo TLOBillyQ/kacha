@@ -11,6 +11,7 @@ from uuid import uuid4
 
 from .capabilities import CapabilityRegistry
 from .capabilities import Workflow
+from .diagnostics import DiagnosticSink
 from .discovery import GatewayError, GatewayErrorCategory
 from .generation import (
     GeneratedImage,
@@ -89,6 +90,7 @@ class GenerationApplication:
         max_concurrency: int = DEFAULT_CONCURRENCY_LIMIT,
         timeout_seconds: float = GENERATION_TIMEOUT_SECONDS,
         submission_guard: Callable[[], str | None] | None = None,
+        diagnostics: DiagnosticSink | None = None,
     ) -> None:
         self._gateway = gateway
         self._results = results
@@ -96,6 +98,7 @@ class GenerationApplication:
         self._on_task_changed = on_task_changed
         self._max_concurrency = validate_concurrency_limit(max_concurrency)
         self._submission_guard = submission_guard
+        self._diagnostics = diagnostics
         if timeout_seconds <= 0:
             raise ValueError("生成等待超时必须大于 0 秒")
         self._timeout_seconds = timeout_seconds
@@ -156,6 +159,7 @@ class GenerationApplication:
             self._queue.append(task.task_id)
             self._notify(task)
             self._schedule_locked()
+        self._log_transition(task, from_status=None)
         return task.task_id
 
     def submit_edit(self, draft: ImageEditDraft) -> str:
@@ -209,6 +213,7 @@ class GenerationApplication:
             self._queue.append(task.task_id)
             self._notify(task)
             self._schedule_locked()
+        self._log_transition(task, from_status=None)
         return task.task_id
 
     def task(self, task_id: str) -> GenerationTask:
@@ -235,6 +240,12 @@ class GenerationApplication:
             self._notify(cancelled)
             self._complete_locked(cancelled)
             self._schedule_locked()
+        self._log_transition(
+            cancelled,
+            from_status=task.status.value,
+            category="cancel",
+            message=error,
+        )
         self._try_save_record(cancelled)
         return True
 
@@ -271,6 +282,12 @@ class GenerationApplication:
                 if task.status not in {GenerationStatus.QUEUED, GenerationStatus.RUNNING}:
                     continue
                 cancelled = self._cancel_locked(task, CANCELLED_ERROR)
+                self._log_transition(
+                    cancelled,
+                    from_status=task.status.value,
+                    category="cancel",
+                    message=CANCELLED_ERROR,
+                )
                 self._complete_locked(cancelled)
         self._executor.shutdown(wait=False, cancel_futures=True)
         close_results = getattr(self._results, "close", None)
@@ -291,6 +308,7 @@ class GenerationApplication:
                     task_id,
                     GenerationStatus.UNKNOWN,
                     TIMEOUT_ERROR,
+                    error_category="timeout",
                 )
                 return
             except (GatewayResultUnknownError, OSError) as error:
@@ -300,6 +318,7 @@ class GenerationApplication:
                     task_id,
                     GenerationStatus.UNKNOWN,
                     f"{CONNECTION_ERROR}：{error}",
+                    error_category="network",
                 )
                 return
             except GatewayError as error:
@@ -310,12 +329,19 @@ class GenerationApplication:
                     _gateway_error_status(error.category),
                     _gateway_error_message(error.category, error),
                     gateway_request_id=error.gateway_request_id,
+                    error_category=error.category.value,
+                    status_code=error.status_code,
                 )
                 return
             except Exception as error:
                 if not self._is_running(task_id):
                     return
-                self._finish_without_results(task_id, GenerationStatus.FAILED, str(error))
+                self._finish_without_results(
+                    task_id,
+                    GenerationStatus.FAILED,
+                    str(error),
+                    error_category="unknown",
+                )
                 return
             self._save_response(running, response)
         finally:
@@ -329,7 +355,8 @@ class GenerationApplication:
             running = task.with_status(GenerationStatus.RUNNING)
             self._tasks[task_id] = running
             self._notify(running)
-            return running
+        self._log_transition(running, from_status=task.status.value)
+        return running
 
     def _call_gateway(self, task: GenerationTask) -> GatewayResponse:
         result: Future[GatewayResponse] = Future()
@@ -384,6 +411,7 @@ class GenerationApplication:
                 GenerationStatus.FAILED,
                 str(error),
                 gateway_request_id=request_id,
+                error_category="unknown",
             )
             return
 
@@ -393,6 +421,7 @@ class GenerationApplication:
                 GenerationStatus.FAILED,
                 "网关未返回生成结果",
                 gateway_request_id=request_id,
+                error_category="rejected",
             )
             return
 
@@ -413,6 +442,7 @@ class GenerationApplication:
                 GenerationStatus.FAILED,
                 fail_message,
                 gateway_request_id=request_id,
+                error_category="result_save",
             )
             return
 
@@ -427,6 +457,7 @@ class GenerationApplication:
                 tuple(paths),
                 "；".join(errors),
                 gateway_request_id=request_id,
+                error_category="result_save",
             )
             return
         self._finish_with_results(
@@ -443,6 +474,8 @@ class GenerationApplication:
         status: GenerationStatus,
         error: str,
         gateway_request_id: str | None = None,
+        error_category: str | None = None,
+        status_code: int | None = None,
     ) -> None:
         self._finish_with_results(
             task_id,
@@ -450,6 +483,8 @@ class GenerationApplication:
             (),
             error,
             gateway_request_id=gateway_request_id,
+            error_category=error_category,
+            status_code=status_code,
         )
 
     def _finish_with_results(
@@ -459,6 +494,8 @@ class GenerationApplication:
         result_paths: tuple[Path, ...],
         error: str | None,
         gateway_request_id: str | None = None,
+        error_category: str | None = None,
+        status_code: int | None = None,
     ) -> None:
         with self._lock:
             current = self._tasks.get(task_id)
@@ -499,6 +536,13 @@ class GenerationApplication:
             self._tasks[task_id] = candidate
             self._notify(candidate)
             self._complete_locked(candidate)
+        self._log_transition(
+            candidate,
+            from_status=GenerationStatus.RUNNING.value,
+            category=error_category,
+            status_code=status_code,
+            message=error,
+        )
 
     def _try_save_record(self, task: GenerationTask) -> None:
         try:
@@ -550,6 +594,30 @@ class GenerationApplication:
     def _notify(self, task: GenerationTask) -> None:
         if self._on_task_changed is not None:
             self._on_task_changed(task)
+
+    def _log_transition(
+        self,
+        task: GenerationTask,
+        *,
+        from_status: str | None,
+        category: str | None = None,
+        status_code: int | None = None,
+        message: str | None = None,
+    ) -> None:
+        """记录任务状态迁移；日志只读，绝不修改任务状态。"""
+        if self._diagnostics is None:
+            return
+        self._diagnostics.task_transition(
+            task_id=task.task_id,
+            model=task.request.model_id,
+            from_status=from_status,
+            to_status=task.status.value,
+            workflow=task.workflow.value,
+            gateway_request_id=task.gateway_request_id,
+            category=category,
+            status_code=status_code,
+            message=message,
+        )
 
     def _ensure_open(self) -> None:
         if self._closed:

@@ -15,8 +15,11 @@ from uuid import uuid4
 
 import httpx
 
+from .diagnostics import DiagnosticSink
+from .discovery import error_status_code
 from .generation import GeneratedImage, GenerationTask
 from .references import ReferenceImage
+from .sanitize import redact_value, sanitize_text
 
 
 MAX_RESULT_DOWNLOAD_ATTEMPTS = 3
@@ -110,9 +113,11 @@ class FileResultRepository:
         output_root: Path,
         *,
         image_fetcher: ImageFetcher | None = None,
+        diagnostics: DiagnosticSink | None = None,
     ) -> None:
         self._output_root = output_root
         self._image_fetcher = image_fetcher or UrlImageFetcher()
+        self._diagnostics = diagnostics
         self._lock = RLock()
 
     @property
@@ -154,6 +159,13 @@ class FileResultRepository:
                     temporary.replace(reserved_result)
                     result = reserved_result
                     reserved_result = None
+                    self._log_download(
+                        task,
+                        ok=True,
+                        attempts=attempts,
+                        category=None,
+                        message=None,
+                    )
                     return result
                 except Exception as error:
                     last_error = error
@@ -163,6 +175,14 @@ class FileResultRepository:
                         reserved_result.unlink(missing_ok=True)
 
         assert last_error is not None
+        self._log_download(
+            task,
+            ok=False,
+            attempts=attempts,
+            category="result_save",
+            status_code=error_status_code(last_error),
+            message=str(last_error),
+        )
         raise ResultSaveError(
             f"结果下载或保存失败（已尝试 {attempts} 次，格式 {last_media_type or '未知'}）：{last_error}"
         ) from last_error
@@ -188,7 +208,7 @@ class FileResultRepository:
                 "height": size.height,
             },
             "image_count": request.image_count,
-            "params": _redact_record_value(dict(request.params)),
+            "params": redact_value(dict(request.params)),
             "result_files": [path.name for path in task.result_paths],
             "error": _redact_error(task.error),
             "reference_files": [
@@ -253,6 +273,28 @@ class FileResultRepository:
         close = getattr(self._image_fetcher, "close", None)
         if callable(close):
             close()
+
+    def _log_download(
+        self,
+        task: GenerationTask,
+        *,
+        ok: bool,
+        attempts: int,
+        category: str | None,
+        status_code: int | None = None,
+        message: str | None = None,
+    ) -> None:
+        if self._diagnostics is None:
+            return
+        self._diagnostics.download(
+            task_id=task.task_id,
+            model=task.request.model_id,
+            ok=ok,
+            attempts=attempts,
+            category=category,
+            status_code=status_code,
+            message=message,
+        )
 
     def _image_payload(self, image: GeneratedImage) -> tuple[bytes, str | None]:
         if image.content is not None:
@@ -464,56 +506,6 @@ def _suffix_for_media_type(media_type: str) -> str:
     raise ValueError(f"不支持的图片格式：{media_type}")
 
 
-def _redact_record_value(value: object, key: str = "") -> object:
-    normalized_key = key.lower().replace("-", "_").replace(" ", "_")
-    if _is_sensitive_key(normalized_key):
-        return "[REDACTED]"
-    if isinstance(value, dict):
-        return {
-            str(child_key): _redact_record_value(child, str(child_key))
-            for child_key, child in value.items()
-        }
-    if isinstance(value, (list, tuple)):
-        return [_redact_record_value(child, key) for child in value]
-    if isinstance(value, str):
-        return _redact_error(value)
-    return _json_safe(value)
-
-
-def _json_safe(value: object) -> object:
-    try:
-        json.dumps(value)
-    except (TypeError, ValueError):
-        return _redact_error(str(value))
-    return value
-
-
-def _is_sensitive_key(normalized_key: str) -> bool:
-    compact_key = normalized_key.replace("_", "")
-    return compact_key in {"token", "secret", "password"} or any(
-        fragment in compact_key
-        for fragment in (
-            "authorization",
-            "proxyauthorization",
-            "apikey",
-            "accesstoken",
-            "authtoken",
-            "cookie",
-        )
-    )
-
-
-_AUTH_RE = re.compile(
-    r"(?i)[\"']?(authorization|proxy-authorization|x-api-key|api[_ -]?key|x-access-token|access-token|auth-token|token|cookie|set-cookie)[\"']?"
-    r"(?:\s+header)?\s*[:=]\s*[\"']?(?:(?:[A-Za-z][A-Za-z0-9_-]*)\s+)?[^\s,;}\"']+[\"']?"
-)
-_BEARER_RE = re.compile(r"(?i)\bbearer\s+[^\s,;]+")
-_URL_RE = re.compile(r"https?://[^\s\"']+")
-
-
 def _redact_error(error: str | None) -> str | None:
-    if error is None:
-        return None
-    redacted = _AUTH_RE.sub("[REDACTED]", error)
-    redacted = _BEARER_RE.sub("Bearer [REDACTED]", redacted)
-    return _URL_RE.sub("[REDACTED_URL]", redacted)
+    """任务记录错误字段的脱敏入口；清洁逻辑集中在 sanitize 模块。"""
+    return None if error is None else sanitize_text(error)
