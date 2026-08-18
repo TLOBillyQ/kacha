@@ -7,7 +7,13 @@ from tempfile import TemporaryDirectory
 
 from ugc_image_tool.application import GenerationApplication
 from ugc_image_tool.capabilities import Workflow
-from ugc_image_tool.generation import GeneratedImage, GenerationStatus, ImageEditDraft
+from ugc_image_tool.generation import (
+    GatewayGenerationResult,
+    GeneratedImage,
+    GenerationStatus,
+    ImageEditDraft,
+    ImageEditRequest,
+)
 from ugc_image_tool.references import inspect_reference_image
 from ugc_image_tool.results import FileResultRepository
 
@@ -19,14 +25,16 @@ PNG_1X1 = bytes.fromhex(
 
 class EditGateway:
     def __init__(self) -> None:
-        self.requests = []
+        self.requests: list[ImageEditRequest] = []
 
-    def generate_text(self, request):
+    def generate_text(self, request) -> GatewayGenerationResult:
         raise AssertionError("图片编辑不应调用文生图入口")
 
-    def generate_image_edit(self, request):
+    def generate_image_edit(self, request) -> GatewayGenerationResult:
         self.requests.append(request)
-        return GeneratedImage(PNG_1X1, "image/png")
+        return GatewayGenerationResult(
+            images=(GeneratedImage(PNG_1X1, "image/png"),)
+        )
 
 
 class ImageEditTests(unittest.TestCase):

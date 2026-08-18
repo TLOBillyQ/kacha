@@ -15,6 +15,7 @@ from ugc_image_tool.discovery import (
     GatewayErrorCategory,
     ModelCache,
     ModelDiscovery,
+    category_for_status,
     classify_exception,
     run_connection_check,
 )
@@ -201,6 +202,21 @@ class ClassifyExceptionTests(unittest.TestCase):
         self.assertIs(GatewayErrorCategory.RATE_LIMIT, classify_exception(status_error(429)))
         self.assertIs(GatewayErrorCategory.REJECTED, classify_exception(status_error(400)))
         self.assertIs(GatewayErrorCategory.SERVER, classify_exception(status_error(503)))
+
+    def test_ambiguous_server_statuses_map_to_server_unknown(self) -> None:
+        self.assertIs(
+            GatewayErrorCategory.SERVER_UNKNOWN, category_for_status(500)
+        )
+        self.assertIs(
+            GatewayErrorCategory.SERVER_UNKNOWN, category_for_status(502)
+        )
+        self.assertIs(
+            GatewayErrorCategory.SERVER_UNKNOWN, category_for_status(504)
+        )
+
+    def test_deterministic_server_status_503_keeps_server_category(self) -> None:
+        # 503（无可用渠道）可以确定生成未开始，保持失败的“服务错误”类别。
+        self.assertIs(GatewayErrorCategory.SERVER, category_for_status(503))
 
     def test_transport_and_os_errors_map_to_network(self) -> None:
         self.assertIs(GatewayErrorCategory.NETWORK, classify_exception(httpx.ConnectError("no")))

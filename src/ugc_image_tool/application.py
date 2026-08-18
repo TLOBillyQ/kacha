@@ -40,18 +40,13 @@ CANCELLED_ERROR = "已取消本地等待，网关侧计算可能仍在继续"
 TIMEOUT_ERROR = "等待超过 15 分钟，结果未知"
 CONNECTION_ERROR = "连接中断，结果未知"
 
-GatewayResponse = (
-    GeneratedImage
-    | GatewayGenerationResult
-    | tuple[GeneratedImage, ...]
-    | list[GeneratedImage]
-)
-
 
 class Gateway(Protocol):
-    def generate_text(self, request: TextToImageRequest) -> GatewayResponse: ...
+    """生成网关；每个实现都必须返回统一的 GatewayGenerationResult。"""
 
-    def generate_image_edit(self, request: ImageEditRequest) -> GatewayResponse: ...
+    def generate_text(self, request: TextToImageRequest) -> GatewayGenerationResult: ...
+
+    def generate_image_edit(self, request: ImageEditRequest) -> GatewayGenerationResult: ...
 
 
 class ResultRepository(Protocol):
@@ -324,10 +319,11 @@ class GenerationApplication:
             except GatewayError as error:
                 if not self._is_running(task_id):
                     return
+                status, message = _gateway_error_outcome(error.category, error)
                 self._finish_without_results(
                     task_id,
-                    _gateway_error_status(error.category),
-                    _gateway_error_message(error.category, error),
+                    status,
+                    message,
                     gateway_request_id=error.gateway_request_id,
                     error_category=error.category.value,
                     status_code=error.status_code,
@@ -358,8 +354,8 @@ class GenerationApplication:
         self._log_transition(running, from_status=task.status.value)
         return running
 
-    def _call_gateway(self, task: GenerationTask) -> GatewayResponse:
-        result: Future[GatewayResponse] = Future()
+    def _call_gateway(self, task: GenerationTask) -> GatewayGenerationResult:
+        result: Future[GatewayGenerationResult] = Future()
 
         def invoke() -> None:
             try:
@@ -395,21 +391,18 @@ class GenerationApplication:
                     return result.result()
                 continue
 
-    def _save_response(self, task: GenerationTask, response: GatewayResponse) -> None:
+    def _save_response(
+        self, task: GenerationTask, response: GatewayGenerationResult
+    ) -> None:
         if not self._is_running(task.task_id):
             return
-        try:
-            images, request_id = _response_details(response)
-        except TypeError as error:
-            request_id = (
-                response.request_id
-                if isinstance(response, GatewayGenerationResult)
-                else None
-            )
+        images = response.images
+        request_id = response.request_id
+        if not all(isinstance(image, GeneratedImage) for image in images):
             self._finish_without_results(
                 task.task_id,
                 GenerationStatus.FAILED,
-                str(error),
+                "网关返回了无法识别的生成结果",
                 gateway_request_id=request_id,
                 error_category="unknown",
             )
@@ -631,37 +624,27 @@ class GenerationApplication:
             raise ValueError(message)
 
 
-def _response_details(response: GatewayResponse) -> tuple[tuple[GeneratedImage, ...], str | None]:
-    if isinstance(response, GatewayGenerationResult):
-        if all(isinstance(image, GeneratedImage) for image in response.images):
-            return tuple(response.images), response.request_id
-        raise TypeError("网关返回了无法识别的生成结果")
-    if isinstance(response, GeneratedImage):
-        return (response,), None
-    if isinstance(response, (tuple, list)) and all(
-        isinstance(image, GeneratedImage) for image in response
-    ):
-        return tuple(response), None
-    raise TypeError("网关返回了无法识别的生成结果")
-
-
-def _gateway_error_status(category: GatewayErrorCategory) -> GenerationStatus:
-    if category in {GatewayErrorCategory.NETWORK, GatewayErrorCategory.UNKNOWN}:
-        return GenerationStatus.UNKNOWN
-    return GenerationStatus.FAILED
-
-
-def _gateway_error_message(
+def _gateway_error_outcome(
     category: GatewayErrorCategory, error: GatewayError
-) -> str:
+) -> tuple[GenerationStatus, str]:
+    """错误类别到任务状态和用户消息的唯一映射。
+
+    生成接口只通过本函数决定网关错误如何呈现，避免状态与文案在不同
+    模块各自维护。可以确定生成未开始的类别保持失败；结果未知的类别
+    一律进入 unknown 且绝不自动重试。
+    """
     if category is GatewayErrorCategory.AUTH:
-        return f"鉴权失败：{error}"
+        return GenerationStatus.FAILED, f"鉴权失败：{error}"
     if category is GatewayErrorCategory.CONFIG:
-        return f"配置错误：{error}"
+        return GenerationStatus.FAILED, f"配置错误：{error}"
     if category is GatewayErrorCategory.RATE_LIMIT:
-        return f"网关限流，请稍后重试：{error}"
-    if category in {GatewayErrorCategory.NETWORK, GatewayErrorCategory.UNKNOWN}:
-        return f"{CONNECTION_ERROR}：{error}"
+        return GenerationStatus.FAILED, f"网关限流，请稍后重试：{error}"
+    if category is GatewayErrorCategory.NETWORK:
+        return GenerationStatus.UNKNOWN, f"{CONNECTION_ERROR}：{error}"
     if category is GatewayErrorCategory.SERVER:
-        return f"网关服务错误：{error}"
-    return f"网关拒绝：{error}"
+        return GenerationStatus.FAILED, f"网关服务错误：{error}"
+    if category is GatewayErrorCategory.SERVER_UNKNOWN:
+        return GenerationStatus.UNKNOWN, f"网关服务错误，结果未知：{error}"
+    if category is GatewayErrorCategory.UNKNOWN:
+        return GenerationStatus.UNKNOWN, f"{CONNECTION_ERROR}：{error}"
+    return GenerationStatus.FAILED, f"网关拒绝：{error}"

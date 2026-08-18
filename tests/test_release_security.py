@@ -15,7 +15,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 PACKAGING_DIR = REPO_ROOT / "packaging"
 sys.path.insert(0, str(PACKAGING_DIR))
 
-from security_scan import (  # noqa: E402
+from security_scan import (  # type: ignore[import-not-found]  # noqa: E402
     sha256_of,
     scan_bytes,
     scan_directory,

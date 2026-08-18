@@ -7,7 +7,7 @@ import unittest
 from unittest import mock
 
 from ugc_image_tool.application import GenerationApplication
-from ugc_image_tool.generation import GeneratedImage, ImageEditDraft, TextToImageDraft
+from ugc_image_tool.generation import GatewayGenerationResult, GeneratedImage, ImageEditDraft, TextToImageDraft
 from ugc_image_tool.settings import (
     DEFAULT_BASE_URL,
     DEFAULT_CONCURRENCY_LIMIT,
@@ -270,11 +270,15 @@ class SubmissionGuardTests(unittest.TestCase):
 
 
 class _StubGateway:
-    def generate_text(self, request):
-        return GeneratedImage(content=b"png-data", media_type="image/png")
+    def generate_text(self, request) -> GatewayGenerationResult:
+        return GatewayGenerationResult(
+            images=(GeneratedImage(content=b"png-data", media_type="image/png"),)
+        )
 
-    def generate_image_edit(self, request):
-        return GeneratedImage(content=b"png-data", media_type="image/png")
+    def generate_image_edit(self, request) -> GatewayGenerationResult:
+        return GatewayGenerationResult(
+            images=(GeneratedImage(content=b"png-data", media_type="image/png"),)
+        )
 
 
 class _StubResults:

@@ -9,11 +9,13 @@ from time import monotonic
 
 from ugc_image_tool.application import GenerationApplication
 from ugc_image_tool.generation import (
+    GatewayGenerationResult,
     GeneratedImage,
     GenerationStatus,
     GenerationTask,
     TextToImageDraft,
     TextToImageRequest,
+    ImageEditRequest,
 )
 from ugc_image_tool.results import FileResultRepository
 
@@ -56,7 +58,10 @@ class BlockingGateway:
         self.active = 0
         self.max_active = 0
 
-    def generate_text(self, request: TextToImageRequest) -> GeneratedImage:
+    def generate_image_edit(self, request: ImageEditRequest) -> GatewayGenerationResult:
+        raise AssertionError("该测试替身只支持文生图")
+
+    def generate_text(self, request: TextToImageRequest) -> GatewayGenerationResult:
         with self._condition:
             self.calls.append(request.prompt)
             self.active += 1
@@ -68,7 +73,7 @@ class BlockingGateway:
         with self._condition:
             self.active -= 1
             self._condition.notify_all()
-        return self.image
+        return GatewayGenerationResult(images=(self.image,))
 
     def wait_for_calls(self, count: int, timeout: float = 1) -> bool:
         with self._condition:
@@ -90,6 +95,9 @@ class InMemoryResults:
 
     def save_record(self, task: GenerationTask) -> None:
         self.records.append(task)
+
+    def save_reference_snapshot(self, task_id, submitted_at, reference, index):
+        return reference
 
 
 class GenerationQueueTests(unittest.TestCase):
@@ -238,11 +246,16 @@ class GenerationUncertaintyTests(unittest.TestCase):
         calls = []
 
         class HangingGateway:
-            def generate_text(self, request: TextToImageRequest) -> GeneratedImage:
+            def generate_image_edit(self, request: ImageEditRequest) -> GatewayGenerationResult:
+                raise AssertionError("该测试替身只支持文生图")
+
+            def generate_text(self, request: TextToImageRequest) -> GatewayGenerationResult:
                 calls.append(request.prompt)
                 started.set()
                 release.wait(timeout=2)
-                return GeneratedImage(b"late", "image/png")
+                return GatewayGenerationResult(
+                    images=(GeneratedImage(b"late", "image/png"),)
+                )
 
         results = InMemoryResults()
         application = GenerationApplication(
@@ -270,7 +283,10 @@ class GenerationUncertaintyTests(unittest.TestCase):
         calls = []
 
         class DisconnectedGateway:
-            def generate_text(self, request: TextToImageRequest) -> GeneratedImage:
+            def generate_image_edit(self, request: ImageEditRequest) -> GatewayGenerationResult:
+                raise AssertionError("该测试替身只支持文生图")
+
+            def generate_text(self, request: TextToImageRequest) -> GatewayGenerationResult:
                 calls.append(request.prompt)
                 raise OSError("socket closed")
 
@@ -293,7 +309,10 @@ class GenerationUncertaintyTests(unittest.TestCase):
         calls = []
 
         class TimedOutGateway:
-            def generate_text(self, request: TextToImageRequest) -> GeneratedImage:
+            def generate_image_edit(self, request: ImageEditRequest) -> GatewayGenerationResult:
+                raise AssertionError("该测试替身只支持文生图")
+
+            def generate_text(self, request: TextToImageRequest) -> GatewayGenerationResult:
                 calls.append(request.prompt)
                 raise TimeoutError("gateway read timed out")
 
@@ -315,8 +334,13 @@ class GenerationUncertaintyTests(unittest.TestCase):
 class GenerationResultStatusTests(unittest.TestCase):
     def test_incomplete_gateway_response_is_partially_succeeded(self) -> None:
         class ShortGateway:
-            def generate_text(self, request: TextToImageRequest) -> list[GeneratedImage]:
-                return [GeneratedImage(b"one", "image/png")]
+            def generate_image_edit(self, request: ImageEditRequest) -> GatewayGenerationResult:
+                raise AssertionError("该测试替身只支持文生图")
+
+            def generate_text(self, request: TextToImageRequest) -> GatewayGenerationResult:
+                return GatewayGenerationResult(
+                    images=(GeneratedImage(b"one", "image/png"),)
+                )
 
         results = InMemoryResults()
         application = GenerationApplication(
@@ -340,8 +364,11 @@ class GenerationResultStatusTests(unittest.TestCase):
 
     def test_empty_gateway_response_is_failed(self) -> None:
         class EmptyGateway:
-            def generate_text(self, request: TextToImageRequest) -> list[GeneratedImage]:
-                return []
+            def generate_image_edit(self, request: ImageEditRequest) -> GatewayGenerationResult:
+                raise AssertionError("该测试替身只支持文生图")
+
+            def generate_text(self, request: TextToImageRequest) -> GatewayGenerationResult:
+                return GatewayGenerationResult(images=())
 
         results = InMemoryResults()
         application = GenerationApplication(
@@ -364,8 +391,11 @@ class GenerationResultStatusTests(unittest.TestCase):
         images = [GeneratedImage(b"one", "image/png"), GeneratedImage(b"two", "image/png")]
 
         class PartialGateway:
-            def generate_text(self, request: TextToImageRequest) -> list[GeneratedImage]:
-                return images
+            def generate_image_edit(self, request: ImageEditRequest) -> GatewayGenerationResult:
+                raise AssertionError("该测试替身只支持文生图")
+
+            def generate_text(self, request: TextToImageRequest) -> GatewayGenerationResult:
+                return GatewayGenerationResult(images=tuple(images))
 
         class FailingAfterOneResults(InMemoryResults):
             def save(self, task: GenerationTask, image: GeneratedImage) -> Path:
@@ -398,8 +428,11 @@ class GenerationResultStatusTests(unittest.TestCase):
         images = [GeneratedImage(b"one", "image/png"), GeneratedImage(b"two", "image/png")]
 
         class PartialGateway:
-            def generate_text(self, request: TextToImageRequest) -> list[GeneratedImage]:
-                return images
+            def generate_image_edit(self, request: ImageEditRequest) -> GatewayGenerationResult:
+                raise AssertionError("该测试替身只支持文生图")
+
+            def generate_text(self, request: TextToImageRequest) -> GatewayGenerationResult:
+                return GatewayGenerationResult(images=tuple(images))
 
         class FailingBeforeFirstResults(InMemoryResults):
             def __init__(self) -> None:
@@ -435,8 +468,13 @@ class GenerationResultStatusTests(unittest.TestCase):
 
     def test_removing_completed_task_keeps_disk_result(self) -> None:
         class ImmediateGateway:
-            def generate_text(self, request: TextToImageRequest) -> GeneratedImage:
-                return GeneratedImage(PNG_1X1, "image/png")
+            def generate_image_edit(self, request: ImageEditRequest) -> GatewayGenerationResult:
+                raise AssertionError("该测试替身只支持文生图")
+
+            def generate_text(self, request: TextToImageRequest) -> GatewayGenerationResult:
+                return GatewayGenerationResult(
+                    images=(GeneratedImage(PNG_1X1, "image/png"),)
+                )
 
         with TemporaryDirectory() as directory:
             application = GenerationApplication(

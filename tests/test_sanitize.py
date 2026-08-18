@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from typing import cast
 
 from ugc_image_tool.sanitize import (
     is_sensitive_key,
@@ -39,8 +40,8 @@ class SanitizeTextTests(unittest.TestCase):
 
         self.assertNotIn(SK_SECRET, redacted)
         self.assertNotIn(COOKIE_SECRET, redacted)
-        self.assertNotIn(BEARER_SECRET, redacted)
-        self.assertIn("[REDACTED]", redacted)
+        self.assertNotIn(BEARER_SECRET, cast(str, redacted))
+        self.assertIn("[REDACTED]", cast(str, redacted))
 
     def test_redacts_http_urls_including_temporary_download_addresses(self) -> None:
         redacted = sanitize_text(f"下载地址 {URL_SECRET} 已失效")
@@ -73,18 +74,19 @@ class RedactValueTests(unittest.TestCase):
             },
         }
 
-        redacted = redact_value(value)
+        redacted = cast(dict[str, object], redact_value(value))
+        nested = cast(dict[str, object], redacted["nested"])
 
         self.assertEqual("[REDACTED]", redacted["authorization"])
-        self.assertEqual("[REDACTED]", redacted["nested"]["api_key"])
-        self.assertEqual("[REDACTED]", redacted["nested"]["X-Access-Token"])
-        self.assertEqual("可见字段", redacted["nested"]["keep"])
+        self.assertEqual("[REDACTED]", nested["api_key"])
+        self.assertEqual("[REDACTED]", nested["X-Access-Token"])
+        self.assertEqual("可见字段", nested["keep"])
 
     def test_strings_within_values_are_sanitized(self) -> None:
         redacted = redact_value(f"错误：Bearer {BEARER_SECRET}")
 
-        self.assertNotIn(BEARER_SECRET, redacted)
-        self.assertIn("[REDACTED]", redacted)
+        self.assertNotIn(BEARER_SECRET, cast(str, redacted))
+        self.assertIn("[REDACTED]", cast(str, redacted))
 
     def test_non_serializable_values_are_sanitized(self) -> None:
         redacted = redact_value(object())

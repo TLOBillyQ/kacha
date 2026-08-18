@@ -30,6 +30,7 @@ from ugc_image_tool.generation import (
     GenerationStatus,
     GenerationTask,
     GeneratedImage,
+    ImageEditRequest,
     TextToImageDraft,
     TextToImageRequest,
 )
@@ -346,6 +347,9 @@ class DiagnosticsWiringTests(unittest.TestCase):
             def list_models(self) -> tuple[str, ...]:
                 return KNOWN_MODELS
 
+            def generate_image_edit(self, request: ImageEditRequest) -> GatewayGenerationResult:
+                raise AssertionError("该测试替身只支持文生图")
+
             def generate_text(self, request: TextToImageRequest) -> GatewayGenerationResult:
                 return GatewayGenerationResult(
                     images=(GeneratedImage(PNG_1X1, "image/png"),),
@@ -390,7 +394,10 @@ class DiagnosticsWiringTests(unittest.TestCase):
             def list_models(self) -> tuple[str, ...]:
                 return KNOWN_MODELS
 
-            def generate_text(self, request: TextToImageRequest) -> None:
+            def generate_image_edit(self, request: ImageEditRequest) -> GatewayGenerationResult:
+                raise AssertionError("该测试替身只支持文生图")
+
+            def generate_text(self, request: TextToImageRequest) -> GatewayGenerationResult:
                 raise GatewayError(
                     GatewayErrorCategory.AUTH,
                     f"密钥无效 {SK_SECRET}",
@@ -404,6 +411,9 @@ class DiagnosticsWiringTests(unittest.TestCase):
 
             def save_record(self, task) -> None:
                 pass
+
+            def save_reference_snapshot(self, task_id, submitted_at, reference, index):
+                return reference
 
         diagnostics = FakeDiagnostics()
         application = GenerationApplication(
@@ -507,6 +517,9 @@ class DiagnosticsWiringTests(unittest.TestCase):
         class IdentifiedGateway:
             def list_models(self) -> tuple[str, ...]:
                 return KNOWN_MODELS
+
+            def generate_image_edit(self, request: ImageEditRequest) -> GatewayGenerationResult:
+                raise AssertionError("该测试替身只支持文生图")
 
             def generate_text(self, request: TextToImageRequest) -> GatewayGenerationResult:
                 return GatewayGenerationResult(
