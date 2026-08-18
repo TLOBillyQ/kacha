@@ -168,13 +168,26 @@ class GenerationApplication:
             raise ValueError("该模型不支持图片编辑")
         if not draft.prompt.strip():
             raise ValueError("请输入正向提示词")
+        if (draft.negative_prompt or "").strip() and not edit_capability.supports_negative_prompt:
+            raise ValueError("该模型的图片编辑不支持负向提示词")
         if not edit_capability.min_images <= draft.image_count <= edit_capability.max_images:
             raise ValueError(
                 f"出图数量需在 {edit_capability.min_images}～{edit_capability.max_images} 之间"
             )
-        # ticket #18 将收紧为能力表声明的参考图范围；在此之前保留 1～3 的硬范围。
-        if not 1 <= len(draft.reference_paths) <= 3:
-            raise ValueError("参考图数量需为 1～3 张")
+        reference_limits = edit_capability.reference_limits
+        if not (
+            reference_limits.min_references
+            <= len(draft.reference_paths)
+            <= reference_limits.max_references
+        ):
+            if reference_limits.min_references == reference_limits.max_references:
+                raise ValueError(
+                    f"参考图数量需为 {reference_limits.min_references} 张"
+                )
+            raise ValueError(
+                f"参考图数量需在 {reference_limits.min_references}～"
+                f"{reference_limits.max_references} 之间"
+            )
         errors = _size_errors(draft, edit_capability)
         if errors:
             raise ValueError("；".join(errors))
@@ -190,9 +203,7 @@ class GenerationApplication:
             model_id=draft.model_id,
             capability_version=self._capabilities.version,
             references=references,
-            negative_prompt=(draft.negative_prompt or "").strip() or None
-            if edit_capability.supports_negative_prompt
-            else None,
+            negative_prompt=(draft.negative_prompt or "").strip() or None,
             size=_snapshot_size(draft),
             image_count=draft.image_count,
         )
