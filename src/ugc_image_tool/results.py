@@ -20,6 +20,7 @@ from .discovery import error_status_code
 from .generation import GeneratedImage, GenerationTask
 from .references import ReferenceImage
 from .sanitize import redact_value, sanitize_text
+from .storage import atomic_replace, atomic_write_bytes, atomic_write_text
 
 
 MAX_RESULT_DOWNLOAD_ATTEMPTS = 3
@@ -149,15 +150,12 @@ class FileResultRepository:
                         declared_media_type = fetch_to(image.url, temporary)
                     else:
                         content, declared_media_type = self._image_payload(image)
-                        with temporary.open("xb") as stream:
-                            stream.write(content)
-                            stream.flush()
-                            os.fsync(stream.fileno())
+                        atomic_write_bytes(temporary, content)
 
                     media_type, suffix = _validate_image(temporary, declared_media_type)
                     last_media_type = media_type
                     reserved_result = self._reserve_result_path(task_directory, suffix)
-                    temporary.replace(reserved_result)
+                    atomic_replace(temporary, reserved_result)
                     result = reserved_result
                     reserved_result = None
                     self._log_download(
@@ -229,15 +227,7 @@ class FileResultRepository:
         }
         content = json.dumps(record, ensure_ascii=False, indent=2) + "\n"
         with self._lock:
-            temporary = task_directory / f".task-{uuid4().hex}.tmp"
-            try:
-                with temporary.open("x", encoding="utf-8", newline="") as stream:
-                    stream.write(content)
-                    stream.flush()
-                    os.fsync(stream.fileno())
-                temporary.replace(task_directory / "task.json")
-            finally:
-                temporary.unlink(missing_ok=True)
+            atomic_write_text(task_directory / "task.json", content)
 
     def save_reference_snapshot(
         self, task_id: str, submitted_at: datetime, reference: ReferenceImage, index: int
@@ -251,15 +241,7 @@ class FileResultRepository:
         suffix = _suffix_for_media_type(reference.media_type)
         path = task_directory / f"reference-{index}{suffix}"
         with self._lock:
-            temporary = task_directory / f".reference-{index}-{uuid4().hex}.tmp"
-            try:
-                with temporary.open("xb") as stream:
-                    stream.write(reference.content)
-                    stream.flush()
-                    os.fsync(stream.fileno())
-                temporary.replace(path)
-            finally:
-                temporary.unlink(missing_ok=True)
+            atomic_write_bytes(path, reference.content)
         return ReferenceImage(
             path=path,
             media_type=reference.media_type,
