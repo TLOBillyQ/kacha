@@ -291,6 +291,29 @@ class SubmissionCapabilityTests(unittest.TestCase):
         self.assertEqual("gateway-request-123", task.gateway_request_id)
         self.assertEqual("gateway-request-123", results.records[0].gateway_request_id)
 
+    def test_invalid_result_with_request_id_keeps_that_id_in_failed_record(self) -> None:
+        class InvalidIdentifiedGateway:
+            def generate_text(self, request: TextToImageRequest) -> GatewayGenerationResult:
+                return GatewayGenerationResult(
+                    images=(object(),),  # type: ignore[arg-type]
+                    request_id="gateway-request-invalid",
+                )
+
+        results = InMemoryResultRepository()
+        application = GenerationApplication(
+            gateway=InvalidIdentifiedGateway(),
+            results=results,
+        )
+        try:
+            task_id = application.submit_text(make_draft("invalid identified"))
+            task = application.wait_for(task_id, timeout=1)
+        finally:
+            application.close()
+
+        self.assertEqual(GenerationStatus.FAILED, task.status)
+        self.assertEqual("gateway-request-invalid", task.gateway_request_id)
+        self.assertEqual("gateway-request-invalid", results.records[0].gateway_request_id)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -5,7 +5,6 @@ import os
 import re
 import struct
 from urllib.parse import urlparse
-import urllib.request
 import zlib
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -13,6 +12,8 @@ from pathlib import Path
 from threading import RLock
 from typing import Protocol
 from uuid import uuid4
+
+import httpx
 
 from .generation import GeneratedImage, GenerationTask
 from .references import ReferenceImage
@@ -49,18 +50,19 @@ class UrlImageFetcher:
         if timeout_seconds <= 0:
             raise ValueError("图片下载超时必须大于 0 秒")
         self._timeout_seconds = timeout_seconds
+        self._client = httpx.Client(
+            timeout=timeout_seconds,
+            follow_redirects=True,
+            headers={"Accept": "image/*"},
+        )
 
     def fetch(self, url: str) -> DownloadedImage:
         if urlparse(url).scheme.lower() not in {"http", "https"}:
             raise ValueError("图片临时地址仅支持 HTTP 或 HTTPS")
-        request = urllib.request.Request(
-            url,
-            headers={"Accept": "image/*"},
-            method="GET",
-        )
-        with urllib.request.urlopen(request, timeout=self._timeout_seconds) as response:
+        with self._client.stream("GET", url) as response:
+            response.raise_for_status()
             chunks: list[bytes] = []
-            while chunk := response.read(_DOWNLOAD_CHUNK_BYTES):
+            for chunk in response.iter_bytes(_DOWNLOAD_CHUNK_BYTES):
                 chunks.append(chunk)
             content = b"".join(chunks)
             content_length = response.headers.get("Content-Length")
@@ -72,6 +74,9 @@ class UrlImageFetcher:
                 if expected_length != len(content):
                     raise OSError("图片下载不完整")
             return DownloadedImage(content, response.headers.get("Content-Type"))
+
+    def close(self) -> None:
+        self._client.close()
 
 
 class ResultSaveError(OSError):
@@ -148,7 +153,7 @@ class FileResultRepository:
                 "height": size.height,
             },
             "image_count": request.image_count,
-            "params": _json_safe(dict(request.params)),
+            "params": _redact_record_value(dict(request.params)),
             "result_files": [path.name for path in task.result_paths],
             "error": _redact_error(task.error),
             "reference_files": [
@@ -208,6 +213,11 @@ class FileResultRepository:
             warnings=reference.warnings,
             content=reference.content,
         )
+
+    def close(self) -> None:
+        close = getattr(self._image_fetcher, "close", None)
+        if callable(close):
+            close()
 
     def _image_payload(self, image: GeneratedImage) -> tuple[bytes, str | None]:
         if image.content is not None:
@@ -419,6 +429,22 @@ def _suffix_for_media_type(media_type: str) -> str:
     raise ValueError(f"不支持的图片格式：{media_type}")
 
 
+def _redact_record_value(value: object, key: str = "") -> object:
+    normalized_key = key.lower().replace("-", "_").replace(" ", "_")
+    if _is_sensitive_key(normalized_key):
+        return "[REDACTED]"
+    if isinstance(value, dict):
+        return {
+            str(child_key): _redact_record_value(child, str(child_key))
+            for child_key, child in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_redact_record_value(child, key) for child in value]
+    if isinstance(value, str):
+        return _redact_error(value)
+    return _json_safe(value)
+
+
 def _json_safe(value: object) -> object:
     try:
         json.dumps(value)
@@ -427,8 +453,23 @@ def _json_safe(value: object) -> object:
     return value
 
 
+def _is_sensitive_key(normalized_key: str) -> bool:
+    return normalized_key in {"token", "secret", "password"} or any(
+        fragment in normalized_key
+        for fragment in (
+            "authorization",
+            "proxy_authorization",
+            "api_key",
+            "apikey",
+            "access_token",
+            "auth_token",
+            "cookie",
+        )
+    )
+
+
 _AUTH_RE = re.compile(
-    r"(?i)[\"']?(authorization|proxy-authorization|x-api-key|api[_ -]?key|token|cookie|set-cookie|x-auth-token)[\"']?"
+    r"(?i)[\"']?(authorization|proxy-authorization|x-api-key|api[_ -]?key|x-access-token|access-token|auth-token|token|cookie|set-cookie)[\"']?"
     r"(?:\s+header)?\s*[:=]\s*[\"']?(?:bearer\s+)?[^\s,;}\"']+[\"']?"
 )
 _BEARER_RE = re.compile(r"(?i)\bbearer\s+[^\s,;]+")

@@ -266,6 +266,9 @@ class GenerationApplication:
                 cancelled = self._cancel_locked(task, CANCELLED_ERROR)
                 self._complete_locked(cancelled)
         self._executor.shutdown(wait=False, cancel_futures=True)
+        close_results = getattr(self._results, "close", None)
+        if callable(close_results):
+            close_results()
 
     def _run(self, task_id: str) -> None:
         try:
@@ -352,7 +355,17 @@ class GenerationApplication:
             try:
                 images, request_id = _response_details(response)
             except TypeError as error:
-                self._finish_without_results(task.task_id, GenerationStatus.FAILED, str(error))
+                request_id = (
+                    response.request_id
+                    if isinstance(response, GatewayGenerationResult)
+                    else None
+                )
+                self._finish_without_results(
+                    task.task_id,
+                    GenerationStatus.FAILED,
+                    str(error),
+                    gateway_request_id=request_id,
+                )
                 return
 
             if not images:

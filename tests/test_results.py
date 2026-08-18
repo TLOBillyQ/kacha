@@ -147,6 +147,13 @@ class FileResultRepositoryTests(unittest.TestCase):
                     prompt="record",
                     model_id="qwen-image-3.0-pro",
                     capability_version=CAPABILITY_TABLE_VERSION,
+                    params=(
+                        ("authorization", "Bearer parameter-secret"),
+                        ("nested", {
+                            "api_key": "nested-secret",
+                            "X-Access-Token": "access-token-secret",
+                        }),
+                    ),
                 ),
                 submitted_at=datetime(2026, 8, 17, 12, 0, tzinfo=UTC),
                 status=GenerationStatus.FAILED,
@@ -167,6 +174,9 @@ class FileResultRepositoryTests(unittest.TestCase):
             self.assertNotIn("another-secret", serialized)
             self.assertNotIn("cookie-secret", serialized)
             self.assertNotIn("header-secret", serialized)
+            self.assertNotIn("parameter-secret", serialized)
+            self.assertNotIn("nested-secret", serialized)
+            self.assertNotIn("access-token-secret", serialized)
             self.assertNotIn("Authorization:", serialized)
 
 
