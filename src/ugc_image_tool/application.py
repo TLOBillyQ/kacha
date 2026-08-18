@@ -13,6 +13,7 @@ from .capabilities import CapabilityRegistry
 from .capabilities import Workflow
 from .generation import (
     GeneratedImage,
+    GatewayGenerationResult,
     GenerationStatus,
     GenerationTask,
     TextToImageDraft,
@@ -35,7 +36,12 @@ CANCELLED_ERROR = "已取消本地等待，网关侧计算可能仍在继续"
 TIMEOUT_ERROR = "等待超过 15 分钟，结果未知"
 CONNECTION_ERROR = "连接中断，结果未知"
 
-GatewayResponse = GeneratedImage | tuple[GeneratedImage, ...] | list[GeneratedImage]
+GatewayResponse = (
+    GeneratedImage
+    | GatewayGenerationResult
+    | tuple[GeneratedImage, ...]
+    | list[GeneratedImage]
+)
 
 
 class Gateway(Protocol):
@@ -344,16 +350,16 @@ class GenerationApplication:
             if not self._is_running(task.task_id):
                 return
             try:
-                images = _response_images(response)
+                images, request_id = _response_details(response)
             except TypeError as error:
                 self._finish_without_results(task.task_id, GenerationStatus.FAILED, str(error))
                 return
 
-            if len(images) != task.request.image_count:
+            if not images:
                 self._finish_without_results(
                     task.task_id,
-                    GenerationStatus.UNKNOWN,
-                    "网关返回结果数量与请求不一致，结果未知",
+                    GenerationStatus.FAILED,
+                    "网关未返回生成结果",
                 )
                 return
 
@@ -367,16 +373,27 @@ class GenerationApplication:
                     break
 
             if not paths:
-                error = str(save_error) if save_error is not None else "网关未返回生成结果"
+                error = str(save_error) if save_error is not None else "生成结果无法保存"
                 self._finish_without_results(task.task_id, GenerationStatus.FAILED, error)
                 return
 
-            if save_error is not None:
+            count_error = None
+            if len(images) != task.request.image_count:
+                count_error = (
+                    f"网关返回 {len(images)} 张结果，请求期望 {task.request.image_count} 张"
+                )
+            if save_error is not None or count_error is not None:
+                errors = [
+                    message
+                    for message in (count_error, str(save_error) if save_error is not None else None)
+                    if message
+                ]
                 self._finish_with_results(
                     task.task_id,
                     GenerationStatus.PARTIALLY_SUCCEEDED,
                     tuple(paths),
-                    str(save_error),
+                    "；".join(errors),
+                    gateway_request_id=request_id,
                 )
                 return
             self._finish_with_results(
@@ -384,6 +401,7 @@ class GenerationApplication:
                 GenerationStatus.SUCCEEDED,
                 tuple(paths),
                 None,
+                gateway_request_id=request_id,
             )
 
     def _finish_without_results(
@@ -400,6 +418,7 @@ class GenerationApplication:
         status: GenerationStatus,
         result_paths: tuple[Path, ...],
         error: str | None,
+        gateway_request_id: str | None = None,
     ) -> None:
         with self._lock:
             current = self._tasks.get(task_id)
@@ -409,6 +428,7 @@ class GenerationApplication:
                 status,
                 result_paths=result_paths,
                 error=error,
+                gateway_request_id=gateway_request_id,
             )
             record_error: Exception | None = None
             try:
@@ -424,6 +444,7 @@ class GenerationApplication:
                     GenerationStatus.FAILED,
                     result_paths=(),
                     error=str(record_error),
+                    gateway_request_id=gateway_request_id,
                 )
                 self._try_save_record(candidate)
 
@@ -500,11 +521,19 @@ def _validate_concurrency_limit(value: int) -> int:
     return value
 
 
-def _response_images(response: GatewayResponse) -> tuple[GeneratedImage, ...]:
+def _response_details(response: GatewayResponse) -> tuple[tuple[GeneratedImage, ...], str | None]:
+    if isinstance(response, GatewayGenerationResult):
+        if all(isinstance(image, GeneratedImage) for image in response.images):
+            return tuple(response.images), response.request_id
+        raise TypeError("网关返回了无法识别的生成结果")
     if isinstance(response, GeneratedImage):
-        return (response,)
+        return (response,), None
     if isinstance(response, (tuple, list)) and all(
         isinstance(image, GeneratedImage) for image in response
     ):
-        return tuple(response)
+        return tuple(response), None
     raise TypeError("网关返回了无法识别的生成结果")
+
+
+def _response_images(response: GatewayResponse) -> tuple[GeneratedImage, ...]:
+    return _response_details(response)[0]

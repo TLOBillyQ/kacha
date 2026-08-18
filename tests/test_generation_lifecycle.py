@@ -14,6 +14,7 @@ from ugc_image_tool.capabilities import (
     CapabilityRegistry,
 )
 from ugc_image_tool.generation import (
+    GatewayGenerationResult,
     GenerationStatus,
     GeneratedImage,
     TextToImageDraft,
@@ -266,6 +267,29 @@ class SubmissionCapabilityTests(unittest.TestCase):
         self.assertEqual("原始提示词", gateway.requests[0].prompt)
         self.assertEqual("旧负向", gateway.requests[0].negative_prompt)
         self.assertEqual("原始提示词", application.task(task_id).prompt)
+
+    def test_gateway_request_id_is_kept_in_task_record(self) -> None:
+        class IdentifiedGateway:
+            def generate_text(self, request: TextToImageRequest) -> GatewayGenerationResult:
+                return GatewayGenerationResult(
+                    images=(GeneratedImage(b"png-data", "image/png"),),
+                    request_id="gateway-request-123",
+                )
+
+        results = InMemoryResultRepository()
+        application = GenerationApplication(
+            gateway=IdentifiedGateway(),
+            results=results,
+        )
+        try:
+            task_id = application.submit_text(make_draft("identified"))
+            task = application.wait_for(task_id, timeout=1)
+        finally:
+            application.close()
+
+        self.assertEqual(GenerationStatus.SUCCEEDED, task.status)
+        self.assertEqual("gateway-request-123", task.gateway_request_id)
+        self.assertEqual("gateway-request-123", results.records[0].gateway_request_id)
 
 
 if __name__ == "__main__":

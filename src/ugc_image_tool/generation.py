@@ -42,8 +42,19 @@ _ALLOWED_STATUS_TRANSITIONS: dict[GenerationStatus, frozenset[GenerationStatus]]
 
 @dataclass(frozen=True)
 class GeneratedImage:
-    content: bytes
-    media_type: str
+    """网关返回的一张结果；可以是已读入的字节或待下载的临时地址。"""
+
+    content: bytes | None = None
+    media_type: str | None = None
+    url: str | None = None
+
+
+@dataclass(frozen=True)
+class GatewayGenerationResult:
+    """生成响应及其可用于追溯的网关请求 ID。"""
+
+    images: tuple[GeneratedImage, ...]
+    request_id: str | None = None
 
 
 class SizeMode(StrEnum):
@@ -196,6 +207,7 @@ class GenerationTask:
     result_paths: tuple[Path, ...] = ()
     error: str | None = None
     workflow: Workflow = Workflow.TEXT_TO_IMAGE
+    gateway_request_id: str | None = None
 
     @property
     def prompt(self) -> str:
@@ -207,6 +219,7 @@ class GenerationTask:
         *,
         result_paths: tuple[Path, ...] = (),
         error: str | None = None,
+        gateway_request_id: str | None = None,
     ) -> GenerationTask:
         if status is self.status:
             return self
@@ -220,4 +233,9 @@ class GenerationTask:
             result_paths=result_paths,
             error=error,
             workflow=self.workflow,
+            gateway_request_id=(
+                gateway_request_id
+                if gateway_request_id is not None
+                else self.gateway_request_id
+            ),
         )

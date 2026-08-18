@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
-from PySide6.QtCore import QObject, Qt, Signal, Slot
-from PySide6.QtGui import QIcon, QPixmap
+from PySide6.QtCore import QObject, QUrl, Qt, Signal, Slot
+from PySide6.QtGui import QDesktopServices, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -168,6 +169,8 @@ class MainWindow(QMainWindow):
     def _build_task_center(self) -> None:
         self._task_list = QListWidget()
         self._task_list.currentRowChanged.connect(self._show_selected_result)
+        self._result_list = QListWidget()
+        self._result_list.currentRowChanged.connect(self._show_selected_image)
         self._preview = QLabel("提交任务后显示生成结果")
         self._preview.setMinimumSize(320, 320)
         self._preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -180,17 +183,28 @@ class MainWindow(QMainWindow):
         self._cancel_task.clicked.connect(self._cancel_selected_task)
         self._remove_task = QPushButton("从任务中心移除")
         self._remove_task.clicked.connect(self._remove_selected_task)
+        self._save_copy = QPushButton("保存副本")
+        self._save_copy.clicked.connect(self._save_selected_copy)
+        self._copy_image = QPushButton("复制图片")
+        self._copy_image.clicked.connect(self._copy_selected_image)
+        self._open_directory = QPushButton("打开所在目录")
+        self._open_directory.clicked.connect(self._open_selected_directory)
         controls = QHBoxLayout()
         controls.addWidget(QLabel("并发上限"))
         controls.addWidget(self._concurrency_box)
         controls.addWidget(self._cancel_task)
         controls.addWidget(self._remove_task)
+        controls.addWidget(self._save_copy)
+        controls.addWidget(self._copy_image)
+        controls.addWidget(self._open_directory)
         controls.addStretch(1)
 
         layout = QVBoxLayout()
         layout.addWidget(QLabel("任务中心"))
         layout.addLayout(controls)
         layout.addWidget(self._task_list)
+        layout.addWidget(QLabel("生成结果（选择一张进行操作）"))
+        layout.addWidget(self._result_list)
         layout.addWidget(self._preview)
         task_container = QWidget()
         task_container.setLayout(layout)
@@ -204,6 +218,7 @@ class MainWindow(QMainWindow):
         container = QWidget()
         container.setLayout(root)
         self.setCentralWidget(container)
+        self._update_result_actions()
 
     def _build_edit_form(self) -> None:
         self._edit_model_combo = QComboBox()
@@ -510,7 +525,9 @@ class MainWindow(QMainWindow):
             self._removed_task_ids.add(task_id)
             row = self._task_list.row(item)
             self._task_list.takeItem(row)
+            self._result_list.clear()
             self._preview.setText("提交任务后显示生成结果")
+            self._update_result_actions()
             self.statusBar().showMessage("任务已从任务中心移除，磁盘结果未删除")
 
     @Slot(object)
@@ -541,6 +558,9 @@ class MainWindow(QMainWindow):
         elif task.status is GenerationStatus.SUCCEEDED:
             self.statusBar().showMessage("生成结果已保存")
             self._show_result(task)
+        elif task.status is GenerationStatus.PARTIALLY_SUCCEEDED:
+            self.statusBar().showMessage(task.error or "部分生成结果已保存")
+            self._show_result(task)
         elif task.status is GenerationStatus.CANCELLED:
             self.statusBar().showMessage(task.error or "任务已取消，网关侧计算可能仍在继续")
 
@@ -553,10 +573,105 @@ class MainWindow(QMainWindow):
                 self._show_result(self._tasks[task_id])
 
     def _show_result(self, task: GenerationTask) -> None:
-        if task.result_paths and task.result_paths[0].is_file():
-            self._preview.setPixmap(QPixmap(str(task.result_paths[0])).scaled(
-                self._preview.size(), Qt.AspectRatioMode.KeepAspectRatio,
-            ))
+        current_path = self._selected_result_path()
+        self._result_list.blockSignals(True)
+        self._result_list.clear()
+        for path in task.result_paths:
+            if not path.is_file():
+                continue
+            item = QListWidgetItem(QIcon(str(path)), path.name)
+            item.setData(Qt.ItemDataRole.UserRole, str(path))
+            self._result_list.addItem(item)
+        self._result_list.blockSignals(False)
+        if self._result_list.count() == 0:
+            self._preview.setText("当前任务没有可预览的结果")
+            self._update_result_actions()
+            return
+        selected_row = 0
+        if current_path is not None:
+            for row in range(self._result_list.count()):
+                if Path(self._result_list.item(row).data(Qt.ItemDataRole.UserRole)) == current_path:
+                    selected_row = row
+                    break
+        self._result_list.setCurrentRow(selected_row)
+        self._show_selected_image(selected_row)
+
+    @Slot(int)
+    def _show_selected_image(self, row: int) -> None:
+        path = self._selected_result_path()
+        if row < 0 or path is None or not path.is_file():
+            self._preview.setText("当前任务没有可预览的结果")
+            self._update_result_actions()
+            return
+        pixmap = QPixmap(str(path))
+        if pixmap.isNull():
+            self._preview.setText("结果图片无法预览")
+        else:
+            self._preview.setPixmap(
+                pixmap.scaled(
+                    self._preview.size(),
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+            )
+        self._update_result_actions()
+
+    def _selected_result_path(self) -> Path | None:
+        item = self._result_list.currentItem()
+        if item is None:
+            return None
+        value = item.data(Qt.ItemDataRole.UserRole)
+        return Path(value) if isinstance(value, str) else None
+
+    def _update_result_actions(self) -> None:
+        enabled = self._selected_result_path() is not None
+        self._save_copy.setEnabled(enabled)
+        self._copy_image.setEnabled(enabled)
+        self._open_directory.setEnabled(enabled)
+
+    @Slot()
+    def _save_selected_copy(self) -> None:
+        source = self._selected_result_path()
+        if source is None or not source.is_file():
+            return
+        target_name, _ = QFileDialog.getSaveFileName(
+            self,
+            "保存结果副本",
+            source.name,
+            "图片 (*.png *.jpg *.jpeg *.webp *.gif *.bmp *.tiff);;所有文件 (*)",
+        )
+        if not target_name:
+            return
+        target = Path(target_name)
+        if target.resolve() == source.resolve():
+            self.statusBar().showMessage("目标文件不能与原结果相同")
+            return
+        try:
+            shutil.copyfile(source, target)
+        except OSError as error:
+            self.statusBar().showMessage(f"保存结果副本失败：{error}")
+        else:
+            self.statusBar().showMessage(f"结果副本已保存：{target}")
+
+    @Slot()
+    def _copy_selected_image(self) -> None:
+        source = self._selected_result_path()
+        if source is None or not source.is_file():
+            return
+        pixmap = QPixmap(str(source))
+        if pixmap.isNull():
+            self.statusBar().showMessage("结果图片无法复制")
+            return
+        QApplication.clipboard().setPixmap(pixmap)
+        self.statusBar().showMessage("结果图片已复制到剪贴板")
+
+    @Slot()
+    def _open_selected_directory(self) -> None:
+        source = self._selected_result_path()
+        if source is None or not source.is_file():
+            return
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(source.parent))):
+            self.statusBar().showMessage("无法打开结果所在目录")
 
     def closeEvent(self, event) -> None:
         if self._application.has_unfinished_tasks():

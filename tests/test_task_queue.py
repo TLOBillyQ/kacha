@@ -18,6 +18,11 @@ from ugc_image_tool.generation import (
 from ugc_image_tool.results import FileResultRepository
 
 
+PNG_1X1 = bytes.fromhex(
+    "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c6360606060000000050001a5f645400000000049454e44ae426082"
+)
+
+
 class GenerationStateTests(unittest.TestCase):
     def test_status_transitions_reject_skipping_and_terminal_transitions(self) -> None:
         task = GenerationTask(
@@ -308,7 +313,7 @@ class GenerationUncertaintyTests(unittest.TestCase):
 
 
 class GenerationResultStatusTests(unittest.TestCase):
-    def test_incomplete_gateway_response_is_unknown(self) -> None:
+    def test_incomplete_gateway_response_is_partially_succeeded(self) -> None:
         class ShortGateway:
             def generate_text(self, request: TextToImageRequest) -> list[GeneratedImage]:
                 return [GeneratedImage(b"one", "image/png")]
@@ -330,8 +335,30 @@ class GenerationResultStatusTests(unittest.TestCase):
         finally:
             application.close()
 
-        self.assertEqual(GenerationStatus.UNKNOWN, task.status)
-        self.assertEqual([], results.saved)
+        self.assertEqual(GenerationStatus.PARTIALLY_SUCCEEDED, task.status)
+        self.assertEqual([task_id], results.saved)
+
+    def test_empty_gateway_response_is_failed(self) -> None:
+        class EmptyGateway:
+            def generate_text(self, request: TextToImageRequest) -> list[GeneratedImage]:
+                return []
+
+        results = InMemoryResults()
+        application = GenerationApplication(
+            gateway=EmptyGateway(),
+            results=results,
+        )
+        try:
+            task_id = application.submit_text(
+                TextToImageDraft(prompt="empty", model_id="qwen-image-3.0-pro")
+            )
+            task = application.wait_for(task_id, timeout=1)
+        finally:
+            application.close()
+
+        self.assertEqual(GenerationStatus.FAILED, task.status)
+        self.assertEqual((), task.result_paths)
+        self.assertEqual("网关未返回生成结果", task.error)
 
     def test_saving_one_of_two_results_is_partially_succeeded(self) -> None:
         images = [GeneratedImage(b"one", "image/png"), GeneratedImage(b"two", "image/png")]
@@ -370,7 +397,7 @@ class GenerationResultStatusTests(unittest.TestCase):
     def test_removing_completed_task_keeps_disk_result(self) -> None:
         class ImmediateGateway:
             def generate_text(self, request: TextToImageRequest) -> GeneratedImage:
-                return GeneratedImage(b"saved", "image/png")
+                return GeneratedImage(PNG_1X1, "image/png")
 
         with TemporaryDirectory() as directory:
             application = GenerationApplication(
