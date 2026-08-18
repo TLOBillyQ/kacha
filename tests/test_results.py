@@ -13,7 +13,7 @@ from ugc_image_tool.generation import (
     GenerationTask,
     TextToImageRequest,
 )
-from ugc_image_tool.results import DownloadedImage, FileResultRepository
+from ugc_image_tool.results import FileResultRepository
 
 
 PNG_1X1 = bytes.fromhex(
@@ -83,11 +83,12 @@ class FileResultRepositoryTests(unittest.TestCase):
             def __init__(self) -> None:
                 self.calls = 0
 
-            def fetch(self, url: str) -> DownloadedImage:
+            def fetch_to(self, url: str, target: Path) -> str | None:
                 self.calls += 1
                 if self.calls < 3:
                     raise OSError("临时地址尚未可读")
-                return DownloadedImage(PNG_1X1, "image/jpeg")
+                target.write_bytes(PNG_1X1)
+                return "image/jpeg"
 
         with TemporaryDirectory() as directory:
             fetcher = Fetcher()
@@ -114,9 +115,10 @@ class FileResultRepositoryTests(unittest.TestCase):
             def __init__(self) -> None:
                 self.calls = 0
 
-            def fetch(self, url: str) -> DownloadedImage:
+            def fetch_to(self, url: str, target: Path) -> str | None:
                 self.calls += 1
-                return DownloadedImage(b"not an image", "image/png")
+                target.write_bytes(b"not an image")
+                return "image/png"
 
         with TemporaryDirectory() as directory:
             fetcher = Fetcher()

@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from time import monotonic, sleep
+from time import sleep
 from typing import Protocol
 
 import httpx
@@ -181,7 +181,6 @@ class DiscoveryState:
 
     model_ids: tuple[str, ...] = ()
     online: bool = False
-    stale: bool = False
     from_cache: bool = False
     pending: bool = True
     fetched_at: datetime | None = None
@@ -237,7 +236,6 @@ class ModelDiscovery:
             self._state = DiscoveryState(
                 model_ids=model_ids,
                 online=True,
-                stale=False,
                 from_cache=False,
                 pending=False,
                 fetched_at=fetched_at,
@@ -253,7 +251,6 @@ class ModelDiscovery:
             self._state = DiscoveryState(
                 model_ids=cached.model_ids,
                 online=False,
-                stale=True,
                 from_cache=True,
                 pending=False,
                 fetched_at=cached.fetched_at,

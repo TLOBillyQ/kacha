@@ -319,14 +319,8 @@ class SettingsApplication:
     def set_output_root(self, path: Path) -> None:
         self._store.save_output_root(Path(path))
 
-    def reset_output_root(self) -> None:
-        self.set_output_root(default_output_root())
-
     def set_base_url(self, value: str) -> None:
         self._store.save_base_url(value)
-
-    def reset_base_url(self) -> None:
-        self._store.save_base_url(DEFAULT_BASE_URL)
 
     @property
     def uses_plaintext_http(self) -> bool:
@@ -334,10 +328,6 @@ class SettingsApplication:
 
     def set_concurrency_limit(self, value: int) -> None:
         self._store.save_concurrency_limit(value)
-
-    def ensure_output_directory(self) -> str | None:
-        """启动时创建输出目录；返回失败信息，成功返回 None。"""
-        return self._output_directory_error(probe=False)
 
     def output_directory_error(self) -> str | None:
         """返回阻止提交的可操作错误；输出目录可写时返回 None。"""

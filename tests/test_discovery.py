@@ -63,7 +63,6 @@ class ModelDiscoveryRefreshTests(unittest.TestCase):
             state = discovery.refresh()
 
             self.assertTrue(state.online)
-            self.assertFalse(state.stale)
             self.assertFalse(state.from_cache)
             self.assertEqual(KNOWN_MODELS, state.model_ids)
             self.assertIsNotNone(state.fetched_at)
@@ -74,7 +73,7 @@ class ModelDiscoveryRefreshTests(unittest.TestCase):
             assert cached is not None
             self.assertEqual(KNOWN_MODELS, cached.model_ids)
 
-    def test_failure_with_cache_marks_models_stale_and_offline(self) -> None:
+    def test_failure_with_cache_uses_cached_models_and_marks_offline(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
             first = refresh_state(ScriptedProvider(KNOWN_MODELS), root)
@@ -85,7 +84,6 @@ class ModelDiscoveryRefreshTests(unittest.TestCase):
             state = discovery.refresh()
 
             self.assertFalse(state.online)
-            self.assertTrue(state.stale)
             self.assertTrue(state.from_cache)
             self.assertEqual(KNOWN_MODELS, state.model_ids)
             self.assertIsNotNone(state.fetched_at)
@@ -103,7 +101,6 @@ class ModelDiscoveryRefreshTests(unittest.TestCase):
             state = discovery.refresh()
 
             self.assertFalse(state.online)
-            self.assertFalse(state.stale)
             self.assertFalse(state.from_cache)
             self.assertEqual((), state.model_ids)
             self.assertIsNone(state.fetched_at)

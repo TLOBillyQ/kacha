@@ -479,7 +479,7 @@ class DiagnosticsWiringTests(unittest.TestCase):
 
     def test_download_issue_is_logged_without_the_temporary_url(self) -> None:
         class FailingFetcher:
-            def fetch(self, url: str):
+            def fetch_to(self, url: str, target: Path) -> str | None:
                 raise OSError(f"临时地址不可读：{URL_SECRET}")
 
         with TemporaryDirectory() as directory:
@@ -487,7 +487,7 @@ class DiagnosticsWiringTests(unittest.TestCase):
             logger = DiagnosticLogger(root / "data")
             repository = FileResultRepository(
                 root / "out",
-                image_fetcher=FailingFetcher(),  # type: ignore[arg-type]
+                image_fetcher=FailingFetcher(),
                 diagnostics=logger,
             )
             task = GenerationTask(

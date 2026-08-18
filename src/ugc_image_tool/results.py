@@ -6,7 +6,6 @@ import re
 import struct
 from urllib.parse import urlparse
 import zlib
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import RLock
@@ -37,14 +36,8 @@ _MEDIA_FORMATS = {
 }
 
 
-@dataclass(frozen=True)
-class DownloadedImage:
-    content: bytes
-    media_type: str | None = None
-
-
 class ImageFetcher(Protocol):
-    def fetch(self, url: str) -> DownloadedImage: ...
+    def fetch_to(self, url: str, target: Path) -> str | None: ...
 
 
 class UrlImageFetcher:
@@ -59,25 +52,6 @@ class UrlImageFetcher:
             headers={"Accept": "image/*"},
             verify=verify,
         )
-
-    def fetch(self, url: str) -> DownloadedImage:
-        if urlparse(url).scheme.lower() not in {"http", "https"}:
-            raise ValueError("图片临时地址仅支持 HTTP 或 HTTPS")
-        with self._client.stream("GET", url) as response:
-            response.raise_for_status()
-            chunks: list[bytes] = []
-            for chunk in response.iter_bytes(_DOWNLOAD_CHUNK_BYTES):
-                chunks.append(chunk)
-            content = b"".join(chunks)
-            content_length = response.headers.get("Content-Length")
-            if content_length is not None:
-                try:
-                    expected_length = int(content_length)
-                except ValueError as error:
-                    raise OSError("图片下载响应的 Content-Length 无效") from error
-                if expected_length != len(content):
-                    raise OSError("图片下载不完整")
-            return DownloadedImage(content, response.headers.get("Content-Type"))
 
     def fetch_to(self, url: str, target: Path) -> str | None:
         if urlparse(url).scheme.lower() not in {"http", "https"}:
@@ -145,11 +119,17 @@ class FileResultRepository:
                 reserved_result: Path | None = None
                 try:
                     temporary = task_directory / f".result-{uuid4().hex}.tmp"
-                    fetch_to = getattr(self._image_fetcher, "fetch_to", None)
-                    if image.url and callable(fetch_to):
-                        declared_media_type = fetch_to(image.url, temporary)
+                    if image.url:
+                        declared_media_type = self._image_fetcher.fetch_to(
+                            image.url, temporary
+                        )
                     else:
-                        content, declared_media_type = self._image_payload(image)
+                        if image.content is None:
+                            raise ValueError("生成结果既没有图片字节也没有临时地址")
+                        if not isinstance(image.content, bytes):
+                            raise TypeError("生成结果内容必须是字节")
+                        content = image.content
+                        declared_media_type = image.media_type
                         atomic_write_bytes(temporary, content)
 
                     media_type, suffix = _validate_image(temporary, declared_media_type)
@@ -278,18 +258,6 @@ class FileResultRepository:
             status_code=status_code,
             message=message,
         )
-
-    def _image_payload(self, image: GeneratedImage) -> tuple[bytes, str | None]:
-        if image.content is not None:
-            if not isinstance(image.content, bytes):
-                raise TypeError("生成结果内容必须是字节")
-            return image.content, image.media_type
-        if not image.url:
-            raise ValueError("生成结果既没有图片字节也没有临时地址")
-        downloaded = self._image_fetcher.fetch(image.url)
-        if not isinstance(downloaded, DownloadedImage):
-            raise TypeError("图片下载器返回了无法识别的结果")
-        return downloaded.content, downloaded.media_type or image.media_type
 
     def _reserve_result_path(self, task_directory: Path, suffix: str) -> Path:
         index = 1

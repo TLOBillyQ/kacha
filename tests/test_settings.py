@@ -174,18 +174,6 @@ class SettingsApplicationTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 application.save_api_key("   ")
 
-    def test_reset_base_url_restores_default(self) -> None:
-        with TemporaryDirectory() as directory:
-            application = SettingsApplication(
-                SettingsStore(Path(directory)),
-                MemoryCredentialService(),
-            )
-            application.set_base_url("https://other.example.com")
-            self.assertFalse(application.uses_plaintext_http)
-            application.reset_base_url()
-            self.assertEqual(DEFAULT_BASE_URL, application.base_url)
-            self.assertTrue(application.uses_plaintext_http)
-
     def test_set_output_root_persists_and_creates_directory(self) -> None:
         with TemporaryDirectory() as directory:
             application = SettingsApplication(
@@ -194,10 +182,9 @@ class SettingsApplicationTests(unittest.TestCase):
             )
             output = Path(directory) / "nested" / "output"
             application.set_output_root(output)
-            application.ensure_output_directory()
-            self.assertTrue(output.is_dir())
             self.assertEqual(output, application.output_root)
             self.assertIsNone(application.output_directory_error())
+            self.assertTrue(output.is_dir())
 
     def test_output_directory_error_guides_user_to_settings_when_unwritable(self) -> None:
         with TemporaryDirectory() as directory:

@@ -128,6 +128,12 @@ def _run_verify(*paths: Path) -> subprocess.CompletedProcess[str]:
     )
 
 
+def test_verify_cli_requires_at_least_one_path() -> None:
+    result = _run_verify()
+    assert result.returncode == 2
+    assert "paths" in result.stderr
+
+
 def test_verify_cli_accepts_clean_tree() -> None:
     import tempfile
 

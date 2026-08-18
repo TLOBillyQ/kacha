@@ -39,9 +39,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "paths",
-        nargs="*",
-        default=["release/dist"],
-        help="要扫描的文件或目录；默认扫描 release/dist。",
+        nargs="+",
+        help="要扫描的一个或多个文件或目录。",
     )
     parser.add_argument(
         "--checksums",

@@ -119,10 +119,6 @@ class GenerationApplication:
         with self._lock:
             return self._max_concurrency
 
-    @max_concurrency.setter
-    def max_concurrency(self, value: int) -> None:
-        self.set_concurrency_limit(value)
-
     def set_concurrency_limit(self, value: int) -> None:
         limit = validate_concurrency_limit(value)
         with self._lock:
