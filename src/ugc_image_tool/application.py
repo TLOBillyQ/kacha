@@ -26,11 +26,13 @@ from .generation import (
     _size_errors,
 )
 from .references import inspect_reference_image
+from .settings import (
+    DEFAULT_CONCURRENCY_LIMIT,
+    MAX_CONCURRENCY_LIMIT,
+    validate_concurrency_limit,
+)
 
 
-DEFAULT_CONCURRENCY_LIMIT = 3
-MIN_CONCURRENCY_LIMIT = 1
-MAX_CONCURRENCY_LIMIT = 6
 GENERATION_TIMEOUT_SECONDS = 15 * 60
 CANCELLED_ERROR = "已取消本地等待，网关侧计算可能仍在继续"
 TIMEOUT_ERROR = "等待超过 15 分钟，结果未知"
@@ -85,12 +87,14 @@ class GenerationApplication:
         on_task_changed: TaskListener | None = None,
         max_concurrency: int = DEFAULT_CONCURRENCY_LIMIT,
         timeout_seconds: float = GENERATION_TIMEOUT_SECONDS,
+        submission_guard: Callable[[], str | None] | None = None,
     ) -> None:
         self._gateway = gateway
         self._results = results
         self._capabilities = capabilities or CapabilityRegistry()
         self._on_task_changed = on_task_changed
-        self._max_concurrency = _validate_concurrency_limit(max_concurrency)
+        self._max_concurrency = validate_concurrency_limit(max_concurrency)
+        self._submission_guard = submission_guard
         if timeout_seconds <= 0:
             raise ValueError("生成等待超时必须大于 0 秒")
         self._timeout_seconds = timeout_seconds
@@ -121,7 +125,7 @@ class GenerationApplication:
         self.set_concurrency_limit(value)
 
     def set_concurrency_limit(self, value: int) -> None:
-        limit = _validate_concurrency_limit(value)
+        limit = validate_concurrency_limit(value)
         with self._lock:
             self._ensure_open()
             self._max_concurrency = limit
@@ -129,6 +133,7 @@ class GenerationApplication:
 
     def submit_text(self, draft: TextToImageDraft) -> str:
         """Validate and freeze a draft, then place one task in the FIFO queue."""
+        self._ensure_submission_allowed()
         if not draft.model_id:
             raise ValueError("请选择模型")
         capability = self._capabilities.capability(draft.model_id)
@@ -153,6 +158,7 @@ class GenerationApplication:
         return task.task_id
 
     def submit_edit(self, draft: ImageEditDraft) -> str:
+        self._ensure_submission_allowed()
         if not draft.model_id:
             raise ValueError("请选择模型")
         capability = self._capabilities.capability(draft.model_id)
@@ -319,11 +325,14 @@ class GenerationApplication:
 
         def invoke() -> None:
             try:
-                response = (
-                    self._gateway.generate_image_edit(task.request)
-                    if task.workflow is Workflow.IMAGE_EDIT
-                    else self._gateway.generate_text(task.request)
-                )
+                if task.workflow is Workflow.IMAGE_EDIT:
+                    request = task.request
+                    assert isinstance(request, ImageEditRequest)
+                    response = self._gateway.generate_image_edit(request)
+                else:
+                    request = task.request
+                    assert isinstance(request, TextToImageRequest)
+                    response = self._gateway.generate_text(request)
             except Exception as error:
                 result.set_exception(error)
             else:
@@ -387,11 +396,11 @@ class GenerationApplication:
                 save_errors.append(str(error))
 
         if not paths:
-            error = "；".join(save_errors) or "生成结果无法保存"
+            fail_message = "；".join(save_errors) or "生成结果无法保存"
             self._finish_without_results(
                 task.task_id,
                 GenerationStatus.FAILED,
-                error,
+                fail_message,
                 gateway_request_id=request_id,
             )
             return
@@ -535,15 +544,12 @@ class GenerationApplication:
         if self._closed:
             raise RuntimeError("任务中心已关闭")
 
-
-def _validate_concurrency_limit(value: int) -> int:
-    if (
-        isinstance(value, bool)
-        or not isinstance(value, int)
-        or not MIN_CONCURRENCY_LIMIT <= value <= MAX_CONCURRENCY_LIMIT
-    ):
-        raise ValueError("并发上限必须是 1～6 的整数")
-    return value
+    def _ensure_submission_allowed(self) -> None:
+        if self._submission_guard is None:
+            return
+        message = self._submission_guard()
+        if message:
+            raise ValueError(message)
 
 
 def _response_details(response: GatewayResponse) -> tuple[tuple[GeneratedImage, ...], str | None]:

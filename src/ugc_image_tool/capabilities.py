@@ -12,7 +12,7 @@ import json
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, cast
 
 
 class Workflow(StrEnum):
@@ -252,7 +252,7 @@ def _parse_capability(entry: dict[str, Any], prefix: str) -> ModelCapability:
         model_id=model_id,
         display_name=display_name,
         workflows=workflows,
-        supports_negative_prompt=supports_negative_prompt,
+        supports_negative_prompt=cast(bool, supports_negative_prompt),
         min_images=min_images,
         max_images=max_images,
         size=size,
@@ -306,7 +306,7 @@ def _parse_size_rule(value: Any, prefix: str, errors: list[str]) -> SizeRule:
         errors.append(f"{prefix} 宽高比范围无效：min ≤ max")
 
     size = SizeRule(
-        auto_allowed=auto_allowed,
+        auto_allowed=cast(bool, auto_allowed),
         presets=presets,
         min_total_pixels=min_pixels,
         max_total_pixels=max_pixels,

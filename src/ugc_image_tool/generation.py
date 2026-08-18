@@ -189,7 +189,7 @@ def _size_errors(draft: TextToImageDraft, capability: ModelCapability) -> list[s
     return capability.size.custom_size_errors(width, height)
 
 
-def _snapshot_size(draft: TextToImageDraft) -> SizeSpec:
+def _snapshot_size(draft: TextToImageDraft | ImageEditDraft) -> SizeSpec:
     """冻结尺寸模式与参数；AUTO 模式不携带宽高（网关适配器不发送尺寸字段）。"""
     return SizeSpec(
         mode=draft.size_mode,

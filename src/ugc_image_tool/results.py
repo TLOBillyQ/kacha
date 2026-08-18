@@ -115,6 +115,16 @@ class FileResultRepository:
         self._image_fetcher = image_fetcher or UrlImageFetcher()
         self._lock = RLock()
 
+    @property
+    def output_root(self) -> Path:
+        return self._output_root
+
+    @output_root.setter
+    def output_root(self, value: Path) -> None:
+        # 设置页允许运行期切换输出根目录；此后保存的任务落盘到新目录。
+        with self._lock:
+            self._output_root = Path(value)
+
     def save(self, task: GenerationTask, image: GeneratedImage) -> Path:
         task_directory = self._task_directory(task)
         task_directory.mkdir(parents=True, exist_ok=True)

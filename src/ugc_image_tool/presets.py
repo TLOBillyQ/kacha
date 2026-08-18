@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, cast
 from uuid import uuid4
 
+from .settings import default_user_data_dir
+
 
 _PRESET_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
@@ -378,14 +380,6 @@ class PresetApplication:
 
     def delete_personal(self, preset_id: str) -> None:
         self._store.delete_personal(preset_id)
-
-
-def default_user_data_dir() -> Path:
-    if os.name == "nt":
-        root = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
-    else:
-        root = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share")
-    return root / "ugc-image-tool"
 
 
 def _prepare_builtins(builtins: Iterable[ProjectPreset]) -> tuple[ProjectPreset, ...]:

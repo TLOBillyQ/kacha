@@ -23,7 +23,7 @@ class SimulatedGateway:
     def list_models(self) -> tuple[str, ...]:
         return self.AVAILABLE_MODELS
 
-    def generate_text(self, request: TextToImageRequest) -> GeneratedImage:
+    def generate_text(self, request: TextToImageRequest) -> GeneratedImage | tuple[GeneratedImage, ...]:
         time.sleep(self._delay_seconds)
         images = tuple(
             GeneratedImage(content=_PREVIEW_PNG, media_type="image/png")

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shutil
 from pathlib import Path
 from typing import cast
@@ -11,6 +12,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QListWidget,
     QListWidgetItem,
     QMainWindow,
@@ -38,6 +40,18 @@ from .generation import (
 from .results import FileResultRepository
 from .references import inspect_reference_image
 from .simulated_gateway import SimulatedGateway
+from .settings import (
+    DEFAULT_BASE_URL,
+    MAX_CONCURRENCY_LIMIT,
+    MIN_CONCURRENCY_LIMIT,
+    CredentialService,
+    MemoryCredentialService,
+    SettingsApplication,
+    SettingsStore,
+    SettingsStoreError,
+    WindowsCredentialService,
+    default_output_root,
+)
 from .presets import (
     PresetProject,
     PresetApplication,
@@ -93,36 +107,53 @@ class MainWindow(QMainWindow):
         capabilities: CapabilityRegistry | None = None,
         preset_store: PresetStore | None = None,
         user_data_dir: Path | None = None,
+        settings: SettingsApplication | None = None,
+        credentials: CredentialService | None = None,
     ) -> None:
         super().__init__()
         self.setWindowTitle("UGC AI 生图工具")
         self.resize(900, 620)
         self._events = _TaskEvents()
         self._events.changed.connect(self._update_task)
-        root = output_root or Path.home() / "Pictures" / "UGC AI 生图工具"
         self._capabilities = capabilities or CapabilityRegistry()
         self._preset_application = PresetApplication(
             preset_store or PresetStore(user_data_dir)
         )
+        if settings is None:
+            credential_service = credentials
+            if credential_service is None:
+                credential_service = (
+                    WindowsCredentialService() if os.name == "nt" else MemoryCredentialService()
+                )
+            settings = SettingsApplication(SettingsStore(user_data_dir), credential_service)
+        self._settings = settings
+        if output_root is not None:
+            self._settings.set_output_root(output_root)
+        self._results = FileResultRepository(self._settings.output_root)
         self._updating_prompt_controls = False
         gateway = SimulatedGateway()
         self._application = GenerationApplication(
             gateway=gateway,
-            results=FileResultRepository(root),
+            results=self._results,
             capabilities=self._capabilities,
             on_task_changed=self._events.changed.emit,
+            max_concurrency=self._settings.concurrency_limit,
+            submission_guard=self._output_directory_guard,
         )
         self._tasks: dict[str, GenerationTask] = {}
         self._removed_task_ids: set[str] = set()
         self._selected_task_id: str | None = None
         self._has_configured_models = False
         self._draft_count = 1
+        self._output_error: str | None = None
         self._build_form()
         self._build_edit_form()
+        self._build_settings_page()
         self._build_task_center()
         self._populate_models(gateway.list_models())
         self._populate_edit_models(gateway.list_models())
         self._populate_presets()
+        self._refresh_output_state()
         self._revalidate()
 
     def _build_form(self) -> None:
@@ -400,6 +431,174 @@ class MainWindow(QMainWindow):
                 self._preset_combo.setCurrentIndex(index)
                 return
 
+    def _build_settings_page(self) -> None:
+        self._output_root_edit = QLineEdit(str(self._settings.output_root))
+        self._output_root_edit.editingFinished.connect(self._apply_output_root)
+        self._browse_output = QPushButton("浏览…")
+        self._browse_output.clicked.connect(self._browse_output_root)
+        self._reset_output = QPushButton("恢复默认")
+        self._reset_output.clicked.connect(self._reset_output_root)
+        output_row = QHBoxLayout()
+        output_row.addWidget(self._output_root_edit, 1)
+        output_row.addWidget(self._browse_output)
+        output_row.addWidget(self._reset_output)
+
+        self._base_url_edit = QLineEdit(self._settings.base_url)
+        self._base_url_edit.editingFinished.connect(self._apply_base_url)
+        self._reset_base_url = QPushButton("恢复默认")
+        self._reset_base_url.clicked.connect(self._reset_base_url_clicked)
+        base_row = QHBoxLayout()
+        base_row.addWidget(self._base_url_edit, 1)
+        base_row.addWidget(self._reset_base_url)
+        self._base_url_warning = QLabel()
+        self._base_url_warning.setWordWrap(True)
+
+        self._settings_concurrency = QSpinBox()
+        self._settings_concurrency.setRange(MIN_CONCURRENCY_LIMIT, MAX_CONCURRENCY_LIMIT)
+        self._settings_concurrency.setValue(self._settings.concurrency_limit)
+        self._settings_concurrency.valueChanged.connect(self._on_settings_concurrency_changed)
+
+        self._api_key_edit = QLineEdit()
+        self._api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self._api_key_edit.setPlaceholderText("输入 API 密钥")
+        self._save_api_key = QPushButton("保存密钥")
+        self._save_api_key.clicked.connect(self._save_api_key_clicked)
+        self._clear_api_key = QPushButton("清除密钥")
+        self._clear_api_key.clicked.connect(self._clear_api_key_clicked)
+        self._api_key_status = QLabel()
+        key_row = QHBoxLayout()
+        key_row.addWidget(self._api_key_edit, 1)
+        key_row.addWidget(self._save_api_key)
+        key_row.addWidget(self._clear_api_key)
+
+        layout = QVBoxLayout()
+        layout.addWidget(QLabel("输出根目录"))
+        layout.addLayout(output_row)
+        layout.addWidget(QLabel("团队网关基础地址"))
+        layout.addLayout(base_row)
+        layout.addWidget(self._base_url_warning)
+        layout.addWidget(QLabel("并发上限（1～6，重启后保留）"))
+        layout.addWidget(self._settings_concurrency)
+        layout.addWidget(QLabel("API 密钥（保存到当前 Windows 用户凭据库）"))
+        layout.addLayout(key_row)
+        layout.addWidget(self._api_key_status)
+        layout.addStretch(1)
+        self._settings_container = QWidget()
+        self._settings_container.setLayout(layout)
+        self._update_api_key_status()
+        self._update_base_url_warning()
+
+    @Slot()
+    def _apply_output_root(self) -> None:
+        try:
+            self._settings.set_output_root(Path(self._output_root_edit.text()))
+        except (ValueError, SettingsStoreError) as error:
+            self.statusBar().showMessage(str(error))
+            self._output_root_edit.setText(str(self._settings.output_root))
+            return
+        self._results.output_root = self._settings.output_root
+        self._refresh_output_state()
+        self.statusBar().showMessage(f"输出根目录已设置：{self._settings.output_root}")
+
+    @Slot()
+    def _browse_output_root(self) -> None:
+        directory = QFileDialog.getExistingDirectory(
+            self, "选择输出根目录", str(self._settings.output_root)
+        )
+        if not directory:
+            return
+        self._output_root_edit.setText(directory)
+        self._apply_output_root()
+
+    @Slot()
+    def _reset_output_root(self) -> None:
+        self._output_root_edit.setText(str(default_output_root()))
+        self._apply_output_root()
+
+    @Slot()
+    def _apply_base_url(self) -> None:
+        try:
+            self._settings.set_base_url(self._base_url_edit.text())
+        except (ValueError, SettingsStoreError) as error:
+            self.statusBar().showMessage(str(error))
+            self._base_url_edit.setText(self._settings.base_url)
+            return
+        self._update_base_url_warning()
+        self.statusBar().showMessage("网关基础地址已保存")
+
+    @Slot()
+    def _reset_base_url_clicked(self) -> None:
+        self._base_url_edit.setText(DEFAULT_BASE_URL)
+        self._apply_base_url()
+
+    def _update_base_url_warning(self) -> None:
+        if self._settings.uses_plaintext_http:
+            self._base_url_warning.setText(
+                "当前地址为明文 HTTP，仅限隔离内网或可信 VPN 使用；非可信网络必须启用 HTTPS。"
+            )
+            self._base_url_warning.setStyleSheet("color: #c62828;")
+        else:
+            self._base_url_warning.setText("已启用 HTTPS，可在非可信网络使用。")
+            self._base_url_warning.setStyleSheet("color: #2e7d32;")
+
+    @Slot(int)
+    def _on_settings_concurrency_changed(self, value: int) -> None:
+        try:
+            self._settings.set_concurrency_limit(value)
+            self._application.set_concurrency_limit(value)
+        except ValueError as error:
+            self.statusBar().showMessage(str(error))
+            return
+        self._sync_concurrency_controls(value)
+        self.statusBar().showMessage(f"并发上限已设置为 {value}")
+
+    def _sync_concurrency_controls(self, value: int) -> None:
+        self._concurrency_box.blockSignals(True)
+        self._concurrency_box.setValue(value)
+        self._concurrency_box.blockSignals(False)
+        self._settings_concurrency.blockSignals(True)
+        self._settings_concurrency.setValue(value)
+        self._settings_concurrency.blockSignals(False)
+
+    @Slot()
+    def _save_api_key_clicked(self) -> None:
+        try:
+            self._settings.save_api_key(self._api_key_edit.text())
+        except (ValueError, OSError) as error:
+            self.statusBar().showMessage(f"保存 API 密钥失败：{error}")
+            return
+        self._api_key_edit.clear()
+        self._update_api_key_status()
+        self.statusBar().showMessage("API 密钥已保存到当前用户凭据库")
+
+    @Slot()
+    def _clear_api_key_clicked(self) -> None:
+        try:
+            self._settings.clear_api_key()
+        except OSError as error:
+            self.statusBar().showMessage(f"清除 API 密钥失败：{error}")
+            return
+        self._api_key_edit.clear()
+        self._update_api_key_status()
+        self.statusBar().showMessage("API 密钥已清除")
+
+    def _update_api_key_status(self) -> None:
+        if self._settings.api_key is None:
+            self._api_key_status.setText("未保存 API 密钥")
+            self._api_key_status.setStyleSheet("color: #c62828;")
+        else:
+            self._api_key_status.setText("已保存 API 密钥")
+            self._api_key_status.setStyleSheet("color: #2e7d32;")
+
+    def _output_directory_guard(self) -> str | None:
+        # 提交时重新探测：会话中途目录变不可写（如磁盘被移除）时仍能拦截提交。
+        return self._settings.output_directory_error()
+
+    def _refresh_output_state(self) -> None:
+        self._output_error = self._settings.output_directory_error()
+        self._edit_edit_submit.setEnabled(self._output_error is None)
+        self._revalidate()
+
     def _build_task_center(self) -> None:
         self._task_list = QListWidget()
         self._task_list.currentRowChanged.connect(self._show_selected_result)
@@ -446,6 +645,7 @@ class MainWindow(QMainWindow):
         tabs = QTabWidget()
         tabs.addTab(self._form_container, "文生图")
         tabs.addTab(self._edit_form_container, "图片编辑")
+        tabs.addTab(self._settings_container, "设置")
         root = QVBoxLayout()
         root.addWidget(tabs)
         root.addWidget(task_container)
@@ -582,6 +782,9 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _submit_edit(self) -> None:
+        if self._output_error:
+            self._edit_validation.setText(self._output_error)
+            return
         self._renumber_references()
         size_data = self._edit_size_combo.currentData()
         size_mode = size_data[0] if size_data is not None else SizeMode.AUTO
@@ -624,7 +827,8 @@ class MainWindow(QMainWindow):
             self._model_combo.addItem(label, entry.model_id)
             index = self._model_combo.count() - 1
             if not enabled:
-                self._model_combo.model().item(index).setEnabled(False)
+                model = cast(QStandardItemModel, self._model_combo.model())
+                model.item(index).setEnabled(False)
             else:
                 enabled_indices.append(index)
         self._has_configured_models = bool(enabled_indices)
@@ -707,6 +911,10 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _revalidate(self) -> None:
+        if self._output_error:
+            self._validation_label.setText(self._output_error)
+            self._submit.setEnabled(False)
+            return
         if not self._has_configured_models:
             self._validation_label.setText("没有可用的已配置模型，无法提交")
             self._submit.setEnabled(False)
@@ -737,9 +945,12 @@ class MainWindow(QMainWindow):
     @Slot(int)
     def _on_concurrency_changed(self, value: int) -> None:
         try:
+            self._settings.set_concurrency_limit(value)
             self._application.set_concurrency_limit(value)
         except ValueError as error:
             self.statusBar().showMessage(str(error))
+            return
+        self._sync_concurrency_controls(value)
 
     @Slot()
     def _cancel_selected_task(self) -> None:
@@ -937,8 +1148,8 @@ def run() -> int:
     app = QApplication.instance() or QApplication([])
     try:
         window = MainWindow()
-    except PresetStoreError as error:
-        QMessageBox.critical(None, "项目预设不可用", str(error))
+    except (PresetStoreError, SettingsStoreError) as error:
+        QMessageBox.critical(None, "配置不可用", str(error))
         return 1
     window.show()
     return app.exec()
