@@ -332,14 +332,19 @@ class PresetApplication:
             raise KeyError(preset_id)
         return self._editor.apply_preset(preset, confirm_discard=confirm_discard)
 
-    def create_personal(
+    def save_personal_preset(
         self,
         display_name: str,
         project: PresetProject,
-        prompt: str,
-        negative_prompt: str | None = None,
     ) -> ProjectPreset:
-        return self._store.create_personal(display_name, project, prompt, negative_prompt)
+        """把当前提示词草稿保存为新的个人预设。"""
+        values = self._editor.values
+        return self._store.create_personal(
+            display_name,
+            project,
+            values.prompt,
+            values.negative_prompt,
+        )
 
     def copy_builtin_as_personal(
         self,
@@ -348,24 +353,21 @@ class PresetApplication:
     ) -> ProjectPreset:
         return self._store.copy_as_personal(preset_id, display_name)
 
-    def update_personal(
+    def update_personal_preset(
         self,
         preset_id: str,
-        *,
-        display_name: str | None = None,
-        project: PresetProject | None = None,
-        prompt: str | None = None,
-        negative_prompt: str | None | _Unset = _UNSET,
+        display_name: str,
     ) -> ProjectPreset:
+        """把当前提示词草稿写回个人预设。"""
+        values = self._editor.values
         return self._store.update_personal(
             preset_id,
             display_name=display_name,
-            project=project,
-            prompt=prompt,
-            negative_prompt=negative_prompt,
+            prompt=values.prompt,
+            negative_prompt=values.negative_prompt,
         )
 
-    def delete_personal(self, preset_id: str) -> None:
+    def delete_personal_preset(self, preset_id: str) -> None:
         self._store.delete_personal(preset_id)
 
 

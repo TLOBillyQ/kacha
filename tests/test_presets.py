@@ -166,6 +166,39 @@ class PromptPresetEditorTests(unittest.TestCase):
 
 
 class PresetApplicationTests(unittest.TestCase):
+    def test_save_personal_preset_persists_current_editor_values(self) -> None:
+        with TemporaryDirectory() as directory:
+            user_data_dir = Path(directory)
+            application = PresetApplication(PresetStore(user_data_dir, builtins=[]))
+            application.update_prompt("个人起点", "不要水印")
+
+            saved = application.save_personal_preset(
+                "我的 UI 起点", PresetProject.EGG_PARTY
+            )
+
+            self.assertFalse(saved.read_only)
+            self.assertEqual("个人起点", saved.prompt)
+            self.assertEqual("不要水印", saved.negative_prompt)
+            reloaded = PresetStore(user_data_dir, builtins=[])
+            self.assertEqual((saved,), reloaded.personal_presets)
+
+    def test_update_personal_preset_uses_current_editor_values(self) -> None:
+        with TemporaryDirectory() as directory:
+            store = PresetStore(Path(directory), builtins=[])
+            original = store.create_personal(
+                "旧名称", PresetProject.THOUSAND_STARS, "旧提示词"
+            )
+            application = PresetApplication(store)
+            application.update_prompt("新提示词", "新负向")
+
+            updated = application.update_personal_preset(original.preset_id, "新名称")
+
+            self.assertEqual(original.preset_id, updated.preset_id)
+            self.assertEqual("新名称", updated.display_name)
+            self.assertEqual("新提示词", updated.prompt)
+            self.assertEqual("新负向", updated.negative_prompt)
+            self.assertEqual((updated,), PresetStore(Path(directory)).personal_presets)
+
     def test_application_service_applies_a_preset_without_qt(self) -> None:
         with TemporaryDirectory() as directory:
             preset = ProjectPreset(
