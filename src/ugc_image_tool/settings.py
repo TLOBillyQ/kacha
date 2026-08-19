@@ -19,7 +19,7 @@ from uuid import uuid4
 from .storage import atomic_write_text
 
 
-DEFAULT_BASE_URL = "http://lzxsvn.com:3001"
+DEFAULT_BASE_URL = "http://lzxsvn:3001"
 DEFAULT_CONCURRENCY_LIMIT = 3
 MIN_CONCURRENCY_LIMIT = 1
 MAX_CONCURRENCY_LIMIT = 6

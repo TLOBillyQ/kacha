@@ -30,6 +30,7 @@ class SettingsDefaultsTests(unittest.TestCase):
 
             self.assertEqual(default_output_root(), settings.output_root)
             self.assertEqual(DEFAULT_BASE_URL, settings.base_url)
+            self.assertEqual("http://lzxsvn:3001", settings.base_url)
             self.assertEqual(DEFAULT_CONCURRENCY_LIMIT, settings.concurrency_limit)
             self.assertTrue((Path(directory)).is_dir())
             self.assertFalse(store.storage_path.exists())
