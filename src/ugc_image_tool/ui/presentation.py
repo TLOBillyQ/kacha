@@ -24,6 +24,8 @@ UI_CARD_MARGIN = 10
 UI_TEXT_MUTED = "#616161"
 UI_BORDER = "#d6d6d6"
 UI_ERROR = "#c62828"
+UI_SUCCESS = "#2e7d32"
+UI_WARNING = "#f9a825"
 SUBMIT_BUTTON_STYLE = """
 QPushButton#submit {
     background-color: #1565c0;

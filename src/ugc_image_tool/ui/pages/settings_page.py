@@ -28,7 +28,12 @@ from ...settings import (
     default_output_root,
 )
 from ..controllers.discovery_controller import DiscoveryController
-from ..presentation import STAGE_LABELS, connection_check_mark, format_bytes
+from ..presentation import (
+    STAGE_LABELS,
+    UI_SUCCESS,
+    connection_check_mark,
+    format_bytes,
+)
 
 
 class SettingsPage(QWidget):
@@ -187,7 +192,7 @@ class SettingsPage(QWidget):
             self._base_url_warning.setStyleSheet("color: #c62828;")
         else:
             self._base_url_warning.setText("已启用 HTTPS，可在非可信网络使用。")
-            self._base_url_warning.setStyleSheet("color: #2e7d32;")
+            self._base_url_warning.setStyleSheet(f"color: {UI_SUCCESS};")
 
     @Slot()
     def _save_api_key_clicked(self) -> None:
@@ -219,7 +224,7 @@ class SettingsPage(QWidget):
             self._api_key_status.setStyleSheet("color: #c62828;")
         else:
             self._api_key_status.setText("已保存 API 密钥")
-            self._api_key_status.setStyleSheet("color: #2e7d32;")
+            self._api_key_status.setStyleSheet(f"color: {UI_SUCCESS};")
 
     # -- 并发上限 ------------------------------------------------------------
 

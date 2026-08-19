@@ -7,9 +7,12 @@ from pathlib import Path
 from PySide6.QtCore import QObject, Signal, Slot
 from PySide6.QtWidgets import (
     QApplication,
+    QFrame,
+    QHBoxLayout,
     QLabel,
     QMainWindow,
     QMessageBox,
+    QPushButton,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -26,6 +29,21 @@ from ..settings import (
 )
 from .controllers.discovery_controller import DiscoveryController
 from .pages import ImageEditPage, SettingsPage, TaskCenterPage, TextToImagePage
+from .presentation import (
+    UI_BORDER,
+    UI_ERROR,
+    UI_SUCCESS,
+    UI_TEXT_MUTED,
+    UI_WARNING,
+)
+
+_CONNECTION_BANNER_STYLE = f"""
+QFrame#connectionBanner {{
+    background-color: #fff8e1;
+    border: 1px solid {UI_BORDER};
+    border-radius: 4px;
+}}
+"""
 
 
 class _TaskEvents(QObject):
@@ -80,8 +98,15 @@ class MainWindow(QMainWindow):
             diagnostics=self._services.diagnostics,
             parent=self,
         )
-        self._connection_status = QLabel("正在连接网关…")
-        self._connection_status.setWordWrap(True)
+        self._status_dot = QLabel("●")
+        self._status_text = QLabel()
+        status_indicator = QWidget()
+        indicator_layout = QHBoxLayout(status_indicator)
+        indicator_layout.setContentsMargins(0, 0, 0, 0)
+        indicator_layout.setSpacing(4)
+        indicator_layout.addWidget(self._status_dot)
+        indicator_layout.addWidget(self._status_text)
+        self.statusBar().addPermanentWidget(status_indicator)
         self._text_page = TextToImagePage(self._services, parent=self)
         self._edit_page = ImageEditPage(self._services, parent=self)
         self._settings_page = SettingsPage(
@@ -118,17 +143,38 @@ class MainWindow(QMainWindow):
         self._task_center.status_message.connect(self.statusBar().showMessage)
 
     def _build_window(self) -> None:
-        tabs = QTabWidget()
-        tabs.addTab(self._text_page, "文生图")
-        tabs.addTab(self._edit_page, "图片编辑")
-        tabs.addTab(self._settings_page, "设置")
+        self._tabs = QTabWidget()
+        self._tabs.addTab(self._text_page, "文生图")
+        self._tabs.addTab(self._edit_page, "图片编辑")
+        self._tabs.addTab(self._settings_page, "设置")
+        self._connection_banner = self._build_connection_banner()
         root = QVBoxLayout()
-        root.addWidget(self._connection_status)
-        root.addWidget(tabs)
+        root.addWidget(self._connection_banner)
+        root.addWidget(self._tabs)
         root.addWidget(self._task_center)
         container = QWidget()
         container.setLayout(root)
         self.setCentralWidget(container)
+
+    def _build_connection_banner(self) -> QFrame:
+        """网关离线或使用缓存模型时上浮的完整提示；正常状态下隐藏。"""
+        banner = QFrame()
+        banner.setObjectName("connectionBanner")
+        banner.setStyleSheet(_CONNECTION_BANNER_STYLE)
+        layout = QHBoxLayout(banner)
+        layout.setContentsMargins(10, 6, 10, 6)
+        self._banner_text = QLabel()
+        self._banner_text.setWordWrap(True)
+        self._banner_action = QPushButton("前往设置检查连接")
+        self._banner_action.clicked.connect(self._open_settings_page)
+        layout.addWidget(self._banner_text, 1)
+        layout.addWidget(self._banner_action)
+        banner.hide()
+        return banner
+
+    @Slot()
+    def _open_settings_page(self) -> None:
+        self._tabs.setCurrentWidget(self._settings_page)
 
     @Slot()
     def _on_output_state_changed(self) -> None:
@@ -142,35 +188,42 @@ class MainWindow(QMainWindow):
         self._update_connection_status()
 
     def _update_connection_status(self) -> None:
+        """正常状态收进底部状态栏；离线或使用缓存模型时上浮完整提示。"""
         state = self._discovery_controller.state
         if state.pending:
-            text = "正在连接网关…"
-            style = ""
-        elif state.online:
-            text = f"网关在线：发现 {len(state.model_ids)} 个可用模型"
-            style = "color: #2e7d32;"
-        elif state.from_cache:
+            self._set_status_indicator(UI_TEXT_MUTED, "正在连接网关…")
+            self._connection_banner.hide()
+            return
+        if state.online:
+            self._set_status_indicator(UI_SUCCESS, "网关在线")
+            self._connection_banner.hide()
+            return
+        if state.from_cache:
+            self._set_status_indicator(UI_WARNING, "使用缓存模型")
             fetched = state.fetched_at
             when = (
                 fetched.astimezone().strftime("%Y-%m-%d %H:%M")
                 if fetched is not None
                 else "未知时间"
             )
-            text = f"网关离线：正在使用可能过期的缓存模型（获取于 {when}）"
-            style = "color: #c62828;"
+            detail = f"正在使用可能过期的缓存模型（获取于 {when}），模型列表可能已过期"
         else:
-            text = "网关离线：无法获取模型列表"
-            style = "color: #c62828;"
+            self._set_status_indicator(UI_ERROR, "网关离线")
+            detail = "无法获取模型列表，暂时无法提交生成任务"
         if state.error:
-            text = f"{text}；{state.error}"
-        self._connection_status.setText(text)
-        self._connection_status.setStyleSheet(style)
+            detail = f"{detail}；{state.error}"
+        self._banner_text.setText(f"网关离线：{detail}。可前往设置检查连接。")
+        self._connection_banner.show()
+
+    def _set_status_indicator(self, color: str, text: str) -> None:
+        self._status_dot.setStyleSheet(f"color: {color};")
+        self._status_text.setText(text)
 
     @Slot()
     def _restart_discovery(self) -> None:
         """设置页修改地址或密钥后重新发现模型并刷新连接状态。"""
-        self._connection_status.setText("正在连接网关…")
-        self._connection_status.setStyleSheet("")
+        self._set_status_indicator(UI_TEXT_MUTED, "正在连接网关…")
+        self._connection_banner.hide()
         self._discovery_controller.refresh()
 
     def closeEvent(self, event) -> None:
