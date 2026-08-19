@@ -5,16 +5,19 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-from PySide6.QtCore import QUrl, Qt, Signal, Slot
-from PySide6.QtGui import QDesktopServices, QIcon, QPixmap
+from PySide6.QtCore import QSize, QUrl, Qt, Signal, Slot
+from PySide6.QtGui import QColor, QDesktopServices, QIcon, QPixmap, QResizeEvent
 from PySide6.QtWidgets import (
+    QAbstractScrollArea,
     QFileDialog,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QListWidget,
     QListWidgetItem,
     QPushButton,
     QSpinBox,
+    QSplitter,
     QVBoxLayout,
     QWidget,
 )
@@ -22,7 +25,25 @@ from PySide6.QtWidgets import (
 from ...generation import GenerationStatus, GenerationTask
 from ...services import ApplicationServices
 from ...settings import MAX_CONCURRENCY_LIMIT, MIN_CONCURRENCY_LIMIT
-from ..presentation import STATUS_LABELS
+from ..presentation import STATUS_LABELS, UI_CARD_MARGIN, UI_SPACING
+
+
+_STATUS_COLORS = {
+    GenerationStatus.QUEUED: "#9e9e9e",
+    GenerationStatus.RUNNING: "#1976d2",
+    GenerationStatus.SUCCEEDED: "#388e3c",
+    GenerationStatus.PARTIALLY_SUCCEEDED: "#f57c00",
+    GenerationStatus.FAILED: "#c62828",
+    GenerationStatus.UNKNOWN: "#757575",
+    GenerationStatus.CANCELLED: "#e65100",
+}
+
+
+def _vertical_separator() -> QFrame:
+    separator = QFrame()
+    separator.setFrameShape(QFrame.Shape.VLine)
+    separator.setFrameShadow(QFrame.Shadow.Sunken)
+    return separator
 
 
 class TaskCenterPage(QWidget):
@@ -30,6 +51,9 @@ class TaskCenterPage(QWidget):
 
     status_message = Signal(str)
     concurrency_changed = Signal(int)
+
+    _TASK_ITEM_HEIGHT = 44
+    _MAX_VISIBLE_TASKS = 4
 
     def __init__(
         self,
@@ -42,16 +66,20 @@ class TaskCenterPage(QWidget):
         self._tasks: dict[str, GenerationTask] = {}
         self._removed_task_ids: set[str] = set()
         self._selected_task_id: str | None = None
+        self._current_preview: QPixmap | None = None
         self._build_task_center()
         self._update_result_actions()
 
     def _build_task_center(self) -> None:
         self._task_list = QListWidget()
+        self._task_list.setSizeAdjustPolicy(
+            QAbstractScrollArea.SizeAdjustPolicy.AdjustToContents
+        )
         self._task_list.currentRowChanged.connect(self._show_selected_result)
         self._result_list = QListWidget()
         self._result_list.currentRowChanged.connect(self._show_selected_image)
         self._preview = QLabel("提交任务后显示生成结果")
-        self._preview.setMinimumSize(320, 320)
+        self._preview.setMinimumSize(200, 200)
         self._preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self._concurrency_box = QSpinBox()
@@ -68,24 +96,65 @@ class TaskCenterPage(QWidget):
         self._copy_image.clicked.connect(self._copy_selected_image)
         self._open_directory = QPushButton("打开所在目录")
         self._open_directory.clicked.connect(self._open_selected_directory)
-        controls = QHBoxLayout()
-        controls.addWidget(QLabel("并发上限"))
-        controls.addWidget(self._concurrency_box)
-        controls.addWidget(self._cancel_task)
-        controls.addWidget(self._remove_task)
-        controls.addWidget(self._save_copy)
-        controls.addWidget(self._copy_image)
-        controls.addWidget(self._open_directory)
-        controls.addStretch(1)
+        concurrency_controls = QHBoxLayout()
+        concurrency_controls.addWidget(QLabel("并发上限"))
+        concurrency_controls.addWidget(self._concurrency_box)
+        concurrency_controls.addStretch(1)
+
+        action_controls = QHBoxLayout()
+        action_controls.addWidget(self._cancel_task)
+        action_controls.addWidget(self._remove_task)
+        action_controls.addWidget(_vertical_separator())
+        action_controls.addWidget(self._save_copy)
+        action_controls.addWidget(self._copy_image)
+        action_controls.addWidget(self._open_directory)
+        action_controls.addStretch(1)
+
+        self._result_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self._result_splitter.addWidget(self._result_list)
+        self._result_splitter.addWidget(self._preview)
+        self._result_splitter.setStretchFactor(0, 0)
+        self._result_splitter.setStretchFactor(1, 1)
+        self._result_splitter.setSizes([100, 500])
+        self._result_splitter.splitterMoved.connect(self._refresh_preview)
+
+        self._content_splitter = QSplitter(Qt.Orientation.Vertical)
+        self._content_splitter.addWidget(self._task_list)
+        self._content_splitter.addWidget(self._result_splitter)
+        self._content_splitter.setStretchFactor(0, 0)
+        self._content_splitter.setStretchFactor(1, 1)
+        self._content_splitter.splitterMoved.connect(self._refresh_preview)
 
         layout = QVBoxLayout()
+        layout.setContentsMargins(
+            UI_CARD_MARGIN,
+            UI_CARD_MARGIN,
+            UI_CARD_MARGIN,
+            UI_CARD_MARGIN,
+        )
+        layout.setSpacing(UI_SPACING)
         layout.addWidget(QLabel("任务中心"))
-        layout.addLayout(controls)
-        layout.addWidget(self._task_list)
-        layout.addWidget(QLabel("生成结果（选择一张进行操作）"))
-        layout.addWidget(self._result_list)
-        layout.addWidget(self._preview)
+        layout.addLayout(concurrency_controls)
+        layout.addLayout(action_controls)
+        layout.addWidget(self._content_splitter, 1)
         self.setLayout(layout)
+
+    def _resize_task_list(self) -> None:
+        visible_tasks = min(self._task_list.count(), self._MAX_VISIBLE_TASKS)
+        desired_height = (
+            visible_tasks * self._TASK_ITEM_HEIGHT + 2 * self._task_list.frameWidth()
+            if visible_tasks
+            else 64
+        )
+        remaining_height = max(80, self._content_splitter.height() - desired_height)
+        self._content_splitter.setSizes([desired_height, remaining_height])
+
+    def _update_task_item(self, item: QListWidgetItem, task: GenerationTask) -> None:
+        item.setText(
+            f"[{STATUS_LABELS[task.status]}]  {task.task_id[:8]}\n{task.prompt}"
+        )
+        item.setForeground(QColor(_STATUS_COLORS[task.status]))
+        item.setSizeHint(QSize(0, self._TASK_ITEM_HEIGHT))
 
     def set_concurrency(self, value: int) -> None:
         self._concurrency_box.blockSignals(True)
@@ -123,7 +192,9 @@ class TaskCenterPage(QWidget):
             row = self._task_list.row(item)
             self._task_list.takeItem(row)
             self._result_list.clear()
+            self._current_preview = None
             self._preview.setText("提交任务后显示生成结果")
+            self._resize_task_list()
             self._update_result_actions()
             self.status_message.emit("任务已从任务中心移除，磁盘结果未删除")
 
@@ -133,13 +204,14 @@ class TaskCenterPage(QWidget):
             return
         is_new = task.task_id not in self._tasks
         self._tasks[task.task_id] = task
-        label = f"{task.task_id[:8]}  {STATUS_LABELS[task.status]}  {task.prompt}"
         if is_new:
-            item = QListWidgetItem(label)
+            item = QListWidgetItem()
             item.setData(Qt.ItemDataRole.UserRole, task.task_id)
+            self._update_task_item(item, task)
             self._task_list.addItem(item)
             if self._selected_task_id is None:
                 self._task_list.setCurrentRow(self._task_list.count() - 1)
+            self._resize_task_list()
         else:
             row = next(
                 (
@@ -151,7 +223,7 @@ class TaskCenterPage(QWidget):
             )
             if row is None:
                 return
-            self._task_list.item(row).setText(label)
+            self._update_task_item(self._task_list.item(row), task)
         if task.status is GenerationStatus.FAILED:
             self.status_message.emit(task.error or "生成失败")
         elif task.status is GenerationStatus.SUCCEEDED:
@@ -188,6 +260,7 @@ class TaskCenterPage(QWidget):
             self._result_list.addItem(item)
         self._result_list.blockSignals(False)
         if self._result_list.count() == 0:
+            self._current_preview = None
             self._preview.setText("当前任务没有可预览的结果")
             self._update_result_actions()
             return
@@ -204,21 +277,34 @@ class TaskCenterPage(QWidget):
     def _show_selected_image(self, row: int) -> None:
         path = self._selected_result_path()
         if row < 0 or path is None or not path.is_file():
+            self._current_preview = None
             self._preview.setText("当前任务没有可预览的结果")
             self._update_result_actions()
             return
         pixmap = QPixmap(str(path))
         if pixmap.isNull():
+            self._current_preview = None
             self._preview.setText("结果图片无法预览")
         else:
-            self._preview.setPixmap(
-                pixmap.scaled(
-                    self._preview.size(),
-                    Qt.AspectRatioMode.KeepAspectRatio,
-                    Qt.TransformationMode.SmoothTransformation,
-                )
-            )
+            self._current_preview = pixmap
+            self._refresh_preview()
         self._update_result_actions()
+
+    @Slot()
+    def _refresh_preview(self) -> None:
+        if self._current_preview is None:
+            return
+        self._preview.setPixmap(
+            self._current_preview.scaled(
+                self._preview.size(),
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+        )
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        self._refresh_preview()
 
     def _selected_result_path(self) -> Path | None:
         item = self._result_list.currentItem()
