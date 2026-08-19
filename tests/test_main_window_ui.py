@@ -62,6 +62,12 @@ class StubController:
 app = QApplication([])
 directory = TemporaryDirectory()
 root = Path(directory.name)
+from PySide6.QtCore import QSettings
+
+QSettings.setDefaultFormat(QSettings.Format.IniFormat)
+QSettings.setPath(
+    QSettings.Format.IniFormat, QSettings.Scope.UserScope, str(root / "settings")
+)
 services = ApplicationServices(
     user_data_dir=root / "user-data",
     output_root=root / "output",
@@ -170,6 +176,80 @@ set_state(DiscoveryState(pending=False))
 assert not window._connection_banner.isHidden()
 window._banner_action.click()
 assert window._tabs.currentWidget() is window._settings_page
+"""
+        )
+
+    def test_task_center_docks_right_with_recall_button(self) -> None:
+        self.run_qt_case(
+            """
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QDockWidget
+
+assert isinstance(window._dock, QDockWidget)
+assert window._dock.objectName() == "taskCenterDock"
+assert window._dock.widget() is window._task_center
+assert window.dockWidgetArea(window._dock) == Qt.DockWidgetArea.RightDockWidgetArea
+allowed = window._dock.allowedAreas()
+assert allowed & Qt.DockWidgetArea.LeftDockWidgetArea
+assert allowed & Qt.DockWidgetArea.RightDockWidgetArea
+assert allowed & Qt.DockWidgetArea.BottomDockWidgetArea
+assert not allowed & Qt.DockWidgetArea.TopDockWidgetArea
+features = window._dock.features()
+assert features & QDockWidget.DockWidgetFeature.DockWidgetMovable
+assert features & QDockWidget.DockWidgetFeature.DockWidgetFloatable
+assert features & QDockWidget.DockWidgetFeature.DockWidgetClosable
+central_layout = window.centralWidget().layout()
+assert central_layout.indexOf(window._task_center) == -1
+assert window._recall_button.text() == "任务中心"
+"""
+        )
+
+    def test_default_dock_width_is_340_without_saved_state(self) -> None:
+        self.run_qt_case(
+            """
+assert window._window_settings().value("mainWindow/state") is None
+window.show()
+QTest.qWait(50)
+app.processEvents()
+assert abs(window._dock.width() - 340) <= 20, window._dock.width()
+"""
+        )
+
+    def test_recall_button_toggles_dock_and_clears_badge(self) -> None:
+        self.run_qt_case(
+            """
+window.show()
+app.processEvents()
+assert window._dock.isVisible()
+
+window._recall_button.click()
+assert not window._dock.isVisible()
+
+window._on_task_arrived(None)
+assert window._recall_button.text() == "任务中心 ● 新任务"
+assert window._recall_button.styleSheet()
+assert not window._dock.isVisible()
+
+window._recall_button.click()
+assert window._dock.isVisible()
+assert window._recall_button.text() == "任务中心"
+assert window._recall_button.styleSheet() == ""
+"""
+        )
+
+    def test_window_state_persists_and_restores_dock_placement(self) -> None:
+        self.run_qt_case(
+            """
+window.show()
+app.processEvents()
+window._dock.setFloating(True)
+assert window._dock.isFloating()
+window.close()
+saved = window._window_settings().value("mainWindow/state")
+assert saved is not None
+window._dock.setFloating(False)
+assert window._restore_window_state()
+assert window._dock.isFloating()
 """
         )
 

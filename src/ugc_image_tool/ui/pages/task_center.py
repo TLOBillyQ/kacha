@@ -10,7 +10,7 @@ from PySide6.QtGui import QColor, QDesktopServices, QIcon, QPixmap, QResizeEvent
 from PySide6.QtWidgets import (
     QAbstractScrollArea,
     QFileDialog,
-    QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QListWidget,
@@ -38,12 +38,6 @@ _STATUS_COLORS = {
     GenerationStatus.CANCELLED: "#e65100",
 }
 
-
-def _vertical_separator() -> QFrame:
-    separator = QFrame()
-    separator.setFrameShape(QFrame.Shape.VLine)
-    separator.setFrameShadow(QFrame.Shadow.Sunken)
-    return separator
 
 
 class TaskCenterPage(QWidget):
@@ -101,28 +95,25 @@ class TaskCenterPage(QWidget):
         concurrency_controls.addWidget(self._concurrency_box)
         concurrency_controls.addStretch(1)
 
-        action_controls = QHBoxLayout()
-        action_controls.addWidget(self._cancel_task)
-        action_controls.addWidget(self._remove_task)
-        action_controls.addWidget(_vertical_separator())
-        action_controls.addWidget(self._save_copy)
-        action_controls.addWidget(self._copy_image)
-        action_controls.addWidget(self._open_directory)
-        action_controls.addStretch(1)
+        # 窄面板（默认 340px）下横向一排按钮会撑宽停靠面板，改为两列网格：
+        # 左列为任务操作，右列为结果操作。
+        action_controls = QGridLayout()
+        action_controls.addWidget(self._cancel_task, 0, 0)
+        action_controls.addWidget(self._remove_task, 1, 0)
+        action_controls.addWidget(self._save_copy, 0, 1)
+        action_controls.addWidget(self._copy_image, 1, 1)
+        action_controls.addWidget(self._open_directory, 2, 1)
+        action_controls.setColumnStretch(0, 1)
+        action_controls.setColumnStretch(1, 1)
 
-        self._result_splitter = QSplitter(Qt.Orientation.Horizontal)
-        self._result_splitter.addWidget(self._result_list)
-        self._result_splitter.addWidget(self._preview)
-        self._result_splitter.setStretchFactor(0, 0)
-        self._result_splitter.setStretchFactor(1, 1)
-        self._result_splitter.setSizes([100, 500])
-        self._result_splitter.splitterMoved.connect(self._refresh_preview)
-
+        # 变体 B（#30 决议）：预览优先竖排——预览占大头居顶，任务队列与结果列表依次在其下。
         self._content_splitter = QSplitter(Qt.Orientation.Vertical)
+        self._content_splitter.addWidget(self._preview)
         self._content_splitter.addWidget(self._task_list)
-        self._content_splitter.addWidget(self._result_splitter)
-        self._content_splitter.setStretchFactor(0, 0)
-        self._content_splitter.setStretchFactor(1, 1)
+        self._content_splitter.addWidget(self._result_list)
+        self._content_splitter.setStretchFactor(0, 1)
+        self._content_splitter.setStretchFactor(1, 0)
+        self._content_splitter.setStretchFactor(2, 0)
         self._content_splitter.splitterMoved.connect(self._refresh_preview)
 
         layout = QVBoxLayout()
@@ -133,7 +124,6 @@ class TaskCenterPage(QWidget):
             UI_CARD_MARGIN,
         )
         layout.setSpacing(UI_SPACING)
-        layout.addWidget(QLabel("任务中心"))
         layout.addLayout(concurrency_controls)
         layout.addLayout(action_controls)
         layout.addWidget(self._content_splitter, 1)
@@ -141,13 +131,15 @@ class TaskCenterPage(QWidget):
 
     def _resize_task_list(self) -> None:
         visible_tasks = min(self._task_list.count(), self._MAX_VISIBLE_TASKS)
-        desired_height = (
+        task_height = (
             visible_tasks * self._TASK_ITEM_HEIGHT + 2 * self._task_list.frameWidth()
             if visible_tasks
             else 64
         )
-        remaining_height = max(80, self._content_splitter.height() - desired_height)
-        self._content_splitter.setSizes([desired_height, remaining_height])
+        total_height = max(task_height + 200, self._content_splitter.height())
+        result_height = max(80, (total_height - task_height) // 4)
+        preview_height = max(120, total_height - task_height - result_height)
+        self._content_splitter.setSizes([preview_height, task_height, result_height])
 
     def _update_task_item(self, item: QListWidgetItem, task: GenerationTask) -> None:
         item.setText(

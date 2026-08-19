@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QObject, Signal, Slot
+from PySide6.QtCore import QObject, QSettings, Qt, Signal, Slot
 from PySide6.QtWidgets import (
     QApplication,
+    QDockWidget,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -37,6 +38,9 @@ from .presentation import (
     UI_WARNING,
 )
 
+_WINDOW_STATE_KEY = "mainWindow/state"
+_RECALL_BADGE_STYLE = f"color: {UI_WARNING}; font-weight: bold;"
+
 _CONNECTION_BANNER_STYLE = f"""
 QFrame#connectionBanner {{
     background-color: #fff8e1;
@@ -65,7 +69,8 @@ class MainWindow(QMainWindow):
     ) -> None:
         super().__init__()
         self.setWindowTitle("UGC AI 生图工具")
-        self.resize(900, 620)
+        # 默认宽度需容纳中央区最小宽度（约 700px）加右侧任务中心面板 340px。
+        self.resize(1100, 640)
         self._events = _TaskEvents()
         if services is None:
             services = ApplicationServices(
@@ -151,10 +156,36 @@ class MainWindow(QMainWindow):
         root = QVBoxLayout()
         root.addWidget(self._connection_banner)
         root.addWidget(self._tabs)
-        root.addWidget(self._task_center)
         container = QWidget()
         container.setLayout(root)
         self.setCentralWidget(container)
+
+        # 任务中心改挂右侧 QDockWidget（#30 决议）：可换边/浮动/隐藏，尺寸位置持久化。
+        self._dock = QDockWidget("任务中心", self)
+        self._dock.setObjectName("taskCenterDock")
+        self._dock.setAllowedAreas(
+            Qt.DockWidgetArea.LeftDockWidgetArea
+            | Qt.DockWidgetArea.RightDockWidgetArea
+            | Qt.DockWidgetArea.BottomDockWidgetArea
+        )
+        self._dock.setFeatures(
+            QDockWidget.DockWidgetFeature.DockWidgetMovable
+            | QDockWidget.DockWidgetFeature.DockWidgetFloatable
+            | QDockWidget.DockWidgetFeature.DockWidgetClosable
+        )
+        self._dock.setWidget(self._task_center)
+        self._dock.visibilityChanged.connect(self._on_dock_visibility)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._dock)
+
+        self._recall_button = QPushButton("任务中心")
+        self._recall_button.setToolTip("显示/隐藏任务中心面板")
+        self._recall_button.clicked.connect(self._toggle_task_center_dock)
+        self.statusBar().addPermanentWidget(self._recall_button)
+        self._events.changed.connect(self._on_task_arrived)
+
+        # 无持久化状态时应用默认尺寸；resizeDocks 需在窗口显示前调用才生效。
+        if not self._restore_window_state():
+            self._apply_default_dock_size()
 
     def _build_connection_banner(self) -> QFrame:
         """网关离线或使用缓存模型时上浮的完整提示；正常状态下隐藏。"""
@@ -175,6 +206,44 @@ class MainWindow(QMainWindow):
     @Slot()
     def _open_settings_page(self) -> None:
         self._tabs.setCurrentWidget(self._settings_page)
+
+    # ---------------------------------------------------------- 任务中心停靠面板
+
+    def _window_settings(self) -> QSettings:
+        return QSettings(
+            QSettings.Format.IniFormat,
+            QSettings.Scope.UserScope,
+            "qinyuanj",
+            "ugc-image-tool",
+        )
+
+    def _restore_window_state(self) -> bool:
+        """恢复用户拖拽后的停靠位置、浮动状态与尺寸；无记录时返回 False。"""
+        state = self._window_settings().value(_WINDOW_STATE_KEY)
+        if state is None:
+            return False
+        return self.restoreState(state)
+
+    def _apply_default_dock_size(self) -> None:
+        """首次启动（无持久化状态）时默认右侧停靠、宽 340px。"""
+        self.resizeDocks([self._dock], [340], Qt.Orientation.Horizontal)
+
+    @Slot()
+    def _toggle_task_center_dock(self) -> None:
+        self._dock.setVisible(not self._dock.isVisible())
+
+    @Slot(bool)
+    def _on_dock_visibility(self, visible: bool) -> None:
+        if visible:
+            self._recall_button.setText("任务中心")
+            self._recall_button.setStyleSheet("")
+
+    @Slot(object)
+    def _on_task_arrived(self, _task: object) -> None:
+        """面板隐藏时新任务到达：召回按钮高亮，不强制弹出面板。"""
+        if not self._dock.isVisible():
+            self._recall_button.setText("任务中心 ● 新任务")
+            self._recall_button.setStyleSheet(_RECALL_BADGE_STYLE)
 
     @Slot()
     def _on_output_state_changed(self) -> None:
@@ -238,6 +307,7 @@ class MainWindow(QMainWindow):
             if answer is not QMessageBox.StandardButton.Yes:
                 event.ignore()
                 return
+        self._window_settings().setValue(_WINDOW_STATE_KEY, self.saveState())
         self._services.close()
         event.accept()
 

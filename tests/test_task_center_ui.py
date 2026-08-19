@@ -117,17 +117,14 @@ class TaskCenterUiTests(unittest.TestCase):
         )
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
 
-    def test_layout_uses_vertical_and_horizontal_splitters(self) -> None:
+    def test_layout_is_preview_first_vertical_splitter(self) -> None:
         self.run_qt_case(
             """
 assert page._content_splitter.orientation() == Qt.Orientation.Vertical
-assert page._content_splitter.widget(0) is page._task_list
-assert page._content_splitter.widget(1) is page._result_splitter
-assert page._result_splitter.orientation() == Qt.Orientation.Horizontal
-assert page._result_splitter.widget(0) is page._result_list
-assert page._result_splitter.widget(1) is page._preview
-assert page._result_splitter.sizes()[0] < page._result_splitter.sizes()[1]
-page._result_splitter.splitterMoved.emit(100, 1)
+assert page._content_splitter.widget(0) is page._preview
+assert page._content_splitter.widget(1) is page._task_list
+assert page._content_splitter.widget(2) is page._result_list
+assert not hasattr(page, "_result_splitter")
 page._content_splitter.splitterMoved.emit(100, 1)
 """
         )
@@ -158,7 +155,7 @@ expected_height = (
     page._MAX_VISIBLE_TASKS * page._TASK_ITEM_HEIGHT
     + 2 * page._task_list.frameWidth()
 )
-assert abs(page._content_splitter.sizes()[0] - expected_height) <= 2
+assert abs(page._content_splitter.sizes()[1] - expected_height) <= 2
 
 updated = make_task("task-0", status=GenerationStatus.RUNNING, prompt="更新后的提示词")
 page.on_task_changed(updated)
