@@ -4,16 +4,19 @@ from __future__ import annotations
 
 from typing import cast
 
-from PySide6.QtCore import Signal, Slot
+from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtGui import QStandardItemModel
 from PySide6.QtWidgets import (
     QComboBox,
+    QGroupBox,
     QHBoxLayout,
     QInputDialog,
     QLabel,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QSpinBox,
+    QSplitter,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -23,7 +26,15 @@ from ...capabilities import Workflow
 from ...generation import SizeMode, TextToImageDraft, draft_errors
 from ...presets import PresetProject, PresetStoreError, ProjectPreset
 from ...services import ApplicationServices
-from ..presentation import CUSTOM_SIZE_LABEL, combo_preset_size, combo_size_mode
+from ..presentation import (
+    CUSTOM_SIZE_LABEL,
+    SUBMIT_BUTTON_STYLE,
+    UI_CARD_MARGIN,
+    UI_ERROR,
+    UI_SPACING,
+    combo_preset_size,
+    combo_size_mode,
+)
 
 
 class TextToImagePage(QWidget):
@@ -61,6 +72,18 @@ class TextToImagePage(QWidget):
         self._negative_prompt = QTextEdit()
         self._negative_prompt.setPlaceholderText("输入负向提示词（可留空）")
         self._negative_prompt.textChanged.connect(self._on_prompt_changed)
+        self._negative_prompt_group = QGroupBox("负向提示词")
+        self._negative_prompt_group.setCheckable(True)
+        self._negative_prompt_group.setChecked(False)
+        negative_layout = QVBoxLayout(self._negative_prompt_group)
+        negative_layout.setContentsMargins(
+            UI_CARD_MARGIN,
+            UI_CARD_MARGIN,
+            UI_CARD_MARGIN,
+            UI_CARD_MARGIN,
+        )
+        negative_layout.addWidget(self._negative_prompt)
+        self._negative_prompt_group.toggled.connect(self._toggle_negative_prompt)
 
         self._preset_combo = QComboBox()
         self._preset_combo.setPlaceholderText("选择项目预设")
@@ -93,13 +116,17 @@ class TextToImagePage(QWidget):
         self._count_box.valueChanged.connect(self._on_count_changed)
 
         self._validation_label = QLabel()
-        self._validation_label.setStyleSheet("color: #c62828;")
+        self._validation_label.setStyleSheet(f"color: {UI_ERROR};")
         self._validation_label.setWordWrap(True)
 
         self._submit = QPushButton("提交生成")
+        self._submit.setObjectName("submit")
+        self._submit.setStyleSheet(SUBMIT_BUTTON_STYLE)
+        self._submit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._submit.clicked.connect(self._submit_prompt)
 
         size_row = QHBoxLayout()
+        size_row.setSpacing(UI_SPACING)
         size_row.addWidget(self._size_combo, 1)
         size_row.addWidget(QLabel("宽"))
         size_row.addWidget(self._width_box)
@@ -110,21 +137,56 @@ class TextToImagePage(QWidget):
         size_row.addStretch(1)
 
         layout = QVBoxLayout()
-        layout.addWidget(QLabel("模型"))
-        layout.addWidget(self._model_combo)
+        layout.setContentsMargins(
+            UI_CARD_MARGIN,
+            UI_CARD_MARGIN,
+            UI_CARD_MARGIN,
+            UI_CARD_MARGIN,
+        )
+        layout.setSpacing(UI_SPACING)
+        preset_group = QGroupBox("预设与模型")
+        preset_layout = QVBoxLayout(preset_group)
+        preset_layout.setContentsMargins(
+            UI_CARD_MARGIN,
+            UI_CARD_MARGIN,
+            UI_CARD_MARGIN,
+            UI_CARD_MARGIN,
+        )
+        model_row = QHBoxLayout()
+        model_row.addWidget(QLabel("模型"))
+        model_row.addWidget(self._model_combo, 1)
+        preset_layout.addLayout(model_row)
         preset_row = QHBoxLayout()
         preset_row.addWidget(self._preset_combo, 1)
-        preset_row.addWidget(self._apply_preset)
-        preset_row.addWidget(self._copy_preset)
-        preset_row.addWidget(self._save_preset)
-        preset_row.addWidget(self._edit_preset)
-        preset_row.addWidget(self._delete_preset)
-        layout.addWidget(QLabel("项目预设"))
-        layout.addLayout(preset_row)
-        layout.addWidget(QLabel("文生图"))
-        layout.addWidget(self._prompt)
-        layout.addWidget(self._negative_prompt)
-        layout.addWidget(QLabel("生成尺寸"))
+        preset_layout.addWidget(QLabel("项目预设"))
+        preset_layout.addLayout(preset_row)
+        preset_actions = QHBoxLayout()
+        for button in (self._apply_preset, self._copy_preset, self._save_preset):
+            preset_actions.addWidget(button)
+        preset_layout.addLayout(preset_actions)
+        personal_actions = QHBoxLayout()
+        personal_actions.addWidget(self._edit_preset)
+        personal_actions.addWidget(self._delete_preset)
+        personal_actions.addStretch(1)
+        preset_layout.addLayout(personal_actions)
+        layout.addWidget(preset_group)
+
+        prompt_split = QSplitter(Qt.Orientation.Horizontal)
+        prompt_group = QGroupBox("正向提示词")
+        prompt_layout = QVBoxLayout(prompt_group)
+        prompt_layout.setContentsMargins(
+            UI_CARD_MARGIN,
+            UI_CARD_MARGIN,
+            UI_CARD_MARGIN,
+            UI_CARD_MARGIN,
+        )
+        prompt_layout.addWidget(self._prompt)
+        prompt_split.addWidget(prompt_group)
+        prompt_split.addWidget(self._negative_prompt_group)
+        prompt_split.setSizes([2, 1])
+        layout.addWidget(prompt_split, 1)
+
+        layout.addWidget(QLabel("生成参数"))
         layout.addLayout(size_row)
         layout.addWidget(self._validation_label)
         layout.addWidget(self._submit)
@@ -167,6 +229,10 @@ class TextToImagePage(QWidget):
     @Slot(int)
     def _update_preset_actions(self, _index: int = -1) -> None:
         preset = self._selected_preset()
+        self._apply_preset.setVisible(preset is not None)
+        self._copy_preset.setVisible(preset is not None and preset.read_only)
+        self._edit_preset.setVisible(preset is not None and not preset.read_only)
+        self._delete_preset.setVisible(preset is not None and not preset.read_only)
         self._apply_preset.setEnabled(preset is not None)
         self._copy_preset.setEnabled(preset is not None and preset.read_only)
         self._edit_preset.setEnabled(preset is not None and not preset.read_only)
@@ -360,9 +426,12 @@ class TextToImagePage(QWidget):
             if capability is not None
             else None
         )
-        self._negative_prompt.setVisible(
-            text is not None and text.supports_negative_prompt
-        )
+        supports_negative = text is not None and text.supports_negative_prompt
+        self._negative_prompt_group.setVisible(supports_negative)
+        if not supports_negative:
+            self._negative_prompt.setVisible(False)
+        else:
+            self._toggle_negative_prompt(self._negative_prompt_group.isChecked())
         min_count = text.min_images if text is not None else 1
         max_count = text.max_images if text is not None else 1
         # 保留草稿出图数量：超出新模型范围时按边界显示，切回原模型后恢复。
@@ -376,6 +445,10 @@ class TextToImagePage(QWidget):
             return
         self._refresh_size_controls(text)
         self._revalidate()
+
+    @Slot(bool)
+    def _toggle_negative_prompt(self, expanded: bool) -> None:
+        self._negative_prompt.setVisible(expanded)
 
     @Slot(int)
     def _on_count_changed(self, value: int) -> None:

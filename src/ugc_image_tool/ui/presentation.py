@@ -19,6 +19,23 @@ STATUS_LABELS = {
 
 CUSTOM_SIZE_LABEL = "自定义…"
 
+UI_SPACING = 8
+UI_CARD_MARGIN = 10
+UI_TEXT_MUTED = "#616161"
+UI_BORDER = "#d6d6d6"
+UI_ERROR = "#c62828"
+SUBMIT_BUTTON_STYLE = """
+QPushButton#submit {
+    background-color: #1565c0;
+    color: white;
+    font-weight: bold;
+    padding: 6px 16px;
+    border-radius: 4px;
+}
+QPushButton#submit:hover { background-color: #1976d2; }
+QPushButton#submit:disabled { background-color: #90a4ae; }
+"""
+
 STAGE_LABELS = {
     ConnectionStage.DNS_OR_CONNECT: "DNS/连接",
     ConnectionStage.AUTH: "鉴权",
