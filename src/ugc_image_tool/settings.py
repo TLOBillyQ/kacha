@@ -10,12 +10,13 @@ from __future__ import annotations
 import ctypes
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 from urllib.parse import urlparse
 from uuid import uuid4
 
+from .capabilities import ModelTier, Workflow
 from .storage import atomic_write_text
 
 
@@ -63,6 +64,8 @@ class AppSettings:
     output_root: Path
     base_url: str
     concurrency_limit: int
+    # 各工作流已选档位；只存档位不存模型 ID，档内换模型后选择不变。
+    selected_tiers: dict[Workflow, ModelTier] = field(default_factory=dict)
 
 
 class SettingsStoreError(ValueError):
@@ -110,12 +113,24 @@ class SettingsStore:
     def save_concurrency_limit(self, value: int) -> AppSettings:
         return self._update(concurrency_limit=validate_concurrency_limit(value))
 
+    def selected_tier(self, workflow: Workflow) -> ModelTier:
+        """该工作流已选档位；无记录时回退到旗舰档。"""
+        return self._settings.selected_tiers.get(workflow, ModelTier.FLAGSHIP)
+
+    def save_selected_tier(self, workflow: Workflow, tier: ModelTier) -> AppSettings:
+        if not isinstance(tier, ModelTier):
+            raise ValueError("档位必须是 ModelTier")
+        tiers = dict(self._settings.selected_tiers)
+        tiers[workflow] = tier
+        return self._update(selected_tiers=tiers)
+
     def _update(
         self,
         *,
         output_root: Path | None = None,
         base_url: str | None = None,
         concurrency_limit: int | None = None,
+        selected_tiers: dict[Workflow, ModelTier] | None = None,
     ) -> AppSettings:
         current = self._settings
         updated = AppSettings(
@@ -125,6 +140,9 @@ class SettingsStore:
                 concurrency_limit
                 if concurrency_limit is not None
                 else current.concurrency_limit
+            ),
+            selected_tiers=(
+                selected_tiers if selected_tiers is not None else dict(current.selected_tiers)
             ),
         )
         self._persist(updated)
@@ -163,7 +181,24 @@ class SettingsStore:
                 concurrency_limit = validate_concurrency_limit(raw["concurrency_limit"])
             except (TypeError, ValueError) as error:
                 raise SettingsStoreError(f"设置文件的 concurrency_limit 无效：{error}") from error
-        return AppSettings(output_root, base_url, concurrency_limit)
+        selected_tiers = self._parse_selected_tiers(raw.get("selected_tiers"))
+        return AppSettings(output_root, base_url, concurrency_limit, selected_tiers)
+
+    def _parse_selected_tiers(self, raw_tiers: object) -> dict[Workflow, ModelTier]:
+        """旧版本设置文件没有该字段，缺失时按空记录处理。"""
+        if raw_tiers is None:
+            return {}
+        if not isinstance(raw_tiers, dict):
+            raise SettingsStoreError("设置文件的 selected_tiers 无效")
+        tiers: dict[Workflow, ModelTier] = {}
+        for key, value in raw_tiers.items():
+            try:
+                tiers[Workflow(key)] = ModelTier(value)
+            except ValueError as error:
+                raise SettingsStoreError(
+                    f"设置文件的 selected_tiers 无效：{key!r}={value!r}"
+                ) from error
+        return tiers
 
     def _persist(self, settings: AppSettings) -> None:
         content = json.dumps(
@@ -172,6 +207,10 @@ class SettingsStore:
                 "output_root": str(settings.output_root),
                 "base_url": settings.base_url,
                 "concurrency_limit": settings.concurrency_limit,
+                "selected_tiers": {
+                    workflow.value: tier.value
+                    for workflow, tier in settings.selected_tiers.items()
+                },
             },
             ensure_ascii=False,
             indent=2,
@@ -328,6 +367,12 @@ class SettingsApplication:
 
     def set_concurrency_limit(self, value: int) -> None:
         self._store.save_concurrency_limit(value)
+
+    def selected_tier(self, workflow: Workflow) -> ModelTier:
+        return self._store.selected_tier(workflow)
+
+    def save_selected_tier(self, workflow: Workflow, tier: ModelTier) -> None:
+        self._store.save_selected_tier(workflow, tier)
 
     def output_directory_error(self) -> str | None:
         """返回阻止提交的可操作错误；输出目录可写时返回 None。"""

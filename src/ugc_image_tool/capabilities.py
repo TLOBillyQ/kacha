@@ -21,6 +21,23 @@ class Workflow(StrEnum):
     IMAGE_EDIT = "image_edit"
 
 
+class ModelTier(StrEnum):
+    """模型档位：上架清单的表达；缺省（无档位）表示不上架。"""
+
+    FLAGSHIP = "flagship"
+    ECONOMY = "economy"
+
+    @property
+    def label(self) -> str:
+        return _TIER_LABELS[self]
+
+
+_TIER_LABELS = {
+    ModelTier.FLAGSHIP: "旗舰",
+    ModelTier.ECONOMY: "经济",
+}
+
+
 # 内置能力表的稳定版本标识，随提交快照冻结，用于追溯任务适用的能力版本。
 CAPABILITY_TABLE_VERSION = "capabilities-v1"
 
@@ -92,6 +109,8 @@ class ModelCapability:
     model_id: str
     display_name: str
     workflow_capabilities: tuple[WorkflowCapability, ...]
+    # 档位是条目级（模型级）上架标记；None 表示不上架、不出现在选择器中。
+    tier: ModelTier | None = None
 
     @property
     def workflows(self) -> frozenset[Workflow]:
@@ -145,6 +164,7 @@ BUILTIN_CAPABILITIES: dict[str, ModelCapability] = {
         model_id="qwen-image-3.0-pro",
         display_name="Qwen Image 3.0",
         workflow_capabilities=(QWEN_TEXT_WORKFLOW, QWEN_EDIT_WORKFLOW),
+        tier=ModelTier.FLAGSHIP,
     ),
 }
 
@@ -185,6 +205,29 @@ class CapabilityRegistry:
             model_id: enforce_special_constraints(capability)
             for model_id, capability in table.items()
         }
+        self._check_tier_conflicts()
+
+    def _check_tier_conflicts(self) -> None:
+        """同一档位、同一工作流最多一个上架模型；覆盖文件引入冲突时整份拒绝。"""
+        occupied: dict[tuple[ModelTier, Workflow], str] = {}
+        conflicts: list[str] = []
+        for capability in self._table.values():
+            if capability.tier is None:
+                continue
+            for workflow in capability.workflows:
+                key = (capability.tier, workflow)
+                if key in occupied:
+                    conflicts.append(
+                        f"档位 {capability.tier.label} 在工作流 {workflow.value} 下存在多个上架模型："
+                        f"{occupied[key]} 与 {capability.model_id}"
+                    )
+                else:
+                    occupied[key] = capability.model_id
+        if not conflicts:
+            return
+        if self._override_file is not None:
+            raise CapabilityOverrideError(conflicts)
+        raise ValueError("内置能力表存在同档位冲突：" + "；".join(conflicts))
 
     @property
     def version(self) -> str:
@@ -215,6 +258,21 @@ class CapabilityRegistry:
             for capability in self._table.values()
             if workflow in capability.workflows
         )
+
+    def shelved_tiers(self, workflow: Workflow) -> tuple[ModelTier, ...]:
+        """该工作流当前上架的档位，按旗舰、经济顺序；供页面构建分段开关。"""
+        return tuple(
+            tier
+            for tier in ModelTier
+            if self.resolve_tier(workflow, tier) is not None
+        )
+
+    def resolve_tier(self, workflow: Workflow, tier: ModelTier) -> ModelCapability | None:
+        """按工作流与档位解析当前上架的模型；该档位未上架此工作流时返回 None。"""
+        for capability in self._table.values():
+            if capability.tier is tier and workflow in capability.workflows:
+                return capability
+        return None
 
     def merge(self, gateway_model_ids: Iterable[str]) -> tuple[AvailableModel, ...]:
         return tuple(
@@ -297,6 +355,7 @@ def _parse_capability(entry: dict[str, Any], prefix: str) -> ModelCapability:
         display_name = ""
 
     workflows = _parse_workflows(entry.get("workflows"), f"{prefix}.workflows", errors)
+    tier = _parse_tier(entry.get("tier"), f"{prefix}.tier", errors)
 
     if errors:
         raise _EntryError(errors)
@@ -305,6 +364,7 @@ def _parse_capability(entry: dict[str, Any], prefix: str) -> ModelCapability:
         model_id=model_id,
         display_name=display_name,
         workflow_capabilities=workflows,
+        tier=tier,
     )
     _validate_special_model_constraint(capability, prefix, errors)
     if errors:
@@ -334,6 +394,20 @@ def _parse_workflows(
         seen.add(workflow)
         workflows.append(_parse_workflow_capability(workflow, entry, entry_prefix, errors))
     return tuple(workflows)
+
+
+def _parse_tier(value: Any, prefix: str, errors: list[str]) -> ModelTier | None:
+    if value is None:
+        return None  # 缺省合法：不上架
+    if not isinstance(value, str):
+        errors.append(f"{prefix} 必须是字符串")
+        return None
+    try:
+        return ModelTier(value)
+    except ValueError:
+        allowed = "、".join(tier.value for tier in ModelTier)
+        errors.append(f"{prefix} 包含不受支持的档位：{value!r}（可选：{allowed}）")
+        return None
 
 
 def _parse_workflow(value: Any, prefix: str, errors: list[str]) -> Workflow | None:

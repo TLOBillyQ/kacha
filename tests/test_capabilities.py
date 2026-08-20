@@ -6,6 +6,7 @@ from ugc_image_tool.capabilities import (
     CAPABILITY_TABLE_VERSION,
     BUILTIN_CAPABILITIES,
     CapabilityRegistry,
+    ModelTier,
     ReferenceLimits,
     SizeRule,
     Workflow,
@@ -88,6 +89,57 @@ class BuiltinCapabilityTableTests(unittest.TestCase):
     def test_unknown_model_has_no_builtin_capability(self) -> None:
         self.assertNotIn("wan2.7-image", BUILTIN_CAPABILITIES)
         self.assertNotIn("z-image-turbo", BUILTIN_CAPABILITIES)
+
+
+class ModelTierShelfTests(unittest.TestCase):
+    """档位是上架清单的表达：有 tier 的条目上架，无 tier 的保持隐藏。"""
+
+    def test_tiers_are_fixed_to_flagship_and_economy_with_labels(self) -> None:
+        self.assertEqual("flagship", ModelTier.FLAGSHIP.value)
+        self.assertEqual("economy", ModelTier.ECONOMY.value)
+        self.assertEqual("旗舰", ModelTier.FLAGSHIP.label)
+        self.assertEqual("经济", ModelTier.ECONOMY.label)
+
+    def test_qwen_image_3_0_pro_is_shelved_as_flagship(self) -> None:
+        self.assertEqual(
+            ModelTier.FLAGSHIP,
+            BUILTIN_CAPABILITIES["qwen-image-3.0-pro"].tier,
+        )
+
+    def test_builtin_table_has_at_most_one_model_per_tier_and_workflow(self) -> None:
+        seen: set[tuple[ModelTier, Workflow]] = set()
+        for capability in BUILTIN_CAPABILITIES.values():
+            if capability.tier is None:
+                continue
+            for workflow in capability.workflows:
+                key = (capability.tier, workflow)
+                self.assertNotIn(
+                    key,
+                    seen,
+                    f"内置能力表同档位同工作流冲突：{capability.tier}/{workflow}",
+                )
+                seen.add(key)
+
+    def test_resolve_tier_returns_shelved_model_for_workflow(self) -> None:
+        registry = CapabilityRegistry()
+
+        flagship = registry.resolve_tier(Workflow.TEXT_TO_IMAGE, ModelTier.FLAGSHIP)
+
+        self.assertIsNotNone(flagship)
+        assert flagship is not None
+        self.assertEqual("qwen-image-3.0-pro", flagship.model_id)
+
+    def test_resolve_tier_returns_none_when_tier_not_shelved(self) -> None:
+        registry = CapabilityRegistry()
+
+        self.assertIsNone(registry.resolve_tier(Workflow.TEXT_TO_IMAGE, ModelTier.ECONOMY))
+
+    def test_shelved_tiers_lists_only_tiers_available_for_workflow(self) -> None:
+        registry = CapabilityRegistry()
+
+        tiers = registry.shelved_tiers(Workflow.TEXT_TO_IMAGE)
+
+        self.assertEqual((ModelTier.FLAGSHIP,), tiers)
 
 
 class SizeRuleCustomFlagTests(unittest.TestCase):

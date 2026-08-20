@@ -16,7 +16,7 @@ from .application import (
     GenerationApplication,
     TaskListener,
 )
-from .capabilities import CapabilityRegistry
+from .capabilities import CapabilityOverrideError, CapabilityRegistry
 from .diagnostics import DiagnosticExporter, DiagnosticLogger
 from .discovery import ModelCache, ModelDiscovery
 from .generation import GenerationTask
@@ -28,8 +28,12 @@ from .settings import (
     SettingsApplication,
     SettingsStore,
     WindowsCredentialService,
+    default_user_data_dir,
 )
 from .team_gateway import TeamGateway
+
+# 能力覆盖文件：团队无需重新发布客户端即可临时上架实测中的模型。
+CAPABILITY_OVERRIDE_FILENAME = "capability-override.json"
 
 
 class ServiceGateway(Gateway, Protocol):
@@ -71,7 +75,8 @@ class ApplicationServices:
         generation: GenerationApplication | None = None,
         on_task_changed: TaskListener | None = None,
     ) -> None:
-        self.capabilities = capabilities or CapabilityRegistry()
+        self.diagnostics = diagnostics or DiagnosticLogger(user_data_dir)
+        self.capabilities = capabilities or self._compose_capabilities(user_data_dir)
         self.settings = settings or SettingsApplication(
             SettingsStore(user_data_dir),
             credentials or default_credential_service(),
@@ -81,7 +86,6 @@ class ApplicationServices:
         self.presets = PresetApplication(
             preset_store or PresetStore(user_data_dir)
         )
-        self.diagnostics = diagnostics or DiagnosticLogger(user_data_dir)
         self.gateway: ServiceGateway = gateway or TeamGateway(
             self.settings.base_url,
             self.settings.api_key or "",
@@ -116,6 +120,18 @@ class ApplicationServices:
     def _emit_task_changed(self, task: GenerationTask) -> None:
         if self.on_task_changed is not None:
             self.on_task_changed(task)
+
+    def _compose_capabilities(self, user_data_dir: Path | None) -> CapabilityRegistry:
+        """接线能力覆盖文件；任一错误整份拒绝并回退内置能力表。"""
+        data_dir = user_data_dir if user_data_dir is not None else default_user_data_dir()
+        override_path = data_dir / CAPABILITY_OVERRIDE_FILENAME
+        if not override_path.is_file():
+            return CapabilityRegistry()
+        try:
+            return CapabilityRegistry(override_path)
+        except CapabilityOverrideError as error:
+            self.diagnostics.system(f"能力覆盖文件被拒绝，回退内置能力表：{error}")
+            return CapabilityRegistry()
 
     def start(self) -> None:
         if self._started:

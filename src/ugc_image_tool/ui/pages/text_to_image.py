@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ...capabilities import Workflow
+from ...capabilities import ModelTier, Workflow
 from ...generation import SizeMode, TextToImageDraft, draft_errors
 from ...presets import PresetProject, PresetStoreError, ProjectPreset
 from ...services import ApplicationServices
@@ -35,6 +35,7 @@ from ..presentation import (
     combo_preset_size,
     combo_size_mode,
 )
+from ..tier_switch import TierSegment, TierSwitch
 
 
 class TextToImagePage(QWidget):
@@ -55,6 +56,8 @@ class TextToImagePage(QWidget):
         self._application = services.generation
         self._updating_prompt_controls = False
         self._has_configured_models = False
+        self._selected_tier: ModelTier | None = None
+        self._tier_models: dict[ModelTier, str] = {}
         self._draft_count = 1
         self._output_error: str | None = None
         self._build_form()
@@ -62,8 +65,8 @@ class TextToImagePage(QWidget):
         self.refresh_output_state()
 
     def _build_form(self) -> None:
-        self._model_combo = QComboBox()
-        self._model_combo.currentIndexChanged.connect(self._on_model_changed)
+        self._tier_switch = TierSwitch()
+        self._tier_switch.tier_changed.connect(self._on_tier_changed)
 
         self._prompt = QTextEdit()
         self._prompt.setPlaceholderText("输入正向提示词")
@@ -153,8 +156,8 @@ class TextToImagePage(QWidget):
             UI_CARD_MARGIN,
         )
         model_row = QHBoxLayout()
-        model_row.addWidget(QLabel("模型"))
-        model_row.addWidget(self._model_combo, 1)
+        model_row.addWidget(QLabel("模型档位"))
+        model_row.addWidget(self._tier_switch, 1)
         preset_layout.addLayout(model_row)
         preset_row = QHBoxLayout()
         preset_row.addWidget(self._preset_combo, 1)
@@ -382,45 +385,63 @@ class TextToImagePage(QWidget):
                 self._preset_combo.setCurrentIndex(index)
                 return
 
-    # -- 模型与草稿 ----------------------------------------------------------
+    # -- 模型档位与草稿 --------------------------------------------------------
 
     def set_models(self, gateway_model_ids: tuple[str, ...]) -> None:
-        selected_id = self._model_combo.currentData()
-        enabled_indices: list[int] = []
-        self._model_combo.blockSignals(True)
-        self._model_combo.clear()
-        for entry in self._capabilities.merge(gateway_model_ids):
-            capability = entry.capability
-            if capability is not None and Workflow.TEXT_TO_IMAGE not in capability.workflows:
-                continue  # 文生图页不展示不支持文生图的模型
-            if capability is not None:
-                label = f"{entry.model_id}（{capability.display_name}）"
-                enabled = True
+        """按上架档位刷新分段开关；未上架与未配置的模型不出现。"""
+        available = set(gateway_model_ids)
+        segments: dict[ModelTier, TierSegment] = {}
+        self._tier_models = {}
+        for tier in ModelTier:
+            capability = self._capabilities.resolve_tier(Workflow.TEXT_TO_IMAGE, tier)
+            if capability is None:
+                segments[tier] = TierSegment(visible=False, enabled=False)
+            elif capability.model_id in available:
+                segments[tier] = TierSegment(
+                    visible=True, enabled=True, model_id=capability.model_id
+                )
+                self._tier_models[tier] = capability.model_id
             else:
-                label = f"{entry.model_id}（未配置）"
-                enabled = False
-            self._model_combo.addItem(label, entry.model_id)
-            index = self._model_combo.count() - 1
-            if not enabled:
-                model = cast(QStandardItemModel, self._model_combo.model())
-                model.item(index).setEnabled(False)
-            else:
-                enabled_indices.append(index)
-        self._has_configured_models = bool(enabled_indices)
-        if isinstance(selected_id, str):
-            for index in range(self._model_combo.count()):
-                if self._model_combo.itemData(index) == selected_id:
-                    self._model_combo.setCurrentIndex(index)
-                    break
-        elif enabled_indices:
-            self._model_combo.setCurrentIndex(enabled_indices[0])
-        self._model_combo.blockSignals(False)
-        self._on_model_changed(self._model_combo.currentIndex())
+                segments[tier] = TierSegment(
+                    visible=True,
+                    enabled=False,
+                    reason="网关当前未提供该档模型，暂时无法使用",
+                )
+        self._tier_switch.apply(segments)
+        self._restore_tier_selection()
+        self._has_configured_models = bool(self._tier_models)
+        self._apply_current_tier()
         self._update_submit_state()
 
-    @Slot(int)
-    def _on_model_changed(self, index: int) -> None:
-        capability = self._capabilities.capability(self._model_combo.itemData(index))
+    def _restore_tier_selection(self) -> None:
+        """优先持久化档位（用户的真实选择），其次当前选择，最后回退旗舰档。"""
+        persisted = self._settings.selected_tier(Workflow.TEXT_TO_IMAGE)
+        candidates = (persisted, self._selected_tier, *ModelTier)
+        for candidate in candidates:
+            if candidate is not None and candidate in self._tier_models:
+                self._selected_tier = candidate
+                break
+        else:
+            self._selected_tier = None
+        self._tier_switch.select(self._selected_tier)
+
+    def _current_model_id(self) -> str | None:
+        """当前选中档位解析到的模型 ID；已提交任务按此 ID 执行。"""
+        if self._selected_tier is None:
+            return None
+        return self._tier_models.get(self._selected_tier)
+
+    @Slot(ModelTier)
+    def _on_tier_changed(self, tier: ModelTier) -> None:
+        self._selected_tier = tier
+        self._settings.save_selected_tier(Workflow.TEXT_TO_IMAGE, tier)
+        self._apply_current_tier()
+
+    def _apply_current_tier(self) -> None:
+        model_id = self._current_model_id()
+        capability = (
+            self._capabilities.capability(model_id) if model_id is not None else None
+        )
         text = (
             capability.for_workflow(Workflow.TEXT_TO_IMAGE)
             if capability is not None
@@ -499,7 +520,7 @@ class TextToImagePage(QWidget):
                 size_width, size_height = preset_size
         return TextToImageDraft(
             prompt=self._prompt.toPlainText(),
-            model_id=self._model_combo.currentData(),
+            model_id=self._current_model_id(),
             negative_prompt=self._negative_prompt.toPlainText() or None,
             size_mode=mode,
             size_width=size_width,
@@ -531,7 +552,7 @@ class TextToImagePage(QWidget):
             self._submit.setEnabled(False)
             return
         if not self._has_configured_models:
-            self._validation_label.setText("没有可用的已配置模型，无法提交")
+            self._validation_label.setText("没有可用的上架档位，无法提交")
             self._submit.setEnabled(False)
             return
         draft = self._read_draft()

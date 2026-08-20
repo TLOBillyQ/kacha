@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
 import threading
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from ugc_image_tool.capabilities import ModelTier, Workflow
 from ugc_image_tool.discovery import GatewayError, GatewayErrorCategory, ModelCache, ModelDiscovery
 from ugc_image_tool.generation import (
     GatewayGenerationResult,
@@ -206,6 +208,116 @@ class ApplicationServicesTests(unittest.TestCase):
             self.assertIsNotNone(reason)
             assert reason is not None
             self.assertIn("离线", reason)
+            services.close()
+
+
+class CapabilityOverrideWiringTests(unittest.TestCase):
+    """启动时把能力覆盖文件接线到合并视图；无效覆盖整份拒绝并回退内置表。"""
+
+    def _write_override(self, directory: Path, models: list[dict]) -> None:
+        (directory / "capability-override.json").write_text(
+            json.dumps({"schema_version": 2, "models": models}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+    def _z_image_turbo_entry(self, **extra) -> dict:
+        entry = {
+            "model_id": "z-image-turbo",
+            "display_name": "快速写实文生图",
+            "workflows": [
+                {
+                    "workflow": "text_to_image",
+                    "supports_negative_prompt": False,
+                    "min_images": 1,
+                    "max_images": 1,
+                    "size": {"auto_allowed": True, "presets": [[1024, 1024]]},
+                }
+            ],
+        }
+        entry.update(extra)
+        return entry
+
+    def test_override_file_in_user_data_dir_is_applied_at_startup(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            user_data = root / "user-data"
+            user_data.mkdir()
+            self._write_override(
+                user_data, [self._z_image_turbo_entry(tier="economy")]
+            )
+
+            services = ApplicationServices(
+                user_data_dir=user_data,
+                output_root=root / "output",
+                gateway=FakeGateway(),
+                credentials=MemoryCredentialService(),
+            )
+
+            shelved = services.capabilities.resolve_tier(
+                Workflow.TEXT_TO_IMAGE, ModelTier.ECONOMY
+            )
+            self.assertIsNotNone(shelved)
+            assert shelved is not None
+            self.assertEqual("z-image-turbo", shelved.model_id)
+            self.assertIn("+override-", services.capabilities.version)
+            services.close()
+
+    def test_invalid_override_falls_back_to_builtin_table(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            user_data = root / "user-data"
+            user_data.mkdir()
+            (user_data / "capability-override.json").write_text(
+                "{broken json", encoding="utf-8"
+            )
+
+            services = ApplicationServices(
+                user_data_dir=user_data,
+                output_root=root / "output",
+                gateway=FakeGateway(),
+                credentials=MemoryCredentialService(),
+            )
+
+            flagship = services.capabilities.resolve_tier(
+                Workflow.TEXT_TO_IMAGE, ModelTier.FLAGSHIP
+            )
+            self.assertIsNotNone(flagship)
+            assert flagship is not None
+            self.assertEqual("qwen-image-3.0-pro", flagship.model_id)
+            services.close()
+
+    def test_conflicting_override_falls_back_to_builtin_table(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            user_data = root / "user-data"
+            user_data.mkdir()
+            challenger = {
+                "model_id": "flag-challenger",
+                "display_name": "旗舰挑战者",
+                "tier": "flagship",
+                "workflows": [
+                    {
+                        "workflow": "text_to_image",
+                        "supports_negative_prompt": False,
+                        "min_images": 1,
+                        "max_images": 1,
+                        "size": {"auto_allowed": True, "presets": [[1024, 1024]]},
+                    }
+                ],
+            }
+            self._write_override(user_data, [challenger])
+
+            services = ApplicationServices(
+                user_data_dir=user_data,
+                output_root=root / "output",
+                gateway=FakeGateway(),
+                credentials=MemoryCredentialService(),
+            )
+
+            self.assertIsNone(
+                services.capabilities.capability("flag-challenger"),
+                "整份覆盖被拒绝，冲突模型不得生效",
+            )
             services.close()
 
 

@@ -10,6 +10,7 @@ from ugc_image_tool.capabilities import (
     CapabilityOverrideError,
     CapabilityRegistry,
     ModelCapability,
+    ModelTier,
     ReferenceLimits,
     SizeRule,
     Workflow,
@@ -277,6 +278,100 @@ class OverrideValidationTests(unittest.TestCase):
         }
         reasons = reasons_for([entry])
         self.assertGreaterEqual(len(reasons), 2)
+
+
+class OverrideTierTests(unittest.TestCase):
+    def test_entry_without_tier_stays_unshelved(self) -> None:
+        with TemporaryDirectory() as directory:
+            table = load_override_file(write_override(directory, [Z_IMAGE_TURBO_ENTRY]))
+
+        self.assertIsNone(table["z-image-turbo"].tier)
+
+    def test_entry_with_tier_is_shelved(self) -> None:
+        entry = {**Z_IMAGE_TURBO_ENTRY, "tier": "economy"}
+        with TemporaryDirectory() as directory:
+            registry = CapabilityRegistry(write_override(directory, [entry]))
+
+        shelved = registry.resolve_tier(Workflow.TEXT_TO_IMAGE, ModelTier.ECONOMY)
+        self.assertIsNotNone(shelved)
+        assert shelved is not None
+        self.assertEqual("z-image-turbo", shelved.model_id)
+
+    def test_invalid_tier_value_rejects_whole_file(self) -> None:
+        entry = {**Z_IMAGE_TURBO_ENTRY, "tier": "premium"}
+        reasons = reasons_for([entry])
+        self.assertTrue(any("tier" in reason for reason in reasons))
+
+    def test_non_string_tier_rejects_whole_file(self) -> None:
+        entry = {**Z_IMAGE_TURBO_ENTRY, "tier": 1}
+        reasons = reasons_for([entry])
+        self.assertTrue(any("tier" in reason for reason in reasons))
+
+    def test_same_tier_and_workflow_conflict_rejects_whole_override(self) -> None:
+        challenger = {
+            "model_id": "qwen-image-challenger",
+            "display_name": "挑战者",
+            "tier": "flagship",
+            "workflows": [workflow_entry("text_to_image")],
+        }
+        with TemporaryDirectory() as directory:
+            path = write_override(directory, [challenger])
+
+            with self.assertRaises(CapabilityOverrideError) as raised:
+                CapabilityRegistry(path)
+
+        self.assertTrue(any("旗舰" in reason or "flagship" in reason for reason in raised.exception.reasons))
+
+    def test_same_tier_different_workflows_is_allowed(self) -> None:
+        text_only = {
+            "model_id": "text-model",
+            "display_name": "文生图模型",
+            "tier": "economy",
+            "workflows": [workflow_entry("text_to_image")],
+        }
+        edit_only = {
+            "model_id": "edit-model",
+            "display_name": "编辑模型",
+            "tier": "economy",
+            "workflows": [workflow_entry("image_edit")],
+        }
+        with TemporaryDirectory() as directory:
+            registry = CapabilityRegistry(write_override(directory, [text_only, edit_only]))
+
+        self.assertEqual(
+            "text-model",
+            registry.resolve_tier(Workflow.TEXT_TO_IMAGE, ModelTier.ECONOMY).model_id,  # type: ignore[union-attr]
+        )
+        self.assertEqual(
+            "edit-model",
+            registry.resolve_tier(Workflow.IMAGE_EDIT, ModelTier.ECONOMY).model_id,  # type: ignore[union-attr]
+        )
+
+    def test_override_can_unshelf_builtin_model_by_omitting_tier(self) -> None:
+        with TemporaryDirectory() as directory:
+            registry = CapabilityRegistry(write_override(directory, [QWEN_ENTRY]))
+
+        self.assertIsNone(registry.resolve_tier(Workflow.TEXT_TO_IMAGE, ModelTier.FLAGSHIP))
+        self.assertEqual((), registry.shelved_tiers(Workflow.IMAGE_EDIT))
+
+    def test_shelved_tiers_follows_flagship_then_economy_order(self) -> None:
+        flagship = {**Z_IMAGE_TURBO_ENTRY, "tier": "flagship"}
+        economy = {
+            "model_id": "economy-model",
+            "display_name": "经济模型",
+            "tier": "economy",
+            "workflows": [workflow_entry("text_to_image")],
+        }
+        unshelf_pro = {**QWEN_ENTRY}  # 不带 tier，下架内置旗舰避免冲突
+        with TemporaryDirectory() as directory:
+            registry = CapabilityRegistry(
+                write_override(directory, [unshelf_pro, flagship, economy])
+            )
+
+        self.assertEqual(
+            (ModelTier.FLAGSHIP, ModelTier.ECONOMY),
+            registry.shelved_tiers(Workflow.TEXT_TO_IMAGE),
+        )
 
 
 class ZImageTurboConstraintTests(unittest.TestCase):

@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ...capabilities import Workflow
+from ...capabilities import ModelTier, Workflow
 from ...generation import ImageEditDraft, SizeMode
 from ...references import inspect_reference_image
 from ...services import ApplicationServices
@@ -35,6 +35,7 @@ from ..presentation import (
     combo_preset_size,
     combo_size_mode,
 )
+from ..tier_switch import TierSegment, TierSwitch
 
 
 class _ReferenceListWidget(QListWidget):
@@ -74,14 +75,16 @@ class ImageEditPage(QWidget):
         self._capabilities = services.capabilities
         self._application = services.generation
         self._has_edit_models = False
+        self._selected_tier: ModelTier | None = None
+        self._tier_models: dict[ModelTier, str] = {}
         self._edit_max_references = 0
         self._output_error: str | None = None
         self._build_edit_form()
         self.refresh_output_state()
 
     def _build_edit_form(self) -> None:
-        self._edit_model_combo = QComboBox()
-        self._edit_model_combo.currentIndexChanged.connect(self._on_edit_model_changed)
+        self._tier_switch = TierSwitch()
+        self._tier_switch.tier_changed.connect(self._on_tier_changed)
         self._edit_prompt = QTextEdit()
         self._edit_prompt.setPlaceholderText("输入正向提示词")
         self._edit_negative_prompt = QTextEdit()
@@ -155,8 +158,8 @@ class ImageEditPage(QWidget):
 
         model_row = QHBoxLayout()
         model_row.setSpacing(UI_SPACING)
-        model_row.addWidget(QLabel("模型"))
-        model_row.addWidget(self._edit_model_combo, 1)
+        model_row.addWidget(QLabel("模型档位"))
+        model_row.addWidget(self._tier_switch, 1)
         model_row.addWidget(QLabel("尺寸"))
         model_row.addWidget(self._edit_size_combo, 1)
         model_row.addWidget(QLabel("宽"))
@@ -211,31 +214,60 @@ class ImageEditPage(QWidget):
         self.setLayout(layout)
 
     def set_models(self, gateway_model_ids: tuple[str, ...]) -> None:
-        selected_id = self._edit_model_combo.currentData()
-        self._edit_model_combo.blockSignals(True)
-        self._edit_model_combo.clear()
-        added = 0
-        for entry in self._capabilities.merge(gateway_model_ids):
-            capability = entry.capability
-            if capability is None or Workflow.IMAGE_EDIT not in capability.workflows:
-                continue
-            self._edit_model_combo.addItem(
-                f"{entry.model_id}（{capability.display_name}）", entry.model_id
-            )
-            added += 1
-        self._has_edit_models = added > 0
-        if isinstance(selected_id, str):
-            for index in range(self._edit_model_combo.count()):
-                if self._edit_model_combo.itemData(index) == selected_id:
-                    self._edit_model_combo.setCurrentIndex(index)
-                    break
-        self._edit_model_combo.blockSignals(False)
-        self._on_edit_model_changed(self._edit_model_combo.currentIndex())
+        """按上架档位刷新分段开关；不支持图片编辑的档位不出现。"""
+        available = set(gateway_model_ids)
+        segments: dict[ModelTier, TierSegment] = {}
+        self._tier_models = {}
+        for tier in ModelTier:
+            capability = self._capabilities.resolve_tier(Workflow.IMAGE_EDIT, tier)
+            if capability is None:
+                segments[tier] = TierSegment(visible=False, enabled=False)
+            elif capability.model_id in available:
+                segments[tier] = TierSegment(
+                    visible=True, enabled=True, model_id=capability.model_id
+                )
+                self._tier_models[tier] = capability.model_id
+            else:
+                segments[tier] = TierSegment(
+                    visible=True,
+                    enabled=False,
+                    reason="网关当前未提供该档模型，暂时无法使用",
+                )
+        self._tier_switch.apply(segments)
+        self._restore_tier_selection()
+        self._has_edit_models = bool(self._tier_models)
+        self._apply_current_tier()
         self._update_submit_state()
 
-    @Slot(int)
-    def _on_edit_model_changed(self, index: int) -> None:
-        capability = self._capabilities.capability(self._edit_model_combo.itemData(index))
+    def _restore_tier_selection(self) -> None:
+        """优先持久化档位（用户的真实选择），其次当前选择，最后回退旗舰档。"""
+        persisted = self._settings.selected_tier(Workflow.IMAGE_EDIT)
+        candidates = (persisted, self._selected_tier, *ModelTier)
+        for candidate in candidates:
+            if candidate is not None and candidate in self._tier_models:
+                self._selected_tier = candidate
+                break
+        else:
+            self._selected_tier = None
+        self._tier_switch.select(self._selected_tier)
+
+    def _current_model_id(self) -> str | None:
+        """当前选中档位解析到的模型 ID；已提交任务按此 ID 执行。"""
+        if self._selected_tier is None:
+            return None
+        return self._tier_models.get(self._selected_tier)
+
+    @Slot(ModelTier)
+    def _on_tier_changed(self, tier: ModelTier) -> None:
+        self._selected_tier = tier
+        self._settings.save_selected_tier(Workflow.IMAGE_EDIT, tier)
+        self._apply_current_tier()
+
+    def _apply_current_tier(self) -> None:
+        model_id = self._current_model_id()
+        capability = (
+            self._capabilities.capability(model_id) if model_id is not None else None
+        )
         edit = (
             capability.for_workflow(Workflow.IMAGE_EDIT)
             if capability is not None
@@ -350,7 +382,7 @@ class ImageEditPage(QWidget):
                 ImageEditDraft(
                     prompt=self._edit_prompt.toPlainText(),
                     negative_prompt=self._edit_negative_prompt.toPlainText() or None,
-                    model_id=self._edit_model_combo.currentData(),
+                    model_id=self._current_model_id(),
                     size_mode=size_mode,
                     size_width=size_width,
                     size_height=size_height,

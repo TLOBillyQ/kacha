@@ -7,6 +7,7 @@ import unittest
 from unittest import mock
 
 from ugc_image_tool.application import GenerationApplication
+from ugc_image_tool.capabilities import ModelTier, Workflow
 from ugc_image_tool.generation import GatewayGenerationResult, GeneratedImage, ImageEditDraft, TextToImageDraft
 from ugc_image_tool.settings import (
     DEFAULT_BASE_URL,
@@ -129,6 +130,71 @@ class SettingsValidationTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             path = Path(directory) / "settings.json"
             path.write_text('{"schema_version": 999}', encoding="utf-8")
+            with self.assertRaises(SettingsStoreError):
+                SettingsStore(Path(directory))
+
+
+class SelectedTierPersistenceTests(unittest.TestCase):
+    """已选档位按工作流持久化；只存档位不存模型 ID。"""
+
+    def test_selected_tier_defaults_to_flagship_without_settings_file(self) -> None:
+        with TemporaryDirectory() as directory:
+            store = SettingsStore(Path(directory))
+
+            self.assertEqual(ModelTier.FLAGSHIP, store.selected_tier(Workflow.TEXT_TO_IMAGE))
+            self.assertEqual(ModelTier.FLAGSHIP, store.selected_tier(Workflow.IMAGE_EDIT))
+
+    def test_selected_tier_persists_per_workflow_round_trip(self) -> None:
+        with TemporaryDirectory() as directory:
+            store = SettingsStore(Path(directory))
+            store.save_selected_tier(Workflow.TEXT_TO_IMAGE, ModelTier.ECONOMY)
+
+            reloaded = SettingsStore(Path(directory))
+
+            self.assertEqual(ModelTier.ECONOMY, reloaded.selected_tier(Workflow.TEXT_TO_IMAGE))
+            self.assertEqual(ModelTier.FLAGSHIP, reloaded.selected_tier(Workflow.IMAGE_EDIT))
+            persisted = (Path(directory) / "settings.json").read_text(encoding="utf-8")
+            self.assertNotIn("qwen-image", persisted)
+
+    def test_old_settings_file_without_selected_tiers_stays_compatible(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.json"
+            path.write_text(
+                '{"schema_version": 1, "base_url": "http://lzxsvn:3001"}',
+                encoding="utf-8",
+            )
+
+            store = SettingsStore(Path(directory))
+
+            self.assertEqual(ModelTier.FLAGSHIP, store.selected_tier(Workflow.TEXT_TO_IMAGE))
+
+    def test_invalid_tier_value_rejects_whole_settings_file(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.json"
+            path.write_text(
+                '{"schema_version": 1, "selected_tiers": {"text_to_image": "premium"}}',
+                encoding="utf-8",
+            )
+            with self.assertRaises(SettingsStoreError):
+                SettingsStore(Path(directory))
+
+    def test_unknown_workflow_key_rejects_whole_settings_file(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.json"
+            path.write_text(
+                '{"schema_version": 1, "selected_tiers": {"video": "flagship"}}',
+                encoding="utf-8",
+            )
+            with self.assertRaises(SettingsStoreError):
+                SettingsStore(Path(directory))
+
+    def test_non_object_selected_tiers_rejects_whole_settings_file(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.json"
+            path.write_text(
+                '{"schema_version": 1, "selected_tiers": "economy"}',
+                encoding="utf-8",
+            )
             with self.assertRaises(SettingsStoreError):
                 SettingsStore(Path(directory))
 
