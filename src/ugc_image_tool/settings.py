@@ -10,6 +10,7 @@ from __future__ import annotations
 import ctypes
 import json
 import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
@@ -29,7 +30,9 @@ CREDENTIAL_SERVICE_NAME = "ugc-image-tool"
 
 def default_user_data_dir() -> Path:
     """当前用户的 LocalAppData/ugc-image-tool/，程序目录保持只读。"""
-    if os.name == "nt":
+    # 用 sys.platform 而非 os.name 判断，测试可以在非 Windows 开发机上模拟
+    # Windows 分支而不影响 pathlib 对具体路径类的选择。
+    if sys.platform == "win32":
         root = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
     else:
         root = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share")

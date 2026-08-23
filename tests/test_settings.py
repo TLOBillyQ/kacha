@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -43,13 +44,29 @@ class SettingsDefaultsTests(unittest.TestCase):
         )
 
     def test_default_user_data_dir_uses_localappdata(self) -> None:
-        with mock.patch.dict(
-            os.environ,
-            {"LOCALAPPDATA": "C:\\Users\\tester\\AppData\\Local"},
-            clear=False,
+        # 模拟 sys.platform 而不是 os.name：后者在运行时反转会让 pathlib
+        # 尝试实例化 WindowsPath，在非 Windows 开发机上直接抛异常。
+        with (
+            mock.patch.object(sys, "platform", "win32"),
+            mock.patch.dict(
+                os.environ,
+                {"LOCALAPPDATA": "C:\\Users\\tester\\AppData\\Local"},
+                clear=False,
+            ),
         ):
             self.assertEqual(
                 Path("C:\\Users\\tester\\AppData\\Local") / "ugc-image-tool",
+                default_user_data_dir(),
+            )
+
+    def test_default_user_data_dir_falls_back_to_appdata_local(self) -> None:
+        with (
+            mock.patch.object(sys, "platform", "win32"),
+            mock.patch.dict(os.environ, clear=False),
+        ):
+            os.environ.pop("LOCALAPPDATA", None)
+            self.assertEqual(
+                Path.home() / "AppData" / "Local" / "ugc-image-tool",
                 default_user_data_dir(),
             )
 
