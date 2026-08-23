@@ -58,7 +58,7 @@ class BuiltinCapabilityTableTests(unittest.TestCase):
         self.assertEqual(1 / 8, size.min_aspect_ratio)
         self.assertEqual(8.0, size.max_aspect_ratio)
 
-    def test_qwen_image_edit_capability_matches_verified_contract(self) -> None:
+    def test_qwen_image_edit_capability(self) -> None:
         edit = BUILTIN_CAPABILITIES["qwen-image-3.0-pro"].for_workflow(
             Workflow.IMAGE_EDIT
         )
@@ -66,8 +66,9 @@ class BuiltinCapabilityTableTests(unittest.TestCase):
         self.assertIsNotNone(edit)
         assert edit is not None
         self.assertEqual(Workflow.IMAGE_EDIT, edit.workflow)
-        # 已实测契约：无负向提示词、单张出图、仅模型自动决定尺寸、1 张参考图。
-        self.assertFalse(edit.supports_negative_prompt)
+        # 已实测契约：单张出图、仅模型自动决定尺寸、1 张参考图；
+        # 负向提示词按文生图同名字段开放试用，尚无编辑场景实测夹具。
+        self.assertTrue(edit.supports_negative_prompt)
         self.assertEqual((1, 1), (edit.min_images, edit.max_images))
         self.assertEqual((), edit.extra_params)
         self.assertTrue(edit.size.auto_allowed)

@@ -82,6 +82,31 @@ class ImageEditTests(unittest.TestCase):
             self.assertEqual("image_edit", record["workflow"])
             self.assertEqual(["reference-1.png"], record["reference_files"])
 
+    def test_edit_submission_forwards_negative_prompt(self) -> None:
+        with TemporaryDirectory() as directory:
+            source = Path(directory) / "reference.png"
+            source.write_bytes(PNG_1X1)
+            gateway = EditGateway()
+            application = GenerationApplication(
+                gateway=gateway,
+                results=FileResultRepository(Path(directory) / "output"),
+            )
+            try:
+                task_id = application.submit_edit(
+                    ImageEditDraft(
+                        prompt="保留构图",
+                        model_id="qwen-image-3.0-pro",
+                        negative_prompt="不要模糊",
+                        reference_paths=(source,),
+                    )
+                )
+                task = application.wait_for(task_id, timeout=1)
+            finally:
+                application.close()
+
+            self.assertEqual(GenerationStatus.SUCCEEDED, task.status)
+            self.assertEqual("不要模糊", gateway.requests[0].negative_prompt)
+
     def test_image_edit_only_uses_models_with_image_edit_capability(self) -> None:
         with self.assertRaises(ValueError) as raised:
             from ugc_image_tool.application import GenerationApplication
@@ -143,10 +168,39 @@ class EditContractEnforcementTests(unittest.TestCase):
             self._assert_no_side_effects(application, output)
 
     def test_negative_prompt_rejected_before_snapshot_or_task(self) -> None:
+        """能力表收紧（如 override 关闭负向提示词）时应用层拒绝且无副作用。"""
+        from ugc_image_tool.capabilities import CapabilityRegistry
+
+        override = {
+            "schema_version": 2,
+            "models": [
+                {
+                    "model_id": "qwen-image-3.0-pro",
+                    "display_name": "Qwen Image 3.0",
+                    "workflows": [
+                        {
+                            "workflow": "image_edit",
+                            "supports_negative_prompt": False,
+                            "min_images": 1,
+                            "max_images": 1,
+                            "size": {"auto_allowed": True, "presets": []},
+                            "reference_limits": {"min_references": 1, "max_references": 1},
+                        }
+                    ],
+                }
+            ],
+        }
         with TemporaryDirectory() as directory:
             root = Path(directory)
+            override_path = root / "override.json"
+            override_path.write_text(json.dumps(override, ensure_ascii=False), encoding="utf-8")
             output = root / "output"
-            application = self._application(output)
+            application = GenerationApplication(
+                gateway=EditGateway(),
+                results=FileResultRepository(output),
+                capabilities=CapabilityRegistry(override_path),
+            )
+            self.addCleanup(application.close)
             reference = self._write_png(root, "reference.png")
 
             with self.assertRaises(ValueError) as raised:

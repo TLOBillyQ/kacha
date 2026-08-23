@@ -247,15 +247,51 @@ assert not page._delete_preset.isHidden()
         self.run_qt_case(
             """
 page.set_models(("qwen-image-3.0-pro",))
-assert not page._negative_prompt_group.isHidden()
-assert not page._negative_prompt_group.isChecked()
-assert page._negative_prompt.isHidden()
+assert not page._negative_prompt_check.isHidden()
+assert not page._negative_prompt_check.isChecked()
+assert page._negative_prompt_group.isHidden()
 
-page._negative_prompt_group.setChecked(True)
-assert not page._negative_prompt.isHidden()
+page._negative_prompt_check.setChecked(True)
+assert not page._negative_prompt_group.isHidden()
 
 page.set_models(("unknown-model",))
+assert page._negative_prompt_check.isHidden()
 assert page._negative_prompt_group.isHidden()
+"""
+        )
+
+    def test_unchecked_negative_prompt_is_kept_but_not_submitted(self) -> None:
+        self.run_qt_case(
+            """
+page.set_models(("qwen-image-3.0-pro",))
+page._negative_prompt.setPlainText("模糊，低清晰度")
+assert page._read_draft().negative_prompt is None
+
+page._negative_prompt_check.setChecked(True)
+assert page._read_draft().negative_prompt == "模糊，低清晰度"
+
+page._negative_prompt_check.setChecked(False)
+assert page._read_draft().negative_prompt is None
+assert page._negative_prompt.toPlainText() == "模糊，低清晰度"
+"""
+        )
+
+    def test_negative_prompt_checked_state_is_restored_on_new_page(self) -> None:
+        self.run_qt_case(
+            """
+from ugc_image_tool.capabilities import Workflow
+
+page._negative_prompt_check.setChecked(True)
+assert services.settings.negative_prompt_enabled(Workflow.TEXT_TO_IMAGE)
+
+second = TextToImagePage(services)
+assert second._negative_prompt_check.isChecked()
+second.close()
+
+services.settings.save_negative_prompt_enabled(Workflow.TEXT_TO_IMAGE, False)
+third = TextToImagePage(services)
+assert not third._negative_prompt_check.isChecked()
+third.close()
 """
         )
 

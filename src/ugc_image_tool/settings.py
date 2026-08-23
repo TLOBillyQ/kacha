@@ -69,6 +69,8 @@ class AppSettings:
     concurrency_limit: int
     # 各工作流已选档位；只存档位不存模型 ID，档内换模型后选择不变。
     selected_tiers: dict[Workflow, ModelTier] = field(default_factory=dict)
+    # 各工作流负向提示词面板是否勾选；只存勾选状态，不存提示词文本。
+    negative_prompt_enabled: dict[Workflow, bool] = field(default_factory=dict)
 
 
 class SettingsStoreError(ValueError):
@@ -127,6 +129,17 @@ class SettingsStore:
         tiers[workflow] = tier
         return self._update(selected_tiers=tiers)
 
+    def negative_prompt_enabled(self, workflow: Workflow) -> bool:
+        """该工作流负向提示词面板是否勾选；无记录时回退未勾选。"""
+        return self._settings.negative_prompt_enabled.get(workflow, False)
+
+    def save_negative_prompt_enabled(self, workflow: Workflow, enabled: bool) -> AppSettings:
+        if not isinstance(enabled, bool):
+            raise ValueError("负向提示词勾选状态必须是布尔值")
+        states = dict(self._settings.negative_prompt_enabled)
+        states[workflow] = enabled
+        return self._update(negative_prompt_enabled=states)
+
     def _update(
         self,
         *,
@@ -134,6 +147,7 @@ class SettingsStore:
         base_url: str | None = None,
         concurrency_limit: int | None = None,
         selected_tiers: dict[Workflow, ModelTier] | None = None,
+        negative_prompt_enabled: dict[Workflow, bool] | None = None,
     ) -> AppSettings:
         current = self._settings
         updated = AppSettings(
@@ -146,6 +160,11 @@ class SettingsStore:
             ),
             selected_tiers=(
                 selected_tiers if selected_tiers is not None else dict(current.selected_tiers)
+            ),
+            negative_prompt_enabled=(
+                negative_prompt_enabled
+                if negative_prompt_enabled is not None
+                else dict(current.negative_prompt_enabled)
             ),
         )
         self._persist(updated)
@@ -185,7 +204,16 @@ class SettingsStore:
             except (TypeError, ValueError) as error:
                 raise SettingsStoreError(f"设置文件的 concurrency_limit 无效：{error}") from error
         selected_tiers = self._parse_selected_tiers(raw.get("selected_tiers"))
-        return AppSettings(output_root, base_url, concurrency_limit, selected_tiers)
+        negative_prompt_enabled = self._parse_negative_prompt_enabled(
+            raw.get("negative_prompt_enabled")
+        )
+        return AppSettings(
+            output_root,
+            base_url,
+            concurrency_limit,
+            selected_tiers,
+            negative_prompt_enabled,
+        )
 
     def _parse_selected_tiers(self, raw_tiers: object) -> dict[Workflow, ModelTier]:
         """旧版本设置文件没有该字段，缺失时按空记录处理。"""
@@ -203,6 +231,27 @@ class SettingsStore:
                 ) from error
         return tiers
 
+    def _parse_negative_prompt_enabled(self, raw_states: object) -> dict[Workflow, bool]:
+        """旧版本设置文件没有该字段，缺失时按空记录处理。"""
+        if raw_states is None:
+            return {}
+        if not isinstance(raw_states, dict):
+            raise SettingsStoreError("设置文件的 negative_prompt_enabled 无效")
+        states: dict[Workflow, bool] = {}
+        for key, value in raw_states.items():
+            try:
+                workflow = Workflow(key)
+            except ValueError as error:
+                raise SettingsStoreError(
+                    f"设置文件的 negative_prompt_enabled 无效：{key!r}"
+                ) from error
+            if not isinstance(value, bool):
+                raise SettingsStoreError(
+                    f"设置文件的 negative_prompt_enabled 无效：{key!r}={value!r}"
+                )
+            states[workflow] = value
+        return states
+
     def _persist(self, settings: AppSettings) -> None:
         content = json.dumps(
             {
@@ -213,6 +262,10 @@ class SettingsStore:
                 "selected_tiers": {
                     workflow.value: tier.value
                     for workflow, tier in settings.selected_tiers.items()
+                },
+                "negative_prompt_enabled": {
+                    workflow.value: enabled
+                    for workflow, enabled in settings.negative_prompt_enabled.items()
                 },
             },
             ensure_ascii=False,
@@ -376,6 +429,12 @@ class SettingsApplication:
 
     def save_selected_tier(self, workflow: Workflow, tier: ModelTier) -> None:
         self._store.save_selected_tier(workflow, tier)
+
+    def negative_prompt_enabled(self, workflow: Workflow) -> bool:
+        return self._store.negative_prompt_enabled(workflow)
+
+    def save_negative_prompt_enabled(self, workflow: Workflow, enabled: bool) -> None:
+        self._store.save_negative_prompt_enabled(workflow, enabled)
 
     def output_directory_error(self) -> str | None:
         """返回阻止提交的可操作错误；输出目录可写时返回 None。"""

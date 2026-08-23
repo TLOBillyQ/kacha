@@ -216,6 +216,69 @@ class SelectedTierPersistenceTests(unittest.TestCase):
                 SettingsStore(Path(directory))
 
 
+class NegativePromptEnabledPersistenceTests(unittest.TestCase):
+    """负向提示词面板勾选状态按工作流持久化；只存状态不存文本。"""
+
+    def test_defaults_to_unchecked_without_settings_file(self) -> None:
+        with TemporaryDirectory() as directory:
+            store = SettingsStore(Path(directory))
+
+            self.assertFalse(store.negative_prompt_enabled(Workflow.TEXT_TO_IMAGE))
+            self.assertFalse(store.negative_prompt_enabled(Workflow.IMAGE_EDIT))
+
+    def test_persists_per_workflow_round_trip(self) -> None:
+        with TemporaryDirectory() as directory:
+            store = SettingsStore(Path(directory))
+            store.save_negative_prompt_enabled(Workflow.TEXT_TO_IMAGE, True)
+
+            reloaded = SettingsStore(Path(directory))
+
+            self.assertTrue(reloaded.negative_prompt_enabled(Workflow.TEXT_TO_IMAGE))
+            self.assertFalse(reloaded.negative_prompt_enabled(Workflow.IMAGE_EDIT))
+
+    def test_old_settings_file_without_field_stays_compatible(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.json"
+            path.write_text(
+                '{"schema_version": 1, "base_url": "http://lzxsvn:3001"}',
+                encoding="utf-8",
+            )
+
+            store = SettingsStore(Path(directory))
+
+            self.assertFalse(store.negative_prompt_enabled(Workflow.TEXT_TO_IMAGE))
+
+    def test_non_bool_value_rejects_whole_settings_file(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.json"
+            path.write_text(
+                '{"schema_version": 1, "negative_prompt_enabled": {"text_to_image": "yes"}}',
+                encoding="utf-8",
+            )
+            with self.assertRaises(SettingsStoreError):
+                SettingsStore(Path(directory))
+
+    def test_unknown_workflow_key_rejects_whole_settings_file(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.json"
+            path.write_text(
+                '{"schema_version": 1, "negative_prompt_enabled": {"video": true}}',
+                encoding="utf-8",
+            )
+            with self.assertRaises(SettingsStoreError):
+                SettingsStore(Path(directory))
+
+    def test_non_object_field_rejects_whole_settings_file(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.json"
+            path.write_text(
+                '{"schema_version": 1, "negative_prompt_enabled": true}',
+                encoding="utf-8",
+            )
+            with self.assertRaises(SettingsStoreError):
+                SettingsStore(Path(directory))
+
+
 class SettingsApplicationTests(unittest.TestCase):
     def test_api_key_is_kept_only_in_credential_service(self) -> None:
         with TemporaryDirectory() as directory:

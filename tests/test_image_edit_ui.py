@@ -106,16 +106,56 @@ assert page._edit_references.viewMode() == QListWidget.ViewMode.ListMode
     def test_negative_prompt_is_collapsed_and_capability_aware(self) -> None:
         self.run_qt_case(
             """
-assert not page._edit_negative_prompt_group.isChecked()
+assert not page._edit_negative_prompt_check.isChecked()
 assert page._edit_negative_prompt.isHidden()
 
-page._edit_negative_prompt_group.setVisible(True)
-page._edit_negative_prompt_group.setChecked(True)
+page._edit_negative_prompt_check.setChecked(True)
 assert not page._edit_negative_prompt.isHidden()
 
 page.set_models(("qwen-image-3.0-pro",))
-assert page._edit_negative_prompt_group.isHidden()
+assert not page._edit_negative_prompt_check.isHidden()
+assert not page._edit_negative_prompt.isHidden()
+
+page.set_models(("unknown-model",))
+assert page._edit_negative_prompt_check.isHidden()
 assert page._edit_negative_prompt.isHidden()
+"""
+        )
+
+    def test_unchecked_negative_prompt_is_kept_but_not_submitted(self) -> None:
+        self.run_qt_case(
+            """
+captured = {}
+page._application.submit_edit = lambda draft: captured.update(draft=draft)
+page._edit_negative_prompt.setPlainText("模糊，低清晰度")
+
+page._edit_negative_prompt_check.setChecked(True)
+page._submit_edit()
+assert captured["draft"].negative_prompt == "模糊，低清晰度"
+
+page._edit_negative_prompt_check.setChecked(False)
+page._submit_edit()
+assert captured["draft"].negative_prompt is None
+assert page._edit_negative_prompt.toPlainText() == "模糊，低清晰度"
+"""
+        )
+
+    def test_negative_prompt_checked_state_is_restored_on_new_page(self) -> None:
+        self.run_qt_case(
+            """
+from ugc_image_tool.capabilities import Workflow
+
+page._edit_negative_prompt_check.setChecked(True)
+assert services.settings.negative_prompt_enabled(Workflow.IMAGE_EDIT)
+
+second = ImageEditPage(services)
+assert second._edit_negative_prompt_check.isChecked()
+second.close()
+
+services.settings.save_negative_prompt_enabled(Workflow.IMAGE_EDIT, False)
+third = ImageEditPage(services)
+assert not third._edit_negative_prompt_check.isChecked()
+third.close()
 """
         )
 

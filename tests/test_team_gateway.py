@@ -372,18 +372,18 @@ class TeamGatewayImageEditTests(unittest.TestCase):
         self.assertIn("参考图", str(raised.exception))
         self.assertNotIn("request", captured, "不应发出未验证的请求")
 
-    def test_image_edit_rejects_unverified_negative_prompt(self) -> None:
+    def test_image_edit_sends_negative_prompt(self) -> None:
+        """负向提示词作为 multipart 字段随编辑请求发出（开放试用，待实测补夹具）。"""
         client, captured = replay("edit-success.json")
         with client:
             gateway = make_gateway(client)
-            with self.assertRaises(GatewayError) as raised:
-                gateway.generate_image_edit(
-                    self.edit_request(negative_prompt="模糊")
-                )
+            gateway.generate_image_edit(self.edit_request(negative_prompt="模糊，低清晰度"))
 
-        self.assertEqual(GatewayErrorCategory.REJECTED, raised.exception.category)
-        self.assertIn("负向提示词", str(raised.exception))
-        self.assertNotIn("request", captured)
+        parts = multipart_parts(
+            captured["request"].headers["Content-Type"],
+            captured["request"].content,
+        )
+        self.assertEqual("模糊，低清晰度".encode(), parts["negative_prompt"])
 
     def test_image_edit_rejects_unverified_image_count(self) -> None:
         client, captured = replay("edit-success.json")

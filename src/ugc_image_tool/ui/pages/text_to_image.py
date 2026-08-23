@@ -7,6 +7,7 @@ from typing import cast
 from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtGui import QStandardItemModel
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QGroupBox,
     QHBoxLayout,
@@ -75,9 +76,10 @@ class TextToImagePage(QWidget):
         self._negative_prompt = QTextEdit()
         self._negative_prompt.setPlaceholderText("输入负向提示词（可留空）")
         self._negative_prompt.textChanged.connect(self._on_prompt_changed)
+        # 勾选状态按工作流持久化：勾选才展开面板，未勾选只留一个勾选框。
+        self._negative_prompt_check = QCheckBox("负向提示词")
+        self._negative_prompt_check.toggled.connect(self._toggle_negative_prompt)
         self._negative_prompt_group = QGroupBox("负向提示词")
-        self._negative_prompt_group.setCheckable(True)
-        self._negative_prompt_group.setChecked(False)
         negative_layout = QVBoxLayout(self._negative_prompt_group)
         negative_layout.setContentsMargins(
             UI_CARD_MARGIN,
@@ -86,7 +88,7 @@ class TextToImagePage(QWidget):
             UI_CARD_MARGIN,
         )
         negative_layout.addWidget(self._negative_prompt)
-        self._negative_prompt_group.toggled.connect(self._toggle_negative_prompt)
+        self._negative_prompt_group.setVisible(False)
 
         self._preset_combo = QComboBox()
         self._preset_combo.setPlaceholderText("选择项目预设")
@@ -175,6 +177,7 @@ class TextToImagePage(QWidget):
         layout.addWidget(preset_group)
 
         prompt_split = QSplitter(Qt.Orientation.Horizontal)
+        self._prompt_split = prompt_split
         prompt_group = QGroupBox("正向提示词")
         prompt_layout = QVBoxLayout(prompt_group)
         prompt_layout.setContentsMargins(
@@ -187,6 +190,10 @@ class TextToImagePage(QWidget):
         prompt_split.addWidget(prompt_group)
         prompt_split.addWidget(self._negative_prompt_group)
         prompt_split.setSizes([2, 1])
+        negative_row = QHBoxLayout()
+        negative_row.addWidget(self._negative_prompt_check)
+        negative_row.addStretch(1)
+        layout.addLayout(negative_row)
         layout.addWidget(prompt_split, 1)
 
         layout.addWidget(QLabel("生成参数"))
@@ -194,6 +201,10 @@ class TextToImagePage(QWidget):
         layout.addWidget(self._validation_label)
         layout.addWidget(self._submit)
         self.setLayout(layout)
+        # 恢复持久化的勾选状态；放在 splitter 就绪之后，展开时才能恢复分栏比例。
+        self._negative_prompt_check.setChecked(
+            self._settings.negative_prompt_enabled(Workflow.TEXT_TO_IMAGE)
+        )
 
     # -- 项目预设 ------------------------------------------------------------
 
@@ -448,11 +459,12 @@ class TextToImagePage(QWidget):
             else None
         )
         supports_negative = text is not None and text.supports_negative_prompt
-        self._negative_prompt_group.setVisible(supports_negative)
-        if not supports_negative:
-            self._negative_prompt.setVisible(False)
-        else:
-            self._toggle_negative_prompt(self._negative_prompt_group.isChecked())
+        self._negative_prompt_check.setVisible(supports_negative)
+        # 只同步可见性；勾选状态由用户操作触发持久化，模型刷新不重复写设置。
+        show_negative = supports_negative and self._negative_prompt_check.isChecked()
+        self._negative_prompt_group.setVisible(show_negative)
+        if show_negative:
+            self._prompt_split.setSizes([2, 1])
         min_count = text.min_images if text is not None else 1
         max_count = text.max_images if text is not None else 1
         # 保留草稿出图数量：超出新模型范围时按边界显示，切回原模型后恢复。
@@ -469,7 +481,10 @@ class TextToImagePage(QWidget):
 
     @Slot(bool)
     def _toggle_negative_prompt(self, expanded: bool) -> None:
-        self._negative_prompt.setVisible(expanded)
+        self._negative_prompt_group.setVisible(expanded)
+        if expanded:
+            self._prompt_split.setSizes([2, 1])
+        self._settings.save_negative_prompt_enabled(Workflow.TEXT_TO_IMAGE, expanded)
 
     @Slot(int)
     def _on_count_changed(self, value: int) -> None:
@@ -521,7 +536,12 @@ class TextToImagePage(QWidget):
         return TextToImageDraft(
             prompt=self._prompt.toPlainText(),
             model_id=self._current_model_id(),
-            negative_prompt=self._negative_prompt.toPlainText() or None,
+            # 取消勾选后文本保留在输入框里但不发送，重新勾选即可找回。
+            negative_prompt=(
+                (self._negative_prompt.toPlainText() or None)
+                if self._negative_prompt_check.isChecked()
+                else None
+            ),
             size_mode=mode,
             size_width=size_width,
             size_height=size_height,

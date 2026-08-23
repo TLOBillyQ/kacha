@@ -21,6 +21,10 @@
     # 开发构建（不签名）
     .venv\Scripts\python.exe packaging/build_release.py --skip-sign
 
+构建默认把最新便携目录覆盖同步到 `Desktop\dev\ugc-image-tool\`，开发时直接双击
+运行（目标里的 exe 正在运行时需先关闭再构建）。正式发布或不需要本地副本时加
+`--skip-dev-deploy` 跳过。
+
     # 正式发布（团队证书）
     $env:UGC_IMAGE_TOOL_CERT = "C:\cert\team.pfx"
     $env:UGC_IMAGE_TOOL_CERT_PASSWORD = "***"

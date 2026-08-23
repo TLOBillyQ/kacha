@@ -149,10 +149,11 @@ QWEN_TEXT_WORKFLOW = WorkflowCapability(
 )
 
 # 图片编辑依据同一夹具的实测结果：仅验证过 1 张参考图、模型自动决定尺寸、
-# 单张出图且无负向提示词，其他组合未实测，不在内置能力中开放。
+# 单张出图，其他组合未实测，不在内置能力中开放。负向提示词按文生图实测的
+# 同名字段开放试用，尚无编辑场景的实测夹具，首次真实提交后应补录。
 QWEN_EDIT_WORKFLOW = WorkflowCapability(
     workflow=Workflow.IMAGE_EDIT,
-    supports_negative_prompt=False,
+    supports_negative_prompt=True,
     min_images=1,
     max_images=1,
     size=SizeRule(auto_allowed=True, presets=(), custom_size_allowed=False),

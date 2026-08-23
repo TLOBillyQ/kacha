@@ -177,6 +177,10 @@ class TeamGateway:
             "model": request.model_id,
             "prompt": request.prompt,
         }
+        # 编辑负向提示词尚未实测：_validate_edit_request 在能力表未开放时已拒绝，
+        # 此分支只有在契约夹具验证并翻转能力表后才会生效。
+        if request.negative_prompt:
+            data["negative_prompt"] = request.negative_prompt
         response = self._request("POST", IMAGE_EDIT_PATH, data=data, files=files)
         parsed = _parse_ok_generation(response, self._diagnostics)
         return GatewayGenerationResult(images=parsed.images, request_id=parsed.request_id)

@@ -222,6 +222,26 @@ def _build_info(
     }
 
 
+def _deploy_dev_copy(portable_dir: Path) -> Path:
+    """把最新便携目录整体覆盖到桌面 dev/ 下的固定目录，供开发直接双击运行。
+
+    固定名称不带版本号，每次构建后 dev/ 下永远是最新一份。目标里的 exe
+    正在运行时整目录无法删除，必须先关闭应用再重新构建。
+    """
+    target = Path.home() / "Desktop" / "dev" / ARCHIVE_BASE
+    if target.exists():
+        try:
+            shutil.rmtree(target)
+        except OSError as error:
+            raise SystemExit(
+                f"无法覆盖开发副本 {target}：{error}。请先关闭正在运行的 ugc-image-tool。"
+            ) from error
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(portable_dir, target)
+    print(f"[ok] 开发副本已覆盖：{target}")
+    return target
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="构建 UGC AI 生图工具 Windows x64 便携发布物"
@@ -244,6 +264,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--timestamp", default=DEFAULT_TIMESTAMP_URL, help="RFC3161 时间戳服务器")
     parser.add_argument("--signtool", default=None, help="signtool 路径；留空自动查找")
+    parser.add_argument(
+        "--skip-dev-deploy",
+        action="store_true",
+        help="跳过把最新便携目录覆盖同步到 Windows 桌面 dev/ 下",
+    )
     args = parser.parse_args(argv)
 
     version = _package_version(args.version)
@@ -294,11 +319,17 @@ def main(argv: list[str] | None = None) -> int:
             ]
         )
 
+    dev_copy: Path | None = None
+    if not args.skip_dev_deploy:
+        dev_copy = _deploy_dev_copy(portable_dir)
+
     print()
     print(f"发布目录：  {release_dir}")
     print(f"便携目录：  {portable_dir.name}")
     print(f"压缩包：    {zip_path.name}")
     print(f"校验值：    SHA256SUMS（SHA-256）")
+    if dev_copy is not None:
+        print(f"开发副本：  {dev_copy}")
     print(f"Exe 签名：  {signature_status}（signed={signed}）")
     if not signed:
         print(

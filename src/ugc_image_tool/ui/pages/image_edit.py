@@ -7,6 +7,7 @@ from pathlib import Path
 from PySide6.QtCore import QSize, Qt, Signal, Slot
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QFileDialog,
     QGroupBox,
@@ -89,21 +90,13 @@ class ImageEditPage(QWidget):
         self._edit_prompt.setPlaceholderText("输入正向提示词")
         self._edit_negative_prompt = QTextEdit()
         self._edit_negative_prompt.setPlaceholderText("输入负向提示词（可留空）")
-        self._edit_negative_prompt_group = QGroupBox("负向提示词")
-        self._edit_negative_prompt_group.setCheckable(True)
-        self._edit_negative_prompt_group.setChecked(False)
-        negative_layout = QVBoxLayout(self._edit_negative_prompt_group)
-        negative_layout.setContentsMargins(
-            UI_CARD_MARGIN,
-            UI_CARD_MARGIN,
-            UI_CARD_MARGIN,
-            UI_CARD_MARGIN,
-        )
-        negative_layout.addWidget(self._edit_negative_prompt)
-        self._edit_negative_prompt_group.toggled.connect(
-            self._toggle_negative_prompt
-        )
+        # 勾选状态按工作流持久化：勾选才展开输入区，未勾选只留一个勾选框。
+        self._edit_negative_prompt_check = QCheckBox("负向提示词")
+        self._edit_negative_prompt_check.toggled.connect(self._toggle_negative_prompt)
         self._edit_negative_prompt.setVisible(False)
+        self._edit_negative_prompt_check.setChecked(
+            self._settings.negative_prompt_enabled(Workflow.IMAGE_EDIT)
+        )
         self._edit_size_combo = QComboBox()
         self._edit_size_combo.currentIndexChanged.connect(self._on_edit_size_changed)
         self._edit_width_box = QSpinBox()
@@ -190,7 +183,8 @@ class ImageEditPage(QWidget):
         right_layout.setSpacing(UI_SPACING)
         right_layout.addLayout(model_row)
         right_layout.addWidget(prompt_group, 1)
-        right_layout.addWidget(self._edit_negative_prompt_group)
+        right_layout.addWidget(self._edit_negative_prompt_check)
+        right_layout.addWidget(self._edit_negative_prompt)
         right_layout.addWidget(self._edit_validation)
         right_layout.addLayout(controls)
 
@@ -274,13 +268,11 @@ class ImageEditPage(QWidget):
             else None
         )
         supports_negative = edit is not None and edit.supports_negative_prompt
-        self._edit_negative_prompt_group.setVisible(supports_negative)
-        if not supports_negative:
-            self._edit_negative_prompt.setVisible(False)
-        else:
-            self._toggle_negative_prompt(
-                self._edit_negative_prompt_group.isChecked()
-            )
+        self._edit_negative_prompt_check.setVisible(supports_negative)
+        # 只同步可见性；勾选状态由用户操作触发持久化，模型刷新不重复写设置。
+        self._edit_negative_prompt.setVisible(
+            supports_negative and self._edit_negative_prompt_check.isChecked()
+        )
         self._edit_max_references = (
             edit.reference_limits.max_references if edit is not None else 0
         )
@@ -315,6 +307,7 @@ class ImageEditPage(QWidget):
     @Slot(bool)
     def _toggle_negative_prompt(self, expanded: bool) -> None:
         self._edit_negative_prompt.setVisible(expanded)
+        self._settings.save_negative_prompt_enabled(Workflow.IMAGE_EDIT, expanded)
 
     @Slot()
     def _choose_edit_references(self) -> None:
@@ -381,7 +374,12 @@ class ImageEditPage(QWidget):
             self._application.submit_edit(
                 ImageEditDraft(
                     prompt=self._edit_prompt.toPlainText(),
-                    negative_prompt=self._edit_negative_prompt.toPlainText() or None,
+                    # 取消勾选后文本保留在输入框里但不发送，重新勾选即可找回。
+                    negative_prompt=(
+                        (self._edit_negative_prompt.toPlainText() or None)
+                        if self._edit_negative_prompt_check.isChecked()
+                        else None
+                    ),
                     model_id=self._current_model_id(),
                     size_mode=size_mode,
                     size_width=size_width,
