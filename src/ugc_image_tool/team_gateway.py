@@ -2,8 +2,9 @@
 
 路径、鉴权、载荷、参考图编码、响应与错误映射全部来自
 contracts/fixtures/2026-08-17-team-gateway 的脱敏实测夹具，不依据
-OpenAI 或 DashScope 文档猜测。生成请求不做自动重发；未实测的能力
-（多参考图、编辑侧负向提示词/尺寸/出图数量等）保持关闭并给出可操作提示。
+OpenAI 或 DashScope 文档猜测。生成请求不做自动重发；编辑载荷在网关
+边界按能力表的工作流约束做防御性校验，与应用层提交前校验读取同一份
+能力事实，避免规则漂移。
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from typing import Any
 
 import httpx
 
+from .capabilities import CapabilityRegistry, Workflow, WorkflowCapability
 from .diagnostics import DiagnosticSink
 from .discovery import (
     GatewayError,
@@ -26,6 +28,7 @@ from .generation import (
     GatewayGenerationResult,
     ImageEditRequest,
     SizeMode,
+    SizeSpec,
     TextToImageRequest,
 )
 from .settings import validate_base_url
@@ -76,10 +79,13 @@ class TeamGateway:
         *,
         client: httpx.Client | None = None,
         diagnostics: DiagnosticSink | None = None,
+        capabilities: CapabilityRegistry | None = None,
     ) -> None:
         self._base_url = validate_base_url(base_url)
         self._api_key = api_key
         self._diagnostics = diagnostics
+        # 与应用层共享同一份能力表实例；缺省回退内置能力表。
+        self._capabilities = capabilities or CapabilityRegistry()
         self._client = client or httpx.Client(
             timeout=httpx.Timeout(
                 connect=CONNECT_TIMEOUT_SECONDS,
@@ -158,6 +164,7 @@ class TeamGateway:
 
     def generate_image_edit(self, request: ImageEditRequest) -> GatewayGenerationResult:
         self._validate_edit_request(request)
+        # 能力表当前仅开放 1 张参考图；多参考图编码需新夹具实测后再扩展。
         reference = request.references[0]
         files = {
             "image": (
@@ -175,32 +182,54 @@ class TeamGateway:
         return GatewayGenerationResult(images=parsed.images, request_id=parsed.request_id)
 
     def _validate_edit_request(self, request: ImageEditRequest) -> None:
-        """守住网关边界：只有夹具验证的编辑载荷才允许发出。"""
-        if len(request.references) != 1:
+        """守住网关边界：载荷必须符合能力表中该模型的图片编辑约束。"""
+        capability = self._capabilities.workflow_capability(
+            request.model_id, Workflow.IMAGE_EDIT
+        )
+        if capability is None:
             raise GatewayError(
                 GatewayErrorCategory.REJECTED,
-                "图片编辑的多参考图编码未经契约验证，暂仅支持 1 张参考图",
+                f"能力表未开放模型 {request.model_id} 的图片编辑",
             )
-        if request.negative_prompt:
+        limits = capability.reference_limits
+        if not limits.min_references <= len(request.references) <= limits.max_references:
+            if limits.min_references == limits.max_references:
+                expected = f"参考图数量需为 {limits.min_references} 张"
+            else:
+                expected = (
+                    f"参考图数量需在 {limits.min_references}～{limits.max_references} 张之间"
+                )
             raise GatewayError(
                 GatewayErrorCategory.REJECTED,
-                "图片编辑的负向提示词字段未经契约验证，暂不支持",
+                f"图片编辑的{expected}，超出能力表中该模型已验证的范围",
             )
-        if request.size.mode is not SizeMode.AUTO:
+        if request.negative_prompt and not capability.supports_negative_prompt:
             raise GatewayError(
                 GatewayErrorCategory.REJECTED,
-                "图片编辑的尺寸字段未经契约验证，暂仅支持模型自动决定尺寸",
+                "该模型能力表的图片编辑未开放负向提示词",
             )
-        if request.image_count != 1:
+        size_error = _edit_size_error(request.size, capability)
+        if size_error is not None:
+            raise GatewayError(GatewayErrorCategory.REJECTED, size_error)
+        if not capability.min_images <= request.image_count <= capability.max_images:
+            if capability.min_images == capability.max_images:
+                expected_count = f"出图数量仅支持 {capability.min_images} 张"
+            else:
+                expected_count = (
+                    f"出图数量需在 {capability.min_images}～{capability.max_images} 之间"
+                )
             raise GatewayError(
                 GatewayErrorCategory.REJECTED,
-                "图片编辑的出图数量字段未经契约验证，暂仅支持单张出图",
+                f"图片编辑的{expected_count}，超出能力表中该模型已验证的范围",
             )
-        if request.params:
-            names = "、".join(key for key, _ in request.params)
+        unsupported = [
+            key for key, _ in request.params if key not in capability.extra_params
+        ]
+        if unsupported:
+            names = "、".join(unsupported)
             raise GatewayError(
                 GatewayErrorCategory.REJECTED,
-                f"图片编辑的模型专属参数（{names}）未经契约验证，暂不支持",
+                f"该模型能力表的图片编辑未开放模型专属参数（{names}）",
             )
 
     # -- 请求与错误映射 --------------------------------------------------------
@@ -245,6 +274,24 @@ class TeamGateway:
             [message] + [f"{key}={value}" for key, value in fields.items() if value is not None]
         )
         self._diagnostics.system(joined)
+
+
+def _edit_size_error(size: SizeSpec, capability: WorkflowCapability) -> str | None:
+    """按能力表的图片编辑尺寸规则校验；无错误时返回 None。"""
+    if size.mode is SizeMode.AUTO:
+        if capability.size.auto_allowed:
+            return None
+        return "该模型能力表的图片编辑未开放模型自动决定尺寸"
+    if size.width is None or size.height is None:
+        return "图片编辑的生成尺寸缺少宽高，载荷不完整"
+    rule = capability.size
+    if (size.width, size.height) in rule.presets:
+        return None
+    if rule.custom_size_allowed and not rule.custom_size_errors(
+        size.width, size.height
+    ):
+        return None
+    return "图片编辑的生成尺寸超出能力表中该模型已验证的范围"
 
 
 def _parse_ok_generation(

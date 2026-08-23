@@ -90,6 +90,7 @@ class ApplicationServices:
             self.settings.base_url,
             self.settings.api_key or "",
             diagnostics=self.diagnostics,
+            capabilities=self.capabilities,
         )
         self.results = results or FileResultRepository(
             self.settings.output_root,

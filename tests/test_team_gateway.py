@@ -4,12 +4,13 @@ import base64
 import json
 import unittest
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
 from urllib.parse import urlparse
 
 import httpx
 
-from ugc_image_tool.capabilities import CAPABILITY_TABLE_VERSION
+from ugc_image_tool.capabilities import CAPABILITY_TABLE_VERSION, CapabilityRegistry
 from ugc_image_tool.discovery import GatewayError, GatewayErrorCategory
 from ugc_image_tool.generation import (
     ImageEditRequest,
@@ -394,6 +395,65 @@ class TeamGatewayImageEditTests(unittest.TestCase):
         self.assertEqual(GatewayErrorCategory.REJECTED, raised.exception.category)
         self.assertIn("出图数量", str(raised.exception))
         self.assertNotIn("request", captured)
+
+    def test_image_edit_rejects_model_without_edit_capability(self) -> None:
+        client, captured = replay("edit-success.json")
+        with client:
+            gateway = make_gateway(client)
+            with self.assertRaises(GatewayError) as raised:
+                gateway.generate_image_edit(self.edit_request(model_id="unknown-model"))
+
+        self.assertEqual(GatewayErrorCategory.REJECTED, raised.exception.category)
+        self.assertIn("图片编辑", str(raised.exception))
+        self.assertNotIn("request", captured)
+
+    def test_image_edit_validation_follows_capability_table(self) -> None:
+        """能力表放宽参考图上限后，适配器不再防御性拒绝多参考图。"""
+        override = {
+            "schema_version": 2,
+            "models": [
+                {
+                    "model_id": "qwen-image-3.0-pro",
+                    "display_name": "Qwen Image 3.0",
+                    "workflows": [
+                        {
+                            "workflow": "image_edit",
+                            "supports_negative_prompt": False,
+                            "min_images": 1,
+                            "max_images": 1,
+                            "size": {
+                                "auto_allowed": True,
+                                "presets": [],
+                                "custom_size_allowed": False,
+                            },
+                            "reference_limits": {"min_references": 1, "max_references": 2},
+                        }
+                    ],
+                }
+            ],
+        }
+        client, captured = replay("edit-success.json")
+        second = ReferenceImage(
+            path=Path("reference-2.jpg"),
+            media_type="image/jpeg",
+            width=1,
+            height=1,
+            size_bytes=3,
+            content=b"\xff\xd8\xff",
+        )
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "override.json"
+            path.write_text(json.dumps(override, ensure_ascii=False), encoding="utf-8")
+            registry = CapabilityRegistry(path)
+            with client:
+                gateway = TeamGateway(
+                    "http://gateway.test", "test-key", client=client, capabilities=registry
+                )
+                gateway.generate_image_edit(
+                    self.edit_request(references=(self.reference(), second))
+                )
+
+        self.assertIn("request", captured, "能力表放宽后应放行请求")
 
 
 if __name__ == "__main__":
