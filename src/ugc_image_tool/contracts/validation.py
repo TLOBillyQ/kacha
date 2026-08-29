@@ -4,6 +4,7 @@ import json
 import re
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 INTERFACES = {
     "models": ("GET",),
@@ -40,7 +41,6 @@ SENSITIVE_KEYS = {
     "input_image",
     "reference_image",
 }
-REDACTED_VALUES = {"[REDACTED]", "[REDACTED_PROMPT]", "[REDACTED_IMAGE]"}
 BEARER_RE = re.compile(r"\bbearer\s+\S+", re.IGNORECASE)
 URL_RE = re.compile(r"https?://[^\s\"']+")
 
@@ -210,16 +210,30 @@ def _validate_image_edit_request_shape(interface: dict[str, Any], errors: list[s
         errors.append("图片编辑必须记录 request_shape.encoding（multipart/form-data 或 application/json）")
 
 
+def _is_redacted_marker(value: str) -> bool:
+    return value.startswith("[REDACTED") and value.endswith("]")
+
+
+def _is_example_invalid_url(value: str) -> bool:
+    if not value.startswith(("http://", "https://")):
+        return False
+    host = urlsplit(value).hostname or ""
+    return host == "example.invalid" or host.endswith(".example.invalid")
+
+
 def _is_redacted_value(value: Any) -> bool:
     if not isinstance(value, str):
         return False
-    # 空值、脱敏标记（含 data-URL 内嵌标记）与 example.invalid 占位 URL 均视为已脱敏
-    return (
-        not value
-        or value in REDACTED_VALUES
-        or "[REDACTED" in value
-        or "example.invalid" in value
-    )
+    # 空值、完整脱敏标记、data-URL 内嵌脱敏标记与 example.invalid 占位 URL 视为已脱敏；
+    # 脱敏标记必须是结构完整的（首尾包裹），example.invalid 必须是 URL 的 host 或其子域，
+    # 避免 "sk-live[REDACTED]"、真实 URL 借子串掩护半脱敏内容通过
+    if not value:
+        return True
+    if _is_redacted_marker(value):
+        return True
+    if value.startswith("data:") and ";base64," in value:
+        return _is_redacted_marker(value.rsplit(";base64,", 1)[1])
+    return _is_example_invalid_url(value)
 
 
 def _validate_sensitive_values(value: Any, path: str = "manifest") -> list[str]:
@@ -243,6 +257,6 @@ def _validate_sensitive_values(value: Any, path: str = "manifest") -> list[str]:
         for url in URL_RE.findall(value):
             if path == "manifest.gateway.base_url":
                 continue
-            if "example.invalid" not in url and "[REDACTED" not in url:
+            if not _is_example_invalid_url(url) and "[REDACTED" not in url:
                 errors.append(f"{path} 包含未脱敏 URL")
     return errors

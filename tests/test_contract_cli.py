@@ -204,6 +204,56 @@ class ContractCliTests(unittest.TestCase):
 
         self.assertEqual(0, result.returncode, result.stderr)
 
+    def test_partially_redacted_values_are_rejected(self) -> None:
+        cases = (
+            ("sk-live[REDACTED]", "脱敏标记必须结构完整，不能仅作子串出现"),
+            ("https://real-cdn.example.com/x?u=example.invalid", "example.invalid 必须是 URL 的 host"),
+        )
+        for value, summary in cases:
+            with self.subTest(value=value):
+                with tempfile.TemporaryDirectory() as directory:
+                    fixture_directory = Path(directory)
+                    exchange = {
+                        "request": {
+                            "method": "POST",
+                            "path": "/v1/images/edits",
+                            "headers": {"Authorization": "[REDACTED]"},
+                            "body": {"prompt": value},
+                        },
+                        "response": {"status": 200, "body": {}},
+                    }
+                    (fixture_directory / "edit.json").write_text(
+                        json.dumps(exchange, ensure_ascii=False), encoding="utf-8"
+                    )
+                    manifest = {
+                        "schema_version": 1,
+                        "verified_at": "2026-08-29T12:00:00Z",
+                        "interfaces": {
+                            "image_edit": {
+                                "path": "/v1/images/edits",
+                                "method": "POST",
+                                "exchanges": [{"evidence": "edit.json", "summary": summary}],
+                                "request_shape": {
+                                    "encoding": "application/json",
+                                    "input": {"messages": "image 项（data-URL）"},
+                                },
+                            }
+                        },
+                        "behaviors": {},
+                        "verified_models": ["verified-model"],
+                    }
+                    (fixture_directory / "manifest.json").write_text(
+                        json.dumps(manifest, ensure_ascii=False), encoding="utf-8"
+                    )
+
+                    result = subprocess.run(
+                        [sys.executable, "-m", "ugc_image_tool.contracts.cli", "validate", directory],
+                        check=False, capture_output=True, text=True, env={"PYTHONPATH": "src"},
+                    )
+
+                self.assertEqual(1, result.returncode, summary)
+                self.assertIn("脱敏", result.stderr)
+
     def test_exchange_evidence_outside_fixture_directory_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             fixture_directory = Path(directory)
