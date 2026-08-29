@@ -1,0 +1,85 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/v1/images/edits",
+    "headers": {
+      "Accept": "application/json",
+      "Authorization": "[REDACTED]",
+      "Content-Type": "application/json"
+    },
+    "body": {
+      "model": "qwen-image-3.0-pro",
+      "prompt": "[REDACTED_PROMPT]",
+      "parameters": {
+        "size": "1024*1024",
+        "n": 2,
+        "watermark": false
+      },
+      "input": {
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "image": "data:image/png;base64,[REDACTED_IMAGE]"
+              },
+              {
+                "image": "data:image/png;base64,[REDACTED_IMAGE]"
+              },
+              {
+                "text": "[REDACTED_PROMPT]"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json",
+      "X-Oneapi-Request-Id": "202608291323321438918008268d9d6RJdYHZ4p"
+    },
+    "body": {
+      "data": [
+        {
+          "url": "https://example.invalid/redacted",
+          "b64_json": "",
+          "revised_prompt": ""
+        }
+      ],
+      "created": 1788009812,
+      "metadata": {
+        "output": {
+          "choices": [
+            {
+              "finish_reason": "stop",
+              "message": {
+                "content": [
+                  {
+                    "image": "https://example.invalid/redacted-output-1"
+                  },
+                  {
+                    "image": "https://example.invalid/redacted-output-2"
+                  }
+                ],
+                "role": "assistant"
+              }
+            }
+          ],
+          "rewrite_status": "success"
+        },
+        "usage": {
+          "input_image_count": 2,
+          "input_image_type": "qima_input_1k",
+          "output_height": 1024,
+          "output_image_count": 2,
+          "output_image_type": "qima_output_1k",
+          "output_width": 1024
+        },
+        "request_id": "b085d8da-218e-93a0-8596-f438babc8f75"
+      }
+    }
+  }
+}

@@ -28,13 +28,15 @@ FIXTURES = (
     / "2026-08-17-team-gateway"
 )
 
+EDIT_JSON_FIXTURES = FIXTURES.parent / "2026-08-29-team-gateway-edit-json"
+
 PNG_1X1 = bytes.fromhex(
     "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c6360606060000000050001a5f645400000000049454e44ae426082"
 )
 
 
-def load_fixture(name: str) -> dict:
-    return json.loads((FIXTURES / name).read_text(encoding="utf-8"))
+def load_fixture(name: str, fixtures: Path = FIXTURES) -> dict:
+    return json.loads((fixtures / name).read_text(encoding="utf-8"))
 
 
 BASE64_PNG_1X1 = base64.b64encode(PNG_1X1).decode()
@@ -51,9 +53,9 @@ def _substitute_redacted(value: Any) -> Any:
     return value
 
 
-def replay(fixture_name: str):
+def replay(fixture_name: str, fixtures: Path = FIXTURES):
     """Build a client that replays one recorded exchange and captures the request."""
-    fixture = _substitute_redacted(load_fixture(fixture_name))
+    fixture = _substitute_redacted(load_fixture(fixture_name, fixtures))
     captured: dict[str, httpx.Request] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -71,27 +73,6 @@ def replay(fixture_name: str):
         )
 
     return httpx.Client(transport=httpx.MockTransport(handler)), captured
-
-
-def multipart_parts(content_type: str, content: bytes) -> dict[str, bytes]:
-    boundary = content_type.split("boundary=", 1)[1].strip().strip('"')
-    delimiter = b"--" + boundary.encode()
-    parts: dict[str, bytes] = {}
-    for block in content.split(delimiter):
-        block = block.strip(b"\r\n")
-        if not block or block == b"--":
-            continue
-        header_blob, _, body = block.partition(b"\r\n\r\n")
-        name: str | None = None
-        for line in header_blob.split(b"\r\n"):
-            if line.lower().startswith(b"content-disposition:"):
-                for item in line.decode(errors="replace").split(";"):
-                    item = item.strip()
-                    if item.startswith("name="):
-                        name = item[len("name="):].strip('"')
-        if name is not None:
-            parts[name] = body
-    return parts
 
 
 def text_request(**overrides) -> TextToImageRequest:
@@ -299,14 +280,24 @@ class TeamGatewayTextGenerationTests(unittest.TestCase):
 
 
 class TeamGatewayImageEditTests(unittest.TestCase):
-    def reference(self) -> ReferenceImage:
+    def reference(self, name: str = "reference-1.png") -> ReferenceImage:
         return ReferenceImage(
-            path=Path("reference-1.png"),
+            path=Path(name),
             media_type="image/png",
             width=1,
             height=1,
             size_bytes=len(PNG_1X1),
             content=PNG_1X1,
+        )
+
+    def second_reference(self) -> ReferenceImage:
+        return ReferenceImage(
+            path=Path("reference-2.jpg"),
+            media_type="image/jpeg",
+            width=1,
+            height=1,
+            size_bytes=3,
+            content=b"\xff\xd8\xff",
         )
 
     def edit_request(self, **overrides) -> ImageEditRequest:
@@ -319,8 +310,8 @@ class TeamGatewayImageEditTests(unittest.TestCase):
         fields.update(overrides)
         return ImageEditRequest(**fields)
 
-    def test_image_edit_encodes_reference_as_multipart_file_field(self) -> None:
-        client, captured = replay("edit-success.json")
+    def test_image_edit_encodes_reference_as_data_url_in_json(self) -> None:
+        client, captured = replay("edit-json-single.json", EDIT_JSON_FIXTURES)
         with client:
             gateway = make_gateway(client)
             result = gateway.generate_image_edit(self.edit_request())
@@ -328,17 +319,136 @@ class TeamGatewayImageEditTests(unittest.TestCase):
         request = captured["request"]
         self.assertEqual("POST", request.method)
         self.assertEqual("/v1/images/edits", request.url.path)
-        content_type = request.headers["Content-Type"]
-        self.assertTrue(content_type.startswith("multipart/form-data; boundary="))
-        parts = multipart_parts(content_type, request.content)
-        self.assertEqual(b"qwen-image-3.0-pro", parts["model"])
-        self.assertEqual("保留构图，把背景换成黄昏".encode(), parts["prompt"])
-        self.assertEqual(PNG_1X1, parts["image"])
+        self.assertEqual("application/json", request.headers["Content-Type"])
+        sent = json.loads(request.content)
+        self.assertEqual(
+            {
+                "model": "qwen-image-3.0-pro",
+                "prompt": "保留构图，把背景换成黄昏",
+                "input": {
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "image": "data:image/png;base64," + BASE64_PNG_1X1
+                                },
+                                {"text": "保留构图，把背景换成黄昏"},
+                            ],
+                        }
+                    ]
+                },
+            },
+            sent,
+        )
 
         self.assertEqual(1, len(result.images))
-        self.assertIsNotNone(result.images[0].url)
-        self.assertEqual(PNG_1X1, result.images[0].content)
-        self.assertEqual("202608171400344687536008268d9d6na0g2qsy", result.request_id)
+        self.assertEqual("https://example.invalid/redacted", result.images[0].url)
+        self.assertEqual(
+            "202608291322151070832008268d9d6NBC7O2lo", result.request_id
+        )
+
+    def test_image_edit_sends_star_size_count_and_multiple_references(self) -> None:
+        """多参考图按顺序进 input.messages；尺寸用星号格式，n 走 parameters。"""
+        client, captured = replay("edit-json-multi.json", EDIT_JSON_FIXTURES)
+        request_model = self.edit_request(
+            references=(self.reference(), self.second_reference()),
+            size=SizeSpec(SizeMode.PRESET, 1024, 1024),
+            image_count=2,
+        )
+        with client:
+            gateway = make_gateway(client)
+            result = gateway.generate_image_edit(request_model)
+
+        sent = json.loads(captured["request"].content)
+        self.assertEqual({"size": "1024*1024", "n": 2}, sent["parameters"])
+        content = sent["input"]["messages"][0]["content"]
+        self.assertEqual(
+            [
+                {"image": "data:image/png;base64," + BASE64_PNG_1X1},
+                {"image": "data:image/jpeg;base64,/9j/"},
+                {"text": request_model.prompt},
+            ],
+            content,
+        )
+        self.assertEqual(request_model.prompt, sent["prompt"])
+
+        # n=2 时顶层 data 仅 1 条（上游已知行为）；出图真源是 metadata.output.choices。
+        self.assertEqual(2, len(result.images))
+        self.assertEqual("https://example.invalid/redacted", result.images[0].url)
+        self.assertEqual(
+            "https://example.invalid/redacted-output-2", result.images[1].url
+        )
+        self.assertEqual(
+            "202608291323321438918008268d9d6RJdYHZ4p", result.request_id
+        )
+
+    def test_image_edit_minimal_body_omits_parameters(self) -> None:
+        """自动尺寸、单张出图时不发送 parameters（与文生图的最小载荷习惯一致）。"""
+        client, captured = replay("edit-json-single.json", EDIT_JSON_FIXTURES)
+        with client:
+            gateway = make_gateway(client)
+            gateway.generate_image_edit(self.edit_request())
+
+        sent = json.loads(captured["request"].content)
+        self.assertNotIn("parameters", sent)
+        self.assertNotIn("size", sent)
+        self.assertNotIn("n", sent)
+
+    def test_image_edit_merges_negative_prompt_into_prompt_text(self) -> None:
+        """input.negative_prompt 未实测；负向提示词并入主提示词文本发送。"""
+        client, captured = replay("edit-json-single.json", EDIT_JSON_FIXTURES)
+        with client:
+            gateway = make_gateway(client)
+            gateway.generate_image_edit(
+                self.edit_request(negative_prompt="模糊，低清晰度")
+            )
+
+        sent = json.loads(captured["request"].content)
+        merged = "保留构图，把背景换成黄昏\n避免出现：模糊，低清晰度"
+        self.assertEqual(merged, sent["prompt"])
+        self.assertEqual(merged, sent["input"]["messages"][0]["content"][-1]["text"])
+        self.assertNotIn("negative_prompt", sent)
+        self.assertNotIn("negative_prompt", sent["input"])
+
+    def test_image_edit_rejects_more_than_three_references(self) -> None:
+        client, captured = replay("edit-json-single.json", EDIT_JSON_FIXTURES)
+        references = (
+            self.reference(),
+            self.second_reference(),
+            self.reference("reference-3.png"),
+            self.reference("reference-4.png"),
+        )
+        with client:
+            gateway = make_gateway(client)
+            with self.assertRaises(GatewayError) as raised:
+                gateway.generate_image_edit(self.edit_request(references=references))
+
+        self.assertEqual(GatewayErrorCategory.REJECTED, raised.exception.category)
+        self.assertIn("参考图", str(raised.exception))
+        self.assertNotIn("request", captured, "不应发出超出能力表的请求")
+
+    def test_image_edit_rejects_unverified_image_count(self) -> None:
+        client, captured = replay("edit-json-single.json", EDIT_JSON_FIXTURES)
+        with client:
+            gateway = make_gateway(client)
+            with self.assertRaises(GatewayError) as raised:
+                gateway.generate_image_edit(self.edit_request(image_count=6))
+
+        self.assertEqual(GatewayErrorCategory.REJECTED, raised.exception.category)
+        self.assertIn("出图数量", str(raised.exception))
+        self.assertNotIn("request", captured)
+
+    def test_image_edit_rejects_model_without_edit_capability(self) -> None:
+        client, captured = replay("edit-json-single.json", EDIT_JSON_FIXTURES)
+        with client:
+            gateway = make_gateway(client)
+            with self.assertRaises(GatewayError) as raised:
+                gateway.generate_image_edit(self.edit_request(model_id="unknown-model"))
+
+        self.assertEqual(GatewayErrorCategory.REJECTED, raised.exception.category)
+        self.assertIn("图片编辑", str(raised.exception))
+        self.assertNotIn("request", captured)
 
     def test_image_edit_invalid_request_maps_to_rejected_category(self) -> None:
         client, _ = replay("edit-empty.json")
@@ -351,64 +461,8 @@ class TeamGatewayImageEditTests(unittest.TestCase):
         self.assertEqual(400, raised.exception.status_code)
         self.assertIn("未指定模型名称", str(raised.exception))
 
-    def test_image_edit_rejects_unverified_multi_reference_encoding(self) -> None:
-        client, captured = replay("edit-success.json")
-        second = ReferenceImage(
-            path=Path("reference-2.jpg"),
-            media_type="image/jpeg",
-            width=1,
-            height=1,
-            size_bytes=3,
-            content=b"\xff\xd8\xff",
-        )
-        with client:
-            gateway = make_gateway(client)
-            with self.assertRaises(GatewayError) as raised:
-                gateway.generate_image_edit(
-                    self.edit_request(references=(self.reference(), second))
-                )
-
-        self.assertEqual(GatewayErrorCategory.REJECTED, raised.exception.category)
-        self.assertIn("参考图", str(raised.exception))
-        self.assertNotIn("request", captured, "不应发出未验证的请求")
-
-    def test_image_edit_sends_negative_prompt(self) -> None:
-        """负向提示词作为 multipart 字段随编辑请求发出（开放试用，待实测补夹具）。"""
-        client, captured = replay("edit-success.json")
-        with client:
-            gateway = make_gateway(client)
-            gateway.generate_image_edit(self.edit_request(negative_prompt="模糊，低清晰度"))
-
-        parts = multipart_parts(
-            captured["request"].headers["Content-Type"],
-            captured["request"].content,
-        )
-        self.assertEqual("模糊，低清晰度".encode(), parts["negative_prompt"])
-
-    def test_image_edit_rejects_unverified_image_count(self) -> None:
-        client, captured = replay("edit-success.json")
-        with client:
-            gateway = make_gateway(client)
-            with self.assertRaises(GatewayError) as raised:
-                gateway.generate_image_edit(self.edit_request(image_count=2))
-
-        self.assertEqual(GatewayErrorCategory.REJECTED, raised.exception.category)
-        self.assertIn("出图数量", str(raised.exception))
-        self.assertNotIn("request", captured)
-
-    def test_image_edit_rejects_model_without_edit_capability(self) -> None:
-        client, captured = replay("edit-success.json")
-        with client:
-            gateway = make_gateway(client)
-            with self.assertRaises(GatewayError) as raised:
-                gateway.generate_image_edit(self.edit_request(model_id="unknown-model"))
-
-        self.assertEqual(GatewayErrorCategory.REJECTED, raised.exception.category)
-        self.assertIn("图片编辑", str(raised.exception))
-        self.assertNotIn("request", captured)
-
     def test_image_edit_validation_follows_capability_table(self) -> None:
-        """能力表放宽参考图上限后，适配器不再防御性拒绝多参考图。"""
+        """能力表 override 收紧参考图上限后，适配器在边界拒绝多参考图。"""
         override = {
             "schema_version": 2,
             "models": [
@@ -426,21 +480,13 @@ class TeamGatewayImageEditTests(unittest.TestCase):
                                 "presets": [],
                                 "custom_size_allowed": False,
                             },
-                            "reference_limits": {"min_references": 1, "max_references": 2},
+                            "reference_limits": {"min_references": 1, "max_references": 1},
                         }
                     ],
                 }
             ],
         }
-        client, captured = replay("edit-success.json")
-        second = ReferenceImage(
-            path=Path("reference-2.jpg"),
-            media_type="image/jpeg",
-            width=1,
-            height=1,
-            size_bytes=3,
-            content=b"\xff\xd8\xff",
-        )
+        client, captured = replay("edit-json-single.json", EDIT_JSON_FIXTURES)
         with TemporaryDirectory() as directory:
             path = Path(directory) / "override.json"
             path.write_text(json.dumps(override, ensure_ascii=False), encoding="utf-8")
@@ -449,11 +495,16 @@ class TeamGatewayImageEditTests(unittest.TestCase):
                 gateway = TeamGateway(
                     "http://gateway.test", "test-key", client=client, capabilities=registry
                 )
-                gateway.generate_image_edit(
-                    self.edit_request(references=(self.reference(), second))
-                )
+                with self.assertRaises(GatewayError) as raised:
+                    gateway.generate_image_edit(
+                        self.edit_request(
+                            references=(self.reference(), self.second_reference())
+                        )
+                    )
 
-        self.assertIn("request", captured, "能力表放宽后应放行请求")
+        self.assertEqual(GatewayErrorCategory.REJECTED, raised.exception.category)
+        self.assertIn("参考图", str(raised.exception))
+        self.assertNotIn("request", captured, "override 收紧后不应发出多参考图请求")
 
 
 if __name__ == "__main__":

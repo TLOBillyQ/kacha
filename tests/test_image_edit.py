@@ -147,20 +147,22 @@ class EditContractEnforcementTests(unittest.TestCase):
         if output.exists():
             self.assertEqual([], list(output.iterdir()))
 
-    def test_two_references_rejected_before_snapshot_or_task(self) -> None:
+    def test_four_references_rejected_before_snapshot_or_task(self) -> None:
+        """能力表开放 1～3 张参考图；第 4 张在提交前拒绝且无副作用。"""
         with TemporaryDirectory() as directory:
             root = Path(directory)
             output = root / "output"
             application = self._application(output)
-            first = self._write_png(root, "first.png")
-            second = self._write_png(root, "second.png")
+            references = tuple(
+                self._write_png(root, f"reference-{index}.png") for index in range(4)
+            )
 
             with self.assertRaises(ValueError) as raised:
                 application.submit_edit(
                     ImageEditDraft(
                         prompt="保留构图",
                         model_id="qwen-image-3.0-pro",
-                        reference_paths=(first, second),
+                        reference_paths=references,
                     )
                 )
 
@@ -216,7 +218,8 @@ class EditContractEnforcementTests(unittest.TestCase):
             self.assertIn("负向提示词", str(raised.exception))
             self._assert_no_side_effects(application, output)
 
-    def test_non_auto_size_rejected_before_snapshot_or_task(self) -> None:
+    def test_out_of_range_custom_size_rejected_before_snapshot_or_task(self) -> None:
+        """尺寸已开放预设与边界内自定义；越界自定义尺寸在提交前拒绝且无副作用。"""
         with TemporaryDirectory() as directory:
             root = Path(directory)
             output = root / "output"
@@ -228,16 +231,17 @@ class EditContractEnforcementTests(unittest.TestCase):
                     ImageEditDraft(
                         prompt="保留构图",
                         model_id="qwen-image-3.0-pro",
-                        size_mode=SizeMode.PRESET,
-                        size_width=1024,
-                        size_height=1024,
+                        size_mode=SizeMode.CUSTOM,
+                        size_width=100,
+                        size_height=100,
                         reference_paths=(reference,),
                     )
                 )
 
             self._assert_no_side_effects(application, output)
 
-    def test_image_count_two_rejected_before_snapshot_or_task(self) -> None:
+    def test_image_count_six_rejected_before_snapshot_or_task(self) -> None:
+        """出图数量开放到 5；第 6 张在提交前拒绝且无副作用。"""
         with TemporaryDirectory() as directory:
             root = Path(directory)
             output = root / "output"
@@ -249,7 +253,7 @@ class EditContractEnforcementTests(unittest.TestCase):
                     ImageEditDraft(
                         prompt="保留构图",
                         model_id="qwen-image-3.0-pro",
-                        image_count=2,
+                        image_count=6,
                         reference_paths=(reference,),
                     )
                 )

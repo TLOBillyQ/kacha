@@ -66,15 +66,22 @@ class BuiltinCapabilityTableTests(unittest.TestCase):
         self.assertIsNotNone(edit)
         assert edit is not None
         self.assertEqual(Workflow.IMAGE_EDIT, edit.workflow)
-        # 已实测契约：单张出图、仅模型自动决定尺寸、1 张参考图；
-        # 负向提示词按文生图同名字段开放试用，尚无编辑场景实测夹具。
+        # 2026-08-29 JSON 透传实测：多参考图（1～3）、显式尺寸、n≤5 开放；
+        # 负向提示词维持开放试用（input.negative_prompt 未实测，并入主提示词文本）。
         self.assertTrue(edit.supports_negative_prompt)
-        self.assertEqual((1, 1), (edit.min_images, edit.max_images))
+        self.assertEqual((1, 5), (edit.min_images, edit.max_images))
         self.assertEqual((), edit.extra_params)
         self.assertTrue(edit.size.auto_allowed)
-        self.assertEqual((), edit.size.presets)
-        self.assertFalse(edit.size.custom_size_allowed)
-        self.assertEqual(ReferenceLimits(1, 1), edit.reference_limits)
+        self.assertEqual(
+            ((1024, 1024), (2048, 2048), (1920, 1080), (1080, 1920)),
+            edit.size.presets,
+        )
+        self.assertTrue(edit.size.custom_size_allowed)
+        self.assertEqual(262_144, edit.size.min_total_pixels)
+        self.assertEqual(4_194_304, edit.size.max_total_pixels)
+        self.assertEqual(1 / 8, edit.size.min_aspect_ratio)
+        self.assertEqual(8.0, edit.size.max_aspect_ratio)
+        self.assertEqual(ReferenceLimits(1, 3), edit.reference_limits)
 
     def test_workflow_capabilities_are_immutable(self) -> None:
         text = BUILTIN_CAPABILITIES["qwen-image-3.0-pro"].for_workflow(
@@ -199,7 +206,7 @@ class CapabilityRegistryMergeTests(unittest.TestCase):
         self.assertIsNotNone(edit)
         assert text is not None and edit is not None
         self.assertEqual(2, text.max_images)
-        self.assertEqual(1, edit.max_images)
+        self.assertEqual(5, edit.max_images)
         self.assertNotEqual(text, edit)
         self.assertIsNone(registry.workflow_capability("wan2.7-image", Workflow.TEXT_TO_IMAGE))
 

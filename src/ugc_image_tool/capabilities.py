@@ -48,7 +48,7 @@ class SizeRule:
 
     auto_allowed: bool
     presets: tuple[tuple[int, int], ...]
-    # 是否允许用户在有效边界内自定义宽高；图片编辑仅实测了自动尺寸时为 False。
+    # 是否允许用户在有效边界内自定义宽高。
     custom_size_allowed: bool = True
     min_total_pixels: int | None = None
     max_total_pixels: int | None = None
@@ -148,16 +148,25 @@ QWEN_TEXT_WORKFLOW = WorkflowCapability(
     extra_params=("watermark",),
 )
 
-# 图片编辑依据同一夹具的实测结果：仅验证过 1 张参考图、模型自动决定尺寸、
-# 单张出图，其他组合未实测，不在内置能力中开放。负向提示词按文生图实测的
-# 同名字段开放试用，尚无编辑场景的实测夹具，首次真实提交后应补录。
+# 图片编辑依据 contracts/fixtures/2026-08-29-team-gateway-edit-json 的 JSON 透传
+# 实测结果开放：1～3 张参考图、显式尺寸（parameters.size 星号格式，实测
+# 1024*1024；其余预设与自定义边界沿用文生图同一字段的实测规则）、n≤5（实测
+# n=2）。负向提示词维持开放试用现状：input.negative_prompt 未实测，客户端并入
+# 主提示词文本发送，首次真实提交后应补录夹具。
 QWEN_EDIT_WORKFLOW = WorkflowCapability(
     workflow=Workflow.IMAGE_EDIT,
     supports_negative_prompt=True,
     min_images=1,
-    max_images=1,
-    size=SizeRule(auto_allowed=True, presets=(), custom_size_allowed=False),
-    reference_limits=ReferenceLimits(min_references=1, max_references=1),
+    max_images=5,
+    size=SizeRule(
+        auto_allowed=True,
+        presets=((1024, 1024), (2048, 2048), (1920, 1080), (1080, 1920)),
+        min_total_pixels=262_144,
+        max_total_pixels=4_194_304,
+        min_aspect_ratio=1 / 8,
+        max_aspect_ratio=8.0,
+    ),
+    reference_limits=ReferenceLimits(min_references=1, max_references=3),
 )
 
 BUILTIN_CAPABILITIES: dict[str, ModelCapability] = {
