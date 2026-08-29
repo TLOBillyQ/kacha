@@ -4,6 +4,7 @@ import json
 import re
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 INTERFACES = {
     "models": ("GET",),
@@ -17,6 +18,8 @@ BEHAVIORS = {
     "task_query",
     "retry_after",
 }
+# "confirmed" 用于编辑专用 partial manifest 中本轮实测确认的行为结论
+BEHAVIOR_STATUSES = {"supported", "unsupported", "unknown", "confirmed"}
 ERROR_CATEGORIES = {
     "authentication",
     "invalid_request",
@@ -38,7 +41,6 @@ SENSITIVE_KEYS = {
     "input_image",
     "reference_image",
 }
-REDACTED_VALUES = {"[REDACTED]", "[REDACTED_PROMPT]", "[REDACTED_IMAGE]"}
 BEARER_RE = re.compile(r"\bbearer\s+\S+", re.IGNORECASE)
 URL_RE = re.compile(r"https?://[^\s\"']+")
 
@@ -59,69 +61,36 @@ def validate_fixture_directory(directory: Path) -> list[str]:
     if not isinstance(manifest.get("verified_at"), str) or not manifest["verified_at"].strip():
         errors.append("verified_at 必须记录实测时间")
     interfaces = manifest.get("interfaces")
+    # partial manifest 只记录本轮实测的接口子集（如编辑专用 JSON 夹具）；
+    # 完整 manifest 必须覆盖全部三类接口
+    partial = isinstance(interfaces, dict) and any(name not in interfaces for name in INTERFACES)
     if not isinstance(interfaces, dict):
         errors.append("interfaces 必须是对象")
     else:
-        for name, methods in INTERFACES.items():
-            interface = interfaces.get(name)
-            if not isinstance(interface, dict):
-                errors.append(f"缺少接口：interfaces.{name}")
+        if not interfaces:
+            errors.append("interfaces 必须至少记录一个接口")
+        for name, interface in interfaces.items():
+            if name not in INTERFACES:
                 continue
-            if interface.get("method") not in methods:
-                errors.append(f"接口 {name} 的 method 不受支持")
-            if not isinstance(interface.get("path"), str) or not interface["path"].startswith("/"):
-                errors.append(f"接口 {name} 必须记录绝对路径")
-            exchanges = interface.get("exchanges")
-            if not isinstance(exchanges, list) or not exchanges:
-                errors.append(f"接口 {name} 必须至少包含一个交互样例")
-            else:
-                for index, exchange in enumerate(exchanges):
-                    if not isinstance(exchange, dict) or not {"request", "response"} <= exchange.keys():
-                        errors.append(f"接口 {name} 的交互样例 {index} 缺少 request/response")
-                        continue
-                    request = exchange["request"]
-                    response = exchange["response"]
-                    if not isinstance(request, dict):
-                        errors.append(f"接口 {name} 的交互样例 {index} request 必须是对象")
-                    else:
-                        if request.get("method") != interface.get("method"):
-                            errors.append(f"接口 {name} 的交互样例 {index} method 不一致")
-                        if request.get("path") != interface.get("path"):
-                            errors.append(f"接口 {name} 的交互样例 {index} path 不一致")
-                        if not isinstance(request.get("headers"), dict):
-                            errors.append(f"接口 {name} 的交互样例 {index} 缺少 headers")
-                        if "body" not in request:
-                            errors.append(f"接口 {name} 的交互样例 {index} 缺少 body")
-                    if not isinstance(response, dict) or not isinstance(response.get("status"), int):
-                        errors.append(f"接口 {name} 的交互样例 {index} 缺少 HTTP status")
-                    elif "body" not in response:
-                        errors.append(f"接口 {name} 的交互样例 {index} 缺少 response body")
-            if name == "image_edit":
-                request_shape = interface.get("request_shape")
-                fields = request_shape.get("fields") if isinstance(request_shape, dict) else None
-                has_image_file = isinstance(fields, list) and any(
-                    isinstance(field, dict)
-                    and field.get("name") == "image"
-                    and field.get("kind") == "file"
-                    for field in fields
-                )
-                if not has_image_file:
-                    errors.append("图片编辑必须记录 image 文件字段的编码证据")
+            _validate_interface(directory, name, interface, errors)
     behaviors = manifest.get("behaviors")
     if not isinstance(behaviors, dict):
         errors.append("behaviors 必须是对象")
     else:
-        for name in BEHAVIORS:
+        names = set(behaviors) if partial else BEHAVIORS | set(behaviors)
+        for name in sorted(names):
             behavior = behaviors.get(name)
             if not isinstance(behavior, dict):
                 errors.append(f"缺少行为结论：behaviors.{name}")
                 continue
-            if behavior.get("status") not in {"supported", "unsupported", "unknown"}:
+            if behavior.get("status") not in BEHAVIOR_STATUSES:
                 errors.append(f"行为 {name} 的 status 无效")
             if not isinstance(behavior.get("evidence"), str) or not behavior["evidence"].strip():
                 errors.append(f"行为 {name} 必须有可复现结论")
     mappings = manifest.get("error_mappings")
-    if not isinstance(mappings, dict) or set(mappings) != ERROR_CATEGORIES:
+    if mappings is None and partial:
+        pass  # partial manifest 不重复记录完整错误映射
+    elif not isinstance(mappings, dict) or set(mappings) != ERROR_CATEGORIES:
         errors.append("error_mappings 必须覆盖四类主要错误")
     else:
         for category, mapping in mappings.items():
@@ -140,11 +109,131 @@ def validate_fixture_directory(directory: Path) -> list[str]:
                     errors.append(f"错误映射 {category} 的证据路径越界：{evidence}")
                 elif not evidence_path.is_file():
                     errors.append(f"错误映射 {category} 的证据文件不存在：{evidence}")
-    for field in ("verified_models", "unsafe_to_enable"):
+    required_lists = ["verified_models"] if partial else ["verified_models", "unsafe_to_enable"]
+    for field in required_lists:
         if not isinstance(manifest.get(field), list) or not manifest[field]:
             errors.append(f"{field} 必须是非空数组")
     errors.extend(_validate_sensitive_values(manifest))
     return errors
+
+
+def _validate_interface(
+    directory: Path, name: str, interface: Any, errors: list[str]
+) -> None:
+    if not isinstance(interface, dict):
+        errors.append(f"缺少接口：interfaces.{name}")
+        return
+    if interface.get("method") not in INTERFACES[name]:
+        errors.append(f"接口 {name} 的 method 不受支持")
+    if not isinstance(interface.get("path"), str) or not interface["path"].startswith("/"):
+        errors.append(f"接口 {name} 必须记录绝对路径")
+    exchanges = interface.get("exchanges")
+    if not isinstance(exchanges, list) or not exchanges:
+        errors.append(f"接口 {name} 必须至少包含一个交互样例")
+    else:
+        for index, exchange in enumerate(exchanges):
+            _validate_exchange(directory, name, interface, exchange, index, errors)
+    if name == "image_edit":
+        _validate_image_edit_request_shape(interface, errors)
+
+
+def _validate_exchange(
+    directory: Path,
+    name: str,
+    interface: dict[str, Any],
+    exchange: Any,
+    index: int,
+    errors: list[str],
+) -> None:
+    label = f"接口 {name} 的交互样例 {index}"
+    if not isinstance(exchange, dict):
+        errors.append(f"{label} 缺少 request/response")
+        return
+    if not {"request", "response"} <= exchange.keys():
+        # 交互样例可通过 evidence 引用同目录下的脱敏 JSON 文件
+        evidence = exchange.get("evidence")
+        if not isinstance(evidence, str) or not evidence.endswith(".json"):
+            errors.append(f"{label} 缺少 request/response")
+            return
+        evidence_path = directory / evidence
+        if not evidence_path.resolve().is_relative_to(directory.resolve()):
+            errors.append(f"{label} 的证据路径越界：{evidence}")
+            return
+        try:
+            exchange = json.loads(evidence_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+            errors.append(f"{label} 的证据文件无法读取：{evidence}（{error}）")
+            return
+        if not isinstance(exchange, dict) or not {"request", "response"} <= exchange.keys():
+            errors.append(f"{label} 的证据文件缺少 request/response：{evidence}")
+            return
+        errors.extend(_validate_sensitive_values(exchange, f"{label} 证据 {evidence}"))
+    request = exchange["request"]
+    response = exchange["response"]
+    if not isinstance(request, dict):
+        errors.append(f"{label} request 必须是对象")
+    else:
+        if request.get("method") != interface.get("method"):
+            errors.append(f"{label} method 不一致")
+        if request.get("path") != interface.get("path"):
+            errors.append(f"{label} path 不一致")
+        if not isinstance(request.get("headers"), dict):
+            errors.append(f"{label} 缺少 headers")
+        if "body" not in request:
+            errors.append(f"{label} 缺少 body")
+    if not isinstance(response, dict) or not isinstance(response.get("status"), int):
+        errors.append(f"{label} 缺少 HTTP status")
+    elif "body" not in response:
+        errors.append(f"{label} 缺少 response body")
+
+
+def _validate_image_edit_request_shape(interface: dict[str, Any], errors: list[str]) -> None:
+    request_shape = interface.get("request_shape")
+    shape = request_shape if isinstance(request_shape, dict) else {}
+    encoding = shape.get("encoding")
+    if encoding == "multipart/form-data":
+        fields = shape.get("fields")
+        has_image_file = isinstance(fields, list) and any(
+            isinstance(field, dict)
+            and field.get("name") == "image"
+            and field.get("kind") == "file"
+            for field in fields
+        )
+        if not has_image_file:
+            errors.append("图片编辑必须记录 image 文件字段的编码证据")
+    elif encoding == "application/json":
+        input_shape = shape.get("input")
+        messages = input_shape.get("messages") if isinstance(input_shape, dict) else None
+        if not isinstance(messages, str) or "image" not in messages:
+            errors.append("JSON 图片编辑必须记录 input.messages 中参考图的编码证据")
+    else:
+        errors.append("图片编辑必须记录 request_shape.encoding（multipart/form-data 或 application/json）")
+
+
+def _is_redacted_marker(value: str) -> bool:
+    return value.startswith("[REDACTED") and value.endswith("]")
+
+
+def _is_example_invalid_url(value: str) -> bool:
+    if not value.startswith(("http://", "https://")):
+        return False
+    host = urlsplit(value).hostname or ""
+    return host == "example.invalid" or host.endswith(".example.invalid")
+
+
+def _is_redacted_value(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    # 空值、完整脱敏标记、data-URL 内嵌脱敏标记与 example.invalid 占位 URL 视为已脱敏；
+    # 脱敏标记必须是结构完整的（首尾包裹），example.invalid 必须是 URL 的 host 或其子域，
+    # 避免 "sk-live[REDACTED]"、真实 URL 借子串掩护半脱敏内容通过
+    if not value:
+        return True
+    if _is_redacted_marker(value):
+        return True
+    if value.startswith("data:") and ";base64," in value:
+        return _is_redacted_marker(value.rsplit(";base64,", 1)[1])
+    return _is_example_invalid_url(value)
 
 
 def _validate_sensitive_values(value: Any, path: str = "manifest") -> list[str]:
@@ -152,8 +241,11 @@ def _validate_sensitive_values(value: Any, path: str = "manifest") -> list[str]:
     if isinstance(value, dict):
         for key, child in value.items():
             key_path = f"{path}.{key}"
+            if key == "request_shape":
+                # 请求形状文档的键是字段名、值是说明文字，不是真实载荷
+                continue
             normalized_key = key.lower().replace("-", "_")
-            if normalized_key in SENSITIVE_KEYS and child not in REDACTED_VALUES:
+            if normalized_key in SENSITIVE_KEYS and not _is_redacted_value(child):
                 errors.append(f"{key_path} 必须脱敏")
             errors.extend(_validate_sensitive_values(child, key_path))
     elif isinstance(value, list):
@@ -165,6 +257,6 @@ def _validate_sensitive_values(value: Any, path: str = "manifest") -> list[str]:
         for url in URL_RE.findall(value):
             if path == "manifest.gateway.base_url":
                 continue
-            if "example.invalid" not in url and "[REDACTED" not in url:
+            if not _is_example_invalid_url(url) and "[REDACTED" not in url:
                 errors.append(f"{path} 包含未脱敏 URL")
     return errors

@@ -64,4 +64,4 @@ PYTHONPATH=src python3 -m ugc_image_tool.contracts.cli record \
 PYTHONPATH=src python3 -m ugc_image_tool.contracts.cli validate contracts/fixtures/<版本>
 ```
 
-清单必须记录三类接口、主要错误映射、部分失败以及五项行为（幂等键、运行中取消、任务查询、`Retry-After`、部分失败）的 `supported`、`unsupported` 或 `unknown` 结论和证据。只有 `supported` 且有真实夹具的能力才可进入本地模型能力表。
+完整清单必须记录三类接口、主要错误映射、部分失败以及五项行为（幂等键、运行中取消、任务查询、`Retry-After`、部分失败）的 `supported`、`unsupported` 或 `unknown` 结论和证据。只覆盖部分接口的清单视为 partial manifest（如 `2026-08-29-team-gateway-edit-json/` 的编辑专用清单）：`interfaces` 缺任一三类接口即为 partial，此时仅校验已记录的接口与行为（行为结论另可用 `confirmed` 表示本轮实测确认），跳过主要错误映射、`unsafe_to_enable` 和全接口覆盖的强制要求，其余规则不变。只有 `supported` 且有真实夹具的能力才可进入本地模型能力表。
