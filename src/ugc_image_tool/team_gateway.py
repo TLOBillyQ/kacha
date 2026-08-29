@@ -333,10 +333,10 @@ def _parse_ok_generation(
             metadata_value = metadata_images[index]
             content = _decode_image_value(metadata_value)
             if content is None and metadata_value.startswith(("http://", "https://")):
-                # metadata 以临时地址返回输出图（2026-08-29 JSON 编辑实测形态）；
-                # data 视图在 n>1 时丢图，地址改从 metadata 取。
-                if not isinstance(url, str) or not url:
-                    url = metadata_value
+                # metadata 是出图真源：其临时地址优先于 data 视图（2026-08-29
+                # JSON 编辑实测：n>1 时 data[0].url 被上游覆盖成最后一张图地址，
+                # 取 data 会让第一张图静默丢失）。
+                url = metadata_value
             elif content is None:
                 # metadata 内容无法解码时，回退到 data 视图的同位 b64_json。
                 content = (

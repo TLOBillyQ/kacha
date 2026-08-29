@@ -373,9 +373,12 @@ class TeamGatewayImageEditTests(unittest.TestCase):
         )
         self.assertEqual(request_model.prompt, sent["prompt"])
 
-        # n=2 时顶层 data 仅 1 条（上游已知行为）；出图真源是 metadata.output.choices。
+        # n=2 时顶层 data 仅 1 条且 url 被上游覆盖成最后一张图地址；
+        # 出图真源是 metadata.output.choices，两张图的地址都取自 metadata。
         self.assertEqual(2, len(result.images))
-        self.assertEqual("https://example.invalid/redacted", result.images[0].url)
+        self.assertEqual(
+            "https://example.invalid/redacted-output-1", result.images[0].url
+        )
         self.assertEqual(
             "https://example.invalid/redacted-output-2", result.images[1].url
         )

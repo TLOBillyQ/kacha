@@ -44,7 +44,7 @@
     "body": {
       "data": [
         {
-          "url": "https://example.invalid/redacted",
+          "url": "https://example.invalid/redacted-output-2",
           "b64_json": "",
           "revised_prompt": ""
         }
