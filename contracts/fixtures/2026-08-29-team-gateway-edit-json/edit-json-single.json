@@ -1,0 +1,79 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/v1/images/edits",
+    "headers": {
+      "Accept": "application/json",
+      "Authorization": "[REDACTED]",
+      "Content-Type": "application/json"
+    },
+    "body": {
+      "model": "qwen-image-3.0-pro",
+      "prompt": "[REDACTED_PROMPT]",
+      "parameters": {
+        "size": "1024*1024",
+        "n": 1,
+        "watermark": false
+      },
+      "input": {
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "image": "data:image/png;base64,[REDACTED_IMAGE]"
+              },
+              {
+                "text": "[REDACTED_PROMPT]"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json",
+      "X-Oneapi-Request-Id": "202608291322151070832008268d9d6NBC7O2lo"
+    },
+    "body": {
+      "data": [
+        {
+          "url": "https://example.invalid/redacted",
+          "b64_json": "",
+          "revised_prompt": ""
+        }
+      ],
+      "created": 1788009735,
+      "metadata": {
+        "output": {
+          "choices": [
+            {
+              "finish_reason": "stop",
+              "message": {
+                "content": [
+                  {
+                    "image": "https://example.invalid/redacted"
+                  }
+                ],
+                "role": "assistant"
+              }
+            }
+          ],
+          "rewrite_status": "success"
+        },
+        "usage": {
+          "input_image_count": 1,
+          "input_image_type": "qima_input_1k",
+          "output_height": 1024,
+          "output_image_count": 1,
+          "output_image_type": "qima_output_1k",
+          "output_width": 1024
+        },
+        "request_id": "3189f409-a368-9ed8-9a84-daf0f756dc73"
+      }
+    }
+  }
+}

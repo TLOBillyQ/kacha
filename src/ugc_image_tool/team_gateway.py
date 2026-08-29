@@ -1,8 +1,9 @@
 """真实团队网关适配器。
 
 路径、鉴权、载荷、参考图编码、响应与错误映射全部来自
-contracts/fixtures/2026-08-17-team-gateway 的脱敏实测夹具，不依据
-OpenAI 或 DashScope 文档猜测。生成请求不做自动重发；编辑载荷在网关
+contracts/fixtures 下的脱敏实测夹具（2026-08-17 文生图与模型列表、
+2026-08-29 JSON 图片编辑），不依据 OpenAI 或 DashScope 文档猜测。
+生成请求不做自动重发；编辑载荷在网关
 边界按能力表的工作流约束做防御性校验，与应用层提交前校验读取同一份
 能力事实，避免规则漂移。
 """
@@ -31,6 +32,7 @@ from .generation import (
     SizeSpec,
     TextToImageRequest,
 )
+from .references import ReferenceImage
 from .settings import validate_base_url
 
 MODELS_PATH = "/v1/models"
@@ -164,24 +166,34 @@ class TeamGateway:
 
     def generate_image_edit(self, request: ImageEditRequest) -> GatewayGenerationResult:
         self._validate_edit_request(request)
-        # 能力表当前仅开放 1 张参考图；多参考图编码需新夹具实测后再扩展。
-        reference = request.references[0]
-        files = {
-            "image": (
-                reference.path.name,
-                reference.content,
-                reference.media_type,
-            )
-        }
-        data = {
-            "model": request.model_id,
-            "prompt": request.prompt,
-        }
-        # 编辑负向提示词尚未实测：_validate_edit_request 在能力表未开放时已拒绝，
-        # 此分支只有在契约夹具验证并翻转能力表后才会生效。
+        # JSON 透传载荷（contracts/fixtures/2026-08-29-team-gateway-edit-json 实测）：
+        # 参考图编码为 data-URL，按顺序进入 input.messages[0].content 的多个
+        # image 项，提示词作为末尾 text 项；顶层 prompt 为网关必填字段。
+        # input.negative_prompt 尚未实测，负向提示词先并入主提示词文本。
+        prompt_text = request.prompt
         if request.negative_prompt:
-            data["negative_prompt"] = request.negative_prompt
-        response = self._request("POST", IMAGE_EDIT_PATH, data=data, files=files)
+            prompt_text = f"{request.prompt}\n避免出现：{request.negative_prompt}"
+        content: list[dict[str, str]] = [
+            {"image": _reference_data_url(reference)}
+            for reference in request.references
+        ]
+        content.append({"text": prompt_text})
+        payload: dict[str, object] = {
+            "model": request.model_id,
+            "prompt": prompt_text,
+            "input": {"messages": [{"role": "user", "content": content}]},
+        }
+        parameters: dict[str, object] = {}
+        if request.size.mode is not SizeMode.AUTO:
+            # 透传路径不做 x→* 转换，尺寸必须是“宽*高”星号格式。
+            parameters["size"] = f"{request.size.width}*{request.size.height}"
+        if request.image_count != 1:
+            parameters["n"] = request.image_count
+        for key, value in request.params:
+            parameters[key] = value
+        if parameters:
+            payload["parameters"] = parameters
+        response = self._request("POST", IMAGE_EDIT_PATH, json=payload)
         parsed = _parse_ok_generation(response, self._diagnostics)
         return GatewayGenerationResult(images=parsed.images, request_id=parsed.request_id)
 
@@ -280,6 +292,12 @@ class TeamGateway:
         self._diagnostics.system(joined)
 
 
+def _reference_data_url(reference: ReferenceImage) -> str:
+    """把参考图编码为 JSON 编辑载荷使用的 data-URL。"""
+    encoded = base64.b64encode(reference.content).decode("ascii")
+    return f"data:{reference.media_type};base64,{encoded}"
+
+
 def _edit_size_error(size: SizeSpec, capability: WorkflowCapability) -> str | None:
     """按能力表的图片编辑尺寸规则校验；无错误时返回 None。"""
     if size.mode is SizeMode.AUTO:
@@ -312,8 +330,14 @@ def _parse_ok_generation(
         url = data_entries[index].get("url") if index < len(data_entries) else None
         content: bytes | None = None
         if index < len(metadata_images):
-            content = _decode_image_value(metadata_images[index])
-            if content is None:
+            metadata_value = metadata_images[index]
+            content = _decode_image_value(metadata_value)
+            if content is None and metadata_value.startswith(("http://", "https://")):
+                # metadata 是出图真源：其临时地址优先于 data 视图（2026-08-29
+                # JSON 编辑实测：n>1 时 data[0].url 被上游覆盖成最后一张图地址，
+                # 取 data 会让第一张图静默丢失）。
+                url = metadata_value
+            elif content is None:
                 # metadata 内容无法解码时，回退到 data 视图的同位 b64_json。
                 content = (
                     _decode_image_value(data_entries[index].get("b64_json"))
