@@ -16,6 +16,8 @@ import os
 import subprocess
 import sys
 
+from ..common import project_python
+
 run = subprocess.run
 
 
@@ -30,13 +32,6 @@ def _usage() -> str:
 
 def usage() -> str:
     return _usage()
-
-
-def project_python(repo_root: str) -> str:
-    venv_python = os.path.join(repo_root, ".venv", "bin", "python")
-    if os.path.isfile(venv_python) and os.access(venv_python, os.X_OK):
-        return venv_python
-    return sys.executable
 
 
 def main(args, env=None) -> int:

@@ -19,23 +19,11 @@ import ast
 import dataclasses
 import os
 
+from ..astnorm import normalize_node
+
 # ast 字段中不属于结构语义的元数据,归一化时剔除
 _META_FIELDS = {"ctx", "type_comment", "lineno", "col_offset", "end_lineno",
                 "end_col_offset"}
-
-_BIN_OPS = {
-    ast.Add: "add", ast.Sub: "sub", ast.Mult: "mult", ast.Div: "div",
-    ast.FloorDiv: "floordiv", ast.Mod: "mod", ast.Pow: "pow",
-    ast.LShift: "lshift", ast.RShift: "rshift", ast.BitOr: "bitor",
-    ast.BitXor: "bitxor", ast.BitAnd: "bitand", ast.MatMult: "matmult",
-}
-_UNARY_OPS = {ast.Not: "not", ast.USub: "usub", ast.UAdd: "uadd",
-              ast.Invert: "invert"}
-_COMPARE_OPS = {
-    ast.Eq: "eq", ast.NotEq: "neq", ast.Lt: "lt", ast.LtE: "lte",
-    ast.Gt: "gt", ast.GtE: "gte", ast.Is: "is", ast.IsNot: "isnot",
-    ast.In: "in", ast.NotIn: "notin",
-}
 
 
 @dataclasses.dataclass
@@ -57,67 +45,6 @@ class Duplicate:
     rhs: Scope
 
 
-def _literal_kind(value) -> str:
-    if isinstance(value, bool):
-        return "bool"
-    if isinstance(value, (int, float, complex)):
-        return "num"
-    if isinstance(value, str):
-        return "str"
-    if value is None:
-        return "none"
-    if isinstance(value, bytes):
-        return "bytes"
-    return "other"
-
-
-def _normalize_node(node, outer: bool) -> str:
-    """序列化一个节点为归一化 S 表达式。outer=True 表示作用域根(不折叠)。"""
-    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and not outer:
-        return "(function)"
-    if isinstance(node, ast.ClassDef) and not outer:
-        return "(class)"
-    if isinstance(node, ast.Name):
-        return "ident"
-    if isinstance(node, ast.Constant):
-        return f"literal/{_literal_kind(node.value)}"
-    tag = type(node).__name__
-    if isinstance(node, ast.BinOp):
-        tag = "op/" + _BIN_OPS.get(type(node.op), "binop")
-    elif isinstance(node, ast.UnaryOp):
-        tag = "op/" + _UNARY_OPS.get(type(node.op), "unaryop")
-    elif isinstance(node, ast.BoolOp):
-        tag = "boolop/" + ("and" if isinstance(node.op, ast.And) else "or")
-    parts = [f"({tag}"]
-    if isinstance(node, ast.Attribute):
-        parts.append(_normalize_node(node.value, False))
-        parts.append("ident")
-        return " ".join(parts) + ")"
-    if isinstance(node, ast.Call):
-        parts.append("callee")
-        for item in node.args:
-            parts.append(_normalize_node(item, False))
-        for keyword in node.keywords:
-            parts.append(_normalize_node(keyword, False))
-        return " ".join(parts) + ")"
-    if isinstance(node, ast.Compare):
-        parts.append(_normalize_node(node.left, False))
-        for op, comparator in zip(node.ops, node.comparators):
-            parts.append(f"(op/{_COMPARE_OPS.get(type(op), 'cmp')} "
-                         + _normalize_node(comparator, False) + ")")
-        return " ".join(parts) + ")"
-    for field, value in ast.iter_fields(node):
-        if field in _META_FIELDS:
-            continue
-        if isinstance(value, ast.AST):
-            parts.append(_normalize_node(value, False))
-        elif isinstance(value, list):
-            for item in value:
-                if isinstance(item, ast.AST):
-                    parts.append(_normalize_node(item, False))
-    return " ".join(parts) + ")"
-
-
 def _scope_fingerprint(function_node: ast.FunctionDef) -> tuple[frozenset, int]:
     """作用域内所有归一化子树序列化结果的集合,以及遍历节点总数。"""
     fingerprints = set()
@@ -132,7 +59,7 @@ def _scope_fingerprint(function_node: ast.FunctionDef) -> tuple[frozenset, int]:
         if isinstance(node, ast.ClassDef) and not outer:
             fingerprints.add("(class)")
             return
-        fingerprints.add(_normalize_node(node, outer))
+        fingerprints.add(normalize_node(node, outer))
         for field, value in ast.iter_fields(node):
             if field in _META_FIELDS:
                 continue
