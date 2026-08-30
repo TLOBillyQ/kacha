@@ -50,3 +50,22 @@ def _run_with_coverage(python: str, repo_root: str) -> int:
         return result.returncode
     run([python, "-m", "coverage", "report", "-m"], cwd=repo_root)
     return 0
+
+# mutate4py-manifest
+# version=4
+# projectHash=98e7b6c27c3a1db8
+# scope.0.id=cli.usage
+# scope.0.kind=function
+# scope.0.startLine=24
+# scope.0.endLine=30
+# scope.0.semanticHash=45fee6793c6934d4
+# scope.1.id=cli.main
+# scope.1.kind=function
+# scope.1.startLine=33
+# scope.1.endLine=41
+# scope.1.semanticHash=08393c75e626df03
+# scope.2.id=cli._run_with_coverage
+# scope.2.kind=function
+# scope.2.startLine=44
+# scope.2.endLine=52
+# scope.2.semanticHash=8f96c0b9c82a863c

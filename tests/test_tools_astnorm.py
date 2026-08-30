@@ -97,3 +97,38 @@ def test_fnv1a64_is_stable_hex():
     assert astnorm.fnv1a64("abc") == astnorm.fnv1a64("abc")
     assert astnorm.fnv1a64("abc") != astnorm.fnv1a64("abd")
     assert len(astnorm.fnv1a64("")) == 16
+
+
+def _def_node(source, index=0):
+    body = ast.parse(source).body
+    return body[index]
+
+
+def test_normalize_node_folds_nested_definitions_in_statement_children():
+    nested = ("def outer_fn():\n"
+              "    if flag:\n"
+              "        def inner():\n"
+              "            return 1\n"
+              "    return outer_fn\n")
+    same_shape = ("def outer_fn():\n"
+                  "    if flag:\n"
+                  "        def helper(a, b):\n"
+                  "            return 2 * a\n"
+                  "    return outer_fn\n")
+    folded = astnorm.normalize_node(_def_node(nested), outer=True)
+    assert "(function)" in folded and "inner" not in folded
+    # 折叠只看"这里有个嵌套定义",不看它的名字、参数与实现
+    assert folded == astnorm.normalize_node(_def_node(same_shape), outer=True)
+    # fold=False 与作用域哈希同口径:嵌套定义继续展开,两者就分得开
+    unfolded = astnorm.normalize_node(_def_node(nested), outer=True, fold=False)
+    assert "(function)" not in unfolded
+    assert unfolded != astnorm.normalize_node(_def_node(same_shape), outer=True,
+                                             fold=False)
+
+
+def test_normalize_node_root_is_never_folded():
+    node = _def_node("def f():\n    return 1\n")
+    assert astnorm.normalize_node(node, outer=True).startswith("(FunctionDef")
+    assert astnorm.normalize_node(node, outer=False) == "(function)"
+    assert astnorm.normalize_node(node, outer=True, fold=False) == \
+        astnorm.normalize_node(node, outer=False, fold=False)

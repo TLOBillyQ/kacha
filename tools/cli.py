@@ -104,3 +104,42 @@ def _invoke(package, name: str, rest, env) -> int:
 
 if __name__ == "__main__":
     sys.exit(main(sys.argv[1:]))
+
+# mutate4py-manifest
+# version=4
+# projectHash=63353a3445f386d9
+# scope.0.id=cli.usage
+# scope.0.kind=function
+# scope.0.startLine=37
+# scope.0.endLine=43
+# scope.0.semanticHash=c6c1a213b6b23ad9
+# scope.1.id=cli._load_package
+# scope.1.kind=function
+# scope.1.startLine=46
+# scope.1.endLine=51
+# scope.1.semanticHash=afe85b783cac33e8
+# scope.2.id=cli._package_for
+# scope.2.kind=function
+# scope.2.startLine=54
+# scope.2.endLine=64
+# scope.2.semanticHash=6863e93dca73ed97
+# scope.3.id=cli.main
+# scope.3.kind=function
+# scope.3.startLine=67
+# scope.3.endLine=79
+# scope.3.semanticHash=1ab186b8ca030025
+# scope.4.id=cli._dispatch
+# scope.4.kind=function
+# scope.4.startLine=82
+# scope.4.endLine=89
+# scope.4.semanticHash=73d17113edaf6e5a
+# scope.5.id=cli._load_failure
+# scope.5.kind=function
+# scope.5.startLine=92
+# scope.5.endLine=95
+# scope.5.semanticHash=d7d686502b04bd9a
+# scope.6.id=cli._invoke
+# scope.6.kind=function
+# scope.6.startLine=98
+# scope.6.endLine=102
+# scope.6.semanticHash=65a9c6c3b98def86

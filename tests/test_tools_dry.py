@@ -198,3 +198,98 @@ def test_overlapping_scopes_in_one_file_are_excluded():
                          nodes=30, fingerprint=frozenset({"a", "b"}))
     assert engine._overlaps(lhs, rhs)
     assert not engine._overlaps(lhs, other)
+
+def test_jaccard_of_two_empty_sets_is_zero():
+    assert engine.jaccard(set(), set()) == 0.0
+    assert engine.jaccard(set(), {"a"}) == 0.0
+
+
+def test_scope_nodes_counts_folded_nested_definition_as_one_leaf():
+    plain = engine.scopes_from_source("def f():\n    return 1\n")[0]
+    nested = engine.scopes_from_source(
+        "def f():\n    def inner():\n        return 1\n    return inner()\n")[0]
+    assert engine.scope_nodes(plain) == 4
+    # 嵌套定义整块折叠成一个 "(function)" 叶:计 1 个节点,内部不计
+    assert engine.scope_nodes(nested) == 6
+
+
+def test_pruned_scope_pair_is_not_reported(tmp_path):
+    wide = "def f():\n" + "".join(f"    s{i} = a + b\n" for i in range(6))
+    (tmp_path / "a.py").write_text(wide)
+    (tmp_path / "b.py").write_text(wide.replace("def f", "def g"))
+    assert len(engine.find_duplicates([tmp_path / "a.py", tmp_path / "b.py"],
+                                     threshold=0.0, min_lines=2, min_nodes=2)) == 1
+    # 只满足一个维度不算候选(and 而非 or)
+    assert engine.find_duplicates([tmp_path / "a.py", tmp_path / "b.py"],
+                                 threshold=0.0, min_lines=2,
+                                 min_nodes=10 ** 6) == []
+    assert engine.find_duplicates([tmp_path / "a.py", tmp_path / "b.py"],
+                                 threshold=0.0, min_lines=10 ** 6,
+                                 min_nodes=2) == []
+
+
+def test_line_span_boundary_is_inclusive(tmp_path):
+    exactly_four = "def f():\n    x = 1\n    y = 2\n    return x + y\n"
+    (tmp_path / "a.py").write_text(exactly_four)
+    (tmp_path / "b.py").write_text(exactly_four.replace("def f", "def g"))
+    assert len(engine.find_duplicates([tmp_path / "a.py", tmp_path / "b.py"],
+                                      threshold=0.0, min_lines=4,
+                                      min_nodes=1)) == 1
+    assert engine.find_duplicates([tmp_path / "a.py", tmp_path / "b.py"],
+                                  threshold=0.0, min_lines=5,
+                                  min_nodes=1) == []
+
+
+def test_pairs_sort_by_score_descending(tmp_path):
+    body = "".join(f"    s{i} = a + b\n" for i in range(6))
+    (tmp_path / "a.py").write_text("def f_one():\n" + body
+                                   + "\n\ndef f_two():\n" + body)
+    (tmp_path / "b.py").write_text("def g_one():\n" + body
+                                   + "    if a:\n        return 1\n")
+    pairs = engine.find_duplicates([tmp_path / "a.py", tmp_path / "b.py"],
+                                   threshold=0.1, min_lines=1, min_nodes=1)
+    assert len(pairs) >= 2
+    assert [pair.score for pair in pairs] == sorted((p.score for p in pairs),
+                                                    reverse=True)
+    assert pairs[0].score == 1.0 and pairs[-1].score < 1.0
+
+
+def test_fingerprint_pair_detection_relies_on_folding_nested_defs(tmp_path):
+    def source(name, inner_name, inner_body):
+        return (f"def {name}():\n"
+                f"    def {inner_name}():\n"
+                f"        {inner_body}\n"
+                "    if flag:\n"
+                f"        return {inner_name}()\n"
+                "    return 0\n")
+
+    (tmp_path / "a.py").write_text(source("outer", "helper", "return 1"))
+    (tmp_path / "b.py").write_text(source("other", "core", "return 22 * a"))
+    pairs = engine.find_duplicates([tmp_path / "a.py", tmp_path / "b.py"],
+                                   min_lines=1, min_nodes=1)
+    assert len(pairs) == 1 and pairs[0].score == 1.0
+
+
+def test_cli_json_keeps_non_ascii_names(tmp_path, capsys):
+    from tools.packages.dry import cli
+
+    body = SRC_INTERESTING.split("\n", 1)[1]
+    source = "def 汇总(items):\n" + body
+    (tmp_path / "a.py").write_text(source)
+    (tmp_path / "b.py").write_text(source.replace("def 汇总", "def 统计"))
+    assert cli.main(["--format", "json", str(tmp_path / "a.py"),
+                     str(tmp_path / "b.py")], {"repo_root": str(tmp_path)}) == 0
+    raw = capsys.readouterr().out
+    assert "汇总" in raw and "\\u6c47" not in raw
+    assert json.loads(raw)["pairs"][0]["a"]["name"] == "汇总"
+
+
+def test_cli_text_pair_block_layout(tmp_path, capsys):
+    from tools.packages.dry import cli
+
+    (tmp_path / "a.py").write_text(SRC_INTERESTING)
+    (tmp_path / "b.py").write_text(SRC_INTERESTING.replace("total", "sum_all"))
+    assert cli.main([str(tmp_path / "a.py"), str(tmp_path / "b.py")],
+                    {"repo_root": str(tmp_path)}) == 0
+    assert capsys.readouterr().out == \
+        "DUPLICATE score=1.00\n  a.py:1-8\n  b.py:1-8\n"

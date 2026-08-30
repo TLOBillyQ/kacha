@@ -351,3 +351,107 @@ def test_serialize_fills_missing_scope_fields_with_defaults():
     assert manifest.parse_text("x = 1\n\n" + footer)["scopes"] == [
         {"id": "m.f", "kind": "function", "start_line": 0, "end_line": 0,
          "semantic_hash": ""}]
+
+
+# --- 算子施加结果、位点集合与哈希口径 ---------------------------------------
+
+def _dump(text: str) -> str:
+    return pyast.dump(pyast.parse(text))
+
+
+def site_of(source: str, kind: str):
+    found = [item for item in engine.scan_module(source)[1] if item.kind == kind]
+    assert len(found) == 1, (kind, [item.kind for item in found])
+    return found[0]
+
+
+def test_each_operator_edit_rewrites_the_expected_node():
+    cases = {
+        "bool-flip": ("def f():\n    return True\n", "def f():\n    return False\n"),
+        "int-swap": ("def f():\n    return 1\n", "def f():\n    return 0\n"),
+        "compare-swap": ("def f(a, b):\n    return a > b\n",
+                         "def f(a, b):\n    return a < b\n"),
+        "binop-swap": ("def f(a, b):\n    return a + b\n",
+                       "def f(a, b):\n    return a - b\n"),
+        "boolop-swap": ("def f(a, b):\n    return a and b\n",
+                        "def f(a, b):\n    return a or b\n"),
+        "unary-remove": ("def f(a):\n    return not a\n", "def f(a):\n    return a\n"),
+        "rhs-none": ("def f():\n    x = 1\n", "def f():\n    x = None\n"),
+    }
+    for kind, (source, expected) in cases.items():
+        mutated = site_of(source, kind).mutated_source(source)
+        assert _dump(mutated) == _dump(expected), kind
+
+
+def test_semantic_hash_keeps_nested_definition_bodies():
+    """嵌套定义属于外层 scope:内层结构变了,外层哈希必须变(否则差分漏跑)。"""
+    a = engine.scan_module("def f():\n    def inner():\n        return 1\n"
+                           "    return inner()\n")[0][0]
+    b = engine.scan_module("def f():\n    def inner():\n        if flag:\n"
+                           "            return 1\n    return inner()\n")[0][0]
+    assert a.semantic_hash != b.semantic_hash
+
+
+def test_semantic_hash_masks_names_and_literal_values():
+    """钉死已知口径:改名与改字面量取值被归一化掩蔽,差分看不见这类编辑。
+
+    要推翻这条口径(改成值敏感的哈希)是一次有意识的设计变更,不能顺手改。
+    """
+    a = engine.scan_module("def f(x):\n    return x > 5\n")[0][0]
+    b = engine.scan_module("def f(y):\n    return y > 6\n")[0][0]
+    assert a.semantic_hash == b.semantic_hash
+
+
+def test_distinct_boolop_operands_are_not_suppressed():
+    """`a and b` 换成 `a or b` 是真实行为差异:操作数不同名就不能算等价。"""
+    _scopes, sites, suppressed = engine.scan_module("def f(a, b):\n    return a and b\n")
+    assert [s.description for s in sites] == ["boolop/and->or"]
+    assert suppressed == 0
+
+
+def test_only_bool_and_zero_one_literals_produce_sites():
+    for literal in ("0.0", "1.0", "2", "'1'", "None", "b'1'"):
+        assert engine.scan_module(f"def f():\n    return {literal}\n")[1] == []
+    assert engine.scan_module("def f():\n    return 0\n")[1]
+
+
+def test_find_root_gives_up_at_filesystem_root(tmp_path, monkeypatch):
+    """往上没有任何项目 marker 时退回 workspace 根。
+
+    marker 判定必须 monkeypatch:真实 TMPDIR 可能本身就在项目副本里(mutate
+    worker 的私有 TMPDIR 就是这样),祖先目录"没有 marker"不是可靠前提。
+    """
+    monkeypatch.setattr(engine, "_is_project_root", lambda path: False)
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    outside = tmp_path / "elsewhere" / "deep"
+    assert engine.find_root(str(workspace), str(outside / "m.py")) == str(workspace)
+
+
+def test_project_hash_covers_python_and_marker_only(tmp_path):
+    target = tmp_path / "a.py"
+    target.write_text("def f():\n    return 1\n")
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n")
+    plain = engine.project_hash(str(tmp_path), str(target), "def f():\n    return 1\n")
+
+    (tmp_path / "README.md").write_text("notes\n")
+    (tmp_path / "app.log").write_text("noise\n")
+    assert engine.project_hash(str(tmp_path), str(target),
+                              "def f():\n    return 1\n") == plain
+    (tmp_path / "README.md").write_text("different notes\n")
+    assert engine.project_hash(str(tmp_path), str(target),
+                              "def f():\n    return 1\n") == plain
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='y'\n")
+    assert engine.project_hash(str(tmp_path), str(target),
+                              "def f():\n    return 1\n") != plain
+
+
+def test_since_last_run_picks_up_scopes_missing_from_manifest():
+    source = "def f(x):\n    return x + 1\n"
+    scopes, sites, _ = engine.scan_module(source)
+    partial = {"version": 4, "project_hash": "h", "scopes": []}
+    forced = {"mutate_all": False, "since_last_run": True, "line_set": None}
+    plain = {"mutate_all": False, "since_last_run": False, "line_set": None}
+    # 模块哈希未变但有 scope 没被登记:只有 --since-last-run 会补跑
+    assert engine.select_sites(sites, scopes, partial, forced, False) == sites
+    assert engine.select_sites(sites, scopes, partial, plain, False) == []

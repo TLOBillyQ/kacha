@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import ast
 import dataclasses
+from itertools import combinations
 
 from ..astnorm import META_FIELDS, child_nodes, folded_label, function_scopes, \
     normalize_node
@@ -93,9 +94,10 @@ def scope_nodes(scope: Scope) -> int:
 
 
 def jaccard(lhs: set, rhs: set) -> float:
-    if not lhs and not rhs:
-        return 0.0
+    """Jaccard 相似度;两个空集合的并集为空,按 0 分处理(无相似性可言)。"""
     union = lhs | rhs
+    if not union:
+        return 0.0
     return len(lhs & rhs) / len(union)
 
 
@@ -131,11 +133,11 @@ def _large_enough(scope: Scope, min_lines: int, min_nodes: int) -> bool:
 
 
 def _compare_scopes(scopes, threshold: float) -> list[Duplicate]:
+    """上三角成对比较;结果按相似度降序、并列按两侧行号。"""
     pairs: list[Duplicate] = []
-    for index, (lhs_file, lhs) in enumerate(scopes):
-        for rhs_file, rhs in scopes[index + 1:]:
-            if not _excluded_pair(lhs_file, rhs_file, lhs, rhs):
-                _record_pair(pairs, lhs_file, lhs, rhs_file, rhs, threshold)
+    for (lhs_file, lhs), (rhs_file, rhs) in combinations(scopes, 2):
+        if not _excluded_pair(lhs_file, rhs_file, lhs, rhs):
+            _record_pair(pairs, lhs_file, lhs, rhs_file, rhs, threshold)
     pairs.sort(key=lambda pair: (-pair.score, pair.lhs.start_line,
                                  pair.rhs.start_line))
     return pairs
@@ -151,3 +153,82 @@ def _record_pair(pairs, lhs_file, lhs, rhs_file, rhs, threshold: float) -> None:
     if score >= threshold:
         pairs.append(Duplicate(score=score, lhs_file=lhs_file, lhs=lhs,
                                rhs_file=rhs_file, rhs=rhs))
+
+# mutate4py-manifest
+# version=4
+# projectHash=027d9eb00fd93a06
+# scope.0.id=engine._scope_fingerprint
+# scope.0.kind=function
+# scope.0.startLine=52
+# scope.0.endLine=56
+# scope.0.semanticHash=20132480b057daf8
+# scope.1.id=engine._collect_fingerprints
+# scope.1.kind=function
+# scope.1.startLine=59
+# scope.1.endLine=67
+# scope.1.semanticHash=dcf33ca481c52cd6
+# scope.2.id=engine._make_scope
+# scope.2.kind=function
+# scope.2.startLine=70
+# scope.2.endLine=79
+# scope.2.semanticHash=8398a531204f3be4
+# scope.3.id=engine.scopes_from_source
+# scope.3.kind=function
+# scope.3.startLine=82
+# scope.3.endLine=85
+# scope.3.semanticHash=9efa758c19d1849f
+# scope.4.id=engine.normalize_scope
+# scope.4.kind=function
+# scope.4.startLine=88
+# scope.4.endLine=89
+# scope.4.semanticHash=903ef0bec65d2f99
+# scope.5.id=engine.scope_nodes
+# scope.5.kind=function
+# scope.5.startLine=92
+# scope.5.endLine=93
+# scope.5.semanticHash=8e3c18dcf9ae37cb
+# scope.6.id=engine.jaccard
+# scope.6.kind=function
+# scope.6.startLine=96
+# scope.6.endLine=101
+# scope.6.semanticHash=9b5af12acf576a49
+# scope.7.id=engine._overlaps
+# scope.7.kind=function
+# scope.7.startLine=104
+# scope.7.endLine=105
+# scope.7.semanticHash=5f0b855a035fb613
+# scope.8.id=engine.find_duplicates
+# scope.8.kind=function
+# scope.8.startLine=108
+# scope.8.endLine=112
+# scope.8.semanticHash=4870fb389a53042a
+# scope.9.id=engine.candidate_scopes
+# scope.9.kind=function
+# scope.9.startLine=115
+# scope.9.endLine=120
+# scope.9.semanticHash=7bd7f70bc8f7e6e7
+# scope.10.id=engine._scopes_in
+# scope.10.kind=function
+# scope.10.startLine=123
+# scope.10.endLine=127
+# scope.10.semanticHash=72070dd71b6bafb7
+# scope.11.id=engine._large_enough
+# scope.11.kind=function
+# scope.11.startLine=130
+# scope.11.endLine=132
+# scope.11.semanticHash=b6612f3749513bc3
+# scope.12.id=engine._compare_scopes
+# scope.12.kind=function
+# scope.12.startLine=135
+# scope.12.endLine=143
+# scope.12.semanticHash=6f3d81f7eafeae57
+# scope.13.id=engine._excluded_pair
+# scope.13.kind=function
+# scope.13.startLine=146
+# scope.13.endLine=148
+# scope.13.semanticHash=557b580b6c4636ce
+# scope.14.id=engine._record_pair
+# scope.14.kind=function
+# scope.14.startLine=151
+# scope.14.endLine=155
+# scope.14.semanticHash=bbc384b26dc9cb70

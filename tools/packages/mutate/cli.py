@@ -199,7 +199,7 @@ def main(args, env=None, run_shell=run) -> int:
     if failure:
         return _usage_failure(failure)
     state, code = _state_or_error(repo_root, options["target"])
-    if state is None:
+    if code:  # 退出码非 0 时 state 一定是 None(契约见 _state_or_error)
         return code
     for dest, handler in _SUBCOMMANDS:
         if options[dest]:
@@ -208,7 +208,10 @@ def main(args, env=None, run_shell=run) -> int:
 
 
 def _state_or_error(repo_root: str, target: str) -> tuple[_TargetState | None, int]:
-    """读目标并建状态;沿用既有错误文案,失败返回退出码 1。"""
+    """读目标并建状态;沿用既有错误文案。
+
+    失败时返回 (None, 1),成功时返回 (state, 0):调用方只看退出码,非 0 即停。
+    """
     try:
         abs_target, source = _read_target(repo_root, target)
     except (OSError, ValueError) as exc:
@@ -532,7 +535,7 @@ def _run_trial(ws_root, state, site, command, timeout, run_shell) -> tuple[str, 
         with open(path, "w", encoding="utf-8") as handle:
             handle.write(site.mutated_source(state.source))
         start = time.monotonic()
-        outcome = _trial_status(path, command, timeout, run_shell, ws_root, state)
+        outcome = _trial_status(command, timeout, run_shell, ws_root)
         return outcome, round(time.monotonic() - start, 1)
     finally:
         _restore(path, state.source)
@@ -549,7 +552,7 @@ def _discard_stale_bytecode(ws_root: str, relative: str) -> None:
     shutil.rmtree(cache, ignore_errors=True)
 
 
-def _trial_status(path, command, timeout, run_shell, ws_root, state) -> str:
+def _trial_status(command, timeout, run_shell, ws_root) -> str:
     try:
         result = run_shell(command, cwd=ws_root, env=_run_env(ws_root),
                            timeout=timeout)
@@ -587,3 +590,227 @@ def _report_results(results: dict, filtered) -> bool:
 
 def _count_outcome(results: dict, outcome: str) -> int:
     return sum(1 for name, _ in results.values() if name == outcome)
+
+# mutate4py-manifest
+# version=4
+# projectHash=a3b64a84debf2df1
+# scope.0.id=cli._parse_line_set
+# scope.0.kind=function
+# scope.0.startLine=56
+# scope.0.endLine=61
+# scope.0.semanticHash=0ea4ac186badd6bb
+# scope.1.id=cli.usage
+# scope.1.kind=function
+# scope.1.startLine=91
+# scope.1.endLine=111
+# scope.1.semanticHash=45fee6793c6934d4
+# scope.2.id=cli._conflict
+# scope.2.kind=function
+# scope.2.startLine=114
+# scope.2.endLine=119
+# scope.2.semanticHash=a8daad2f1be409fd
+# scope.3.id=cli._options_or_error
+# scope.3.kind=function
+# scope.3.startLine=122
+# scope.3.endLine=135
+# scope.3.semanticHash=0d6588532e044661
+# scope.4.id=cli._usage_failure
+# scope.4.kind=function
+# scope.4.startLine=138
+# scope.4.endLine=140
+# scope.4.semanticHash=7dde501e3c691637
+# scope.5.id=cli._read_target
+# scope.5.kind=function
+# scope.5.startLine=143
+# scope.5.endLine=151
+# scope.5.semanticHash=eb4ab6ab8e47679c
+# scope.6.id=cli._prepare
+# scope.6.kind=function
+# scope.6.startLine=174
+# scope.6.endLine=190
+# scope.6.semanticHash=afcda6a2d869bebe
+# scope.7.id=cli.main
+# scope.7.kind=function
+# scope.7.startLine=193
+# scope.7.endLine=207
+# scope.7.semanticHash=f5239ce9ff56ce0f
+# scope.8.id=cli._state_or_error
+# scope.8.kind=function
+# scope.8.startLine=210
+# scope.8.endLine=224
+# scope.8.semanticHash=6c5034e93e207ed8
+# scope.9.id=cli._scan
+# scope.9.kind=function
+# scope.9.startLine=227
+# scope.9.endLine=236
+# scope.9.semanticHash=0afd0e5b85762310
+# scope.10.id=cli._update_manifest
+# scope.10.kind=function
+# scope.10.startLine=239
+# scope.10.endLine=242
+# scope.10.semanticHash=4bb868227d3acafa
+# scope.11.id=cli._write_manifest
+# scope.11.kind=function
+# scope.11.startLine=249
+# scope.11.endLine=254
+# scope.11.semanticHash=01b94f1634ac1db4
+# scope.12.id=cli._recordable_scopes
+# scope.12.kind=function
+# scope.12.startLine=257
+# scope.12.endLine=270
+# scope.12.semanticHash=7e9952394578b2e2
+# scope.13.id=cli._site_counts
+# scope.13.kind=function
+# scope.13.startLine=273
+# scope.13.endLine=277
+# scope.13.semanticHash=44b33d6fbeadf776
+# scope.14.id=cli._scope_is_recordable
+# scope.14.kind=function
+# scope.14.startLine=280
+# scope.14.endLine=288
+# scope.14.semanticHash=5aff28195ecea406
+# scope.15.id=cli._scopes_data
+# scope.15.kind=function
+# scope.15.startLine=291
+# scope.15.endLine=294
+# scope.15.semanticHash=279a9fdb48c43e30
+# scope.16.id=cli._mutate
+# scope.16.kind=function
+# scope.16.startLine=297
+# scope.16.endLine=308
+# scope.16.semanticHash=682cf69d4e85a59c
+# scope.17.id=cli._split_covered
+# scope.17.kind=function
+# scope.17.startLine=311
+# scope.17.endLine=316
+# scope.17.semanticHash=e1ff9fd25a26bbfa
+# scope.18.id=cli._report_overview
+# scope.18.kind=function
+# scope.18.startLine=319
+# scope.18.endLine=332
+# scope.18.semanticHash=45bb7fdf69898f71
+# scope.19.id=cli._warn_if_many
+# scope.19.kind=function
+# scope.19.startLine=335
+# scope.19.endLine=338
+# scope.19.semanticHash=fa89e5b8d9a34bfb
+# scope.20.id=cli._covered_lines
+# scope.20.kind=function
+# scope.20.startLine=341
+# scope.20.endLine=352
+# scope.20.semanticHash=f111ad4e011fc3cf
+# scope.21.id=cli._collect_covered
+# scope.21.kind=function
+# scope.21.startLine=355
+# scope.21.endLine=370
+# scope.21.semanticHash=e736f3c18a68c49b
+# scope.22.id=cli._match_covered
+# scope.22.kind=function
+# scope.22.startLine=373
+# scope.22.endLine=378
+# scope.22.semanticHash=1be5ee1ca35404cb
+# scope.23.id=cli._read_cache
+# scope.23.kind=function
+# scope.23.startLine=381
+# scope.23.endLine=387
+# scope.23.semanticHash=401309600198bf81
+# scope.24.id=cli._cache_entry
+# scope.24.kind=function
+# scope.24.startLine=390
+# scope.24.endLine=394
+# scope.24.semanticHash=6f7834eff446867b
+# scope.25.id=cli._load_json
+# scope.25.kind=function
+# scope.25.startLine=397
+# scope.25.endLine=403
+# scope.25.semanticHash=3249a1297f32aaf0
+# scope.26.id=cli._write_cache
+# scope.26.kind=function
+# scope.26.startLine=406
+# scope.26.endLine=410
+# scope.26.semanticHash=e980264cd8053067
+# scope.27.id=cli._execute
+# scope.27.kind=function
+# scope.27.startLine=413
+# scope.27.endLine=424
+# scope.27.semanticHash=22f6f8a387760920
+# scope.28.id=cli._worker_count
+# scope.28.kind=function
+# scope.28.startLine=427
+# scope.28.endLine=429
+# scope.28.semanticHash=64d9723abf86323e
+# scope.29.id=cli._prepare_workspaces
+# scope.29.kind=function
+# scope.29.startLine=432
+# scope.29.endLine=441
+# scope.29.semanticHash=61f909f114695650
+# scope.30.id=cli._discard_workspaces
+# scope.30.kind=function
+# scope.30.startLine=444
+# scope.30.endLine=448
+# scope.30.semanticHash=169ce5cbde164f5d
+# scope.31.id=cli._test_command
+# scope.31.kind=function
+# scope.31.startLine=451
+# scope.31.endLine=454
+# scope.31.semanticHash=a0e57178716d605c
+# scope.32.id=cli._run_env
+# scope.32.kind=function
+# scope.32.startLine=457
+# scope.32.endLine=472
+# scope.32.semanticHash=bb237e69f6841f81
+# scope.33.id=cli._baseline
+# scope.33.kind=function
+# scope.33.startLine=475
+# scope.33.endLine=480
+# scope.33.semanticHash=030e0c55f417263f
+# scope.34.id=cli._run_suite
+# scope.34.kind=function
+# scope.34.startLine=483
+# scope.34.endLine=494
+# scope.34.semanticHash=2497352b1ce7df05
+# scope.35.id=cli._run_trials
+# scope.35.kind=function
+# scope.35.startLine=497
+# scope.35.endLine=507
+# scope.35.semanticHash=76da264e33f6d438
+# scope.36.id=cli._leased_trial
+# scope.36.kind=function
+# scope.36.startLine=510
+# scope.36.endLine=521
+# scope.36.semanticHash=14f6e974284e4fd5
+# scope.37.id=cli._trial_outcome
+# scope.37.kind=function
+# scope.37.startLine=524
+# scope.37.endLine=528
+# scope.37.semanticHash=ddd6bcb4cb7cff57
+# scope.38.id=cli._run_trial
+# scope.38.kind=function
+# scope.38.startLine=531
+# scope.38.endLine=541
+# scope.38.semanticHash=620968279d99262c
+# scope.39.id=cli._discard_stale_bytecode
+# scope.39.kind=function
+# scope.39.startLine=544
+# scope.39.endLine=552
+# scope.39.semanticHash=ddb63e73440ab43b
+# scope.40.id=cli._trial_status
+# scope.40.kind=function
+# scope.40.startLine=555
+# scope.40.endLine=561
+# scope.40.semanticHash=680a1b3a20ad34ff
+# scope.41.id=cli._restore
+# scope.41.kind=function
+# scope.41.startLine=564
+# scope.41.endLine=570
+# scope.41.semanticHash=0072b414f46ddb34
+# scope.42.id=cli._report_results
+# scope.42.kind=function
+# scope.42.startLine=573
+# scope.42.endLine=588
+# scope.42.semanticHash=4c55d6cb2d0e665d
+# scope.43.id=cli._count_outcome
+# scope.43.kind=function
+# scope.43.startLine=591
+# scope.43.endLine=592
+# scope.43.semanticHash=35c3449b5c7d9c19

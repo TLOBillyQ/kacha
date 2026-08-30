@@ -57,6 +57,8 @@ def test_coverage_runs_and_reports(monkeypatch, tmp_path):
     assert code == 0
     assert any("coverage" in a[0] for a in calls)
     assert calls[-1][0][-2:] == ["report", "-m"]
+    # 插桩范围固定为项目被测目录,不是随手挑的目录
+    assert "--source=src" in calls[0][0]
 
 
 def test_falls_back_to_current_interpreter(monkeypatch, tmp_path):

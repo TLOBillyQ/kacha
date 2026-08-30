@@ -59,9 +59,9 @@ def main(args, env=None, run_shell=run) -> int:
     if error:
         sys.stderr.write(f"{error}\n\n{usage()}")
         return 2
-    source, code = _source_dir(options, repo_root)
+    source = _source_dir(options, repo_root)
     if source is None:
-        return code
+        return 1
     entries, code = _analyze(repo_root, source, run_shell)
     if code:
         return code
@@ -69,14 +69,14 @@ def main(args, env=None, run_shell=run) -> int:
     return _apply_gate(options, entries)
 
 
-def _source_dir(options, repo_root: str) -> tuple[str | None, int]:
-    """--source 指定的被测目录;缺省 <repo_root>/src;不存在即业务失败(1)。"""
+def _source_dir(options, repo_root: str) -> str | None:
+    """--source 指定的被测目录;缺省 <repo_root>/src;不存在返回 None(业务失败)。"""
     source = options.get("source") or os.path.join(repo_root,
                                                    covdata.DEFAULT_SOURCE)
     if not os.path.isdir(source):
         sys.stderr.write(f"error: source directory not found: {source}\n")
-        return None, 1
-    return source, 0
+        return None
+    return source
 
 
 def _apply_gate(options, entries) -> int:
@@ -158,3 +158,62 @@ def _gate(entries: list[dict], threshold: float) -> int:
                          f"{threshold:.2f}\n")
         return 2
     return 0
+
+# mutate4py-manifest
+# version=4
+# projectHash=c402a6e040762959
+# scope.0.id=cli.usage
+# scope.0.kind=function
+# scope.0.startLine=41
+# scope.0.endLine=50
+# scope.0.semanticHash=45fee6793c6934d4
+# scope.1.id=cli.main
+# scope.1.kind=function
+# scope.1.startLine=53
+# scope.1.endLine=69
+# scope.1.semanticHash=dc80923d4d2f1805
+# scope.2.id=cli._source_dir
+# scope.2.kind=function
+# scope.2.startLine=72
+# scope.2.endLine=79
+# scope.2.semanticHash=6e234e2568824742
+# scope.3.id=cli._apply_gate
+# scope.3.kind=function
+# scope.3.startLine=82
+# scope.3.endLine=85
+# scope.3.semanticHash=3488948e4d766a45
+# scope.4.id=cli._analyze
+# scope.4.kind=function
+# scope.4.startLine=88
+# scope.4.endLine=108
+# scope.4.semanticHash=7d7584dd92cc28e2
+# scope.5.id=cli._scan_files
+# scope.5.kind=function
+# scope.5.startLine=111
+# scope.5.endLine=114
+# scope.5.semanticHash=bcbe96b22e0f69e0
+# scope.6.id=cli._print_report
+# scope.6.kind=function
+# scope.6.startLine=117
+# scope.6.endLine=127
+# scope.6.semanticHash=bd3971474fd1f381
+# scope.7.id=cli._print_json
+# scope.7.kind=function
+# scope.7.startLine=130
+# scope.7.endLine=132
+# scope.7.semanticHash=55c0131783270be3
+# scope.8.id=cli._entry_view
+# scope.8.kind=function
+# scope.8.startLine=135
+# scope.8.endLine=141
+# scope.8.semanticHash=33d9b66bca6d00ed
+# scope.9.id=cli._entry_line
+# scope.9.kind=function
+# scope.9.startLine=144
+# scope.9.endLine=149
+# scope.9.semanticHash=4a5a0fe878925d5f
+# scope.10.id=cli._gate
+# scope.10.kind=function
+# scope.10.startLine=152
+# scope.10.endLine=160
+# scope.10.semanticHash=63d5eb09c02d28cb

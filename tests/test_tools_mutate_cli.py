@@ -403,3 +403,156 @@ def test_run_trials_keys_results_by_site_index(monkeypatch):
     assert {index: outcome for index, (outcome, _seconds) in results.items()} == {
         0: "killed", 1: "killed", 2: "killed", 3: "killed"}
     assert [results[index][1] for index in range(4)] == [0, 1, 2, 3]
+
+
+# --- 位点选择、计数与判定的口径(变异补测) ----------------------------------
+
+
+def test_state_or_error_pairs_state_with_zero_exit(tmp_path):
+    root = make_project(tmp_path, "def f(x):\n    return x + 1\n")
+    state, code = cli._state_or_error(root, "src/m.py")
+    assert code == 0 and state is not None
+    missing, code = cli._state_or_error(root, "src/nope.py")
+    assert missing is None and code == 1
+
+
+def test_scan_stars_only_changed_scopes(tmp_path, capsys):
+    source = "def f(x):\n    return x + 1\n\n\ndef g(y):\n    return y - 1\n"
+    root = make_project(tmp_path, source)
+    assert cli.main(["src/m.py", "--scan"], {"repo_root": root}) == 0
+    assert "* " not in capsys.readouterr().out  # 无 manifest -> 没有一条该标星
+
+    inner, outer = engine.scan_module(source)[0]  # 占位模块名:按顺序取 scope
+    manifest.write(os.path.join(root, "src/m.py"), source, {
+        "version": 4, "project_hash": "p",
+        "scopes": [{"id": "m.f", "kind": "function", "start_line": 1, "end_line": 2,
+                    "semantic_hash": inner.semantic_hash},
+                   {"id": "m.g", "kind": "function", "start_line": 5, "end_line": 6,
+                    "semantic_hash": "stale"}]})
+    assert cli.main(["src/m.py", "--scan"], {"repo_root": root}) == 0
+    out = capsys.readouterr().out
+    assert "  L2 binop/add->sub (scope: m.f)" in out  # 哈希一致 -> 不标星
+    assert "* L6 binop/sub->add (scope: m.g)" in out  # 哈希失配 -> 标星
+
+
+def test_site_counts_tallies_sites_per_scope():
+    sites = [SimpleNamespace(scope_id="m.f"), SimpleNamespace(scope_id="m.f"),
+             SimpleNamespace(scope_id="m.g")]
+    assert cli._site_counts(sites) == {"m.f": 2, "m.g": 1}
+    assert cli._site_counts([]) == {}
+
+
+def test_scope_is_recordable_requires_full_or_untouched_coverage():
+    scope = SimpleNamespace(id="m.f", semantic_hash="h")
+    recorded = {"m.f": {"semantic_hash": "h"}}
+    assert cli._scope_is_recordable(scope, {}, {}, {})            # 无位点
+    assert cli._scope_is_recordable(scope, {"m.f": 2}, {"m.f": 2}, {})  # 全跑完
+    assert not cli._scope_is_recordable(scope, {"m.f": 2}, {"m.f": 1}, {})  # 半程
+    assert cli._scope_is_recordable(scope, {"m.f": 2}, {}, recorded)  # 未触及且旧记录有效
+    assert not cli._scope_is_recordable(scope, {"m.f": 2}, {},
+                                        {"m.f": {"semantic_hash": "other"}})
+    assert not cli._scope_is_recordable(scope, {"m.f": 2}, {}, {})  # 未触及无旧记录
+
+
+def test_split_covered_partitions_on_covered_lines():
+    sites = [SimpleNamespace(line=2), SimpleNamespace(line=9)]
+    covered, uncovered = cli._split_covered(sites, {2})
+    assert [site.line for site in covered] == [2]
+    assert [site.line for site in uncovered] == [9]
+    assert cli._split_covered(sites, None) == (sites, [])  # 不过滤 -> 全部入选
+
+
+def test_match_covered_prefers_absolute_key_then_relative_suffix():
+    state = SimpleNamespace(repo_root="/proj", relative="sub/src/m.py")
+    assert cli._match_covered({"/proj/sub/src/m.py": {"executed_lines": [2, 3]}},
+                              state) == {2, 3}
+    # 绝对键命中时不得退到后缀查法:否则另一个项目的同名后缀会顶替结果
+    both = {"/elsewhere/sub/src/m.py": {"executed_lines": [9]},
+            "/proj/sub/src/m.py": {"executed_lines": [2]}}
+    assert cli._match_covered(both, state) == {2}
+    assert cli._match_covered({"sub/src/m.py": {"executed_lines": [4]}}, state) == {4}
+    assert cli._match_covered({}, state) is None
+
+
+def test_write_cache_rewrites_in_place_and_keeps_lines(tmp_path):
+    cache = str(tmp_path / ".toolcache" / "mutate4py-coverage.json")
+    cli._write_cache(cache, "h1", "src/m.py", {3, 1})
+    assert cli._read_cache(cache, "h1", "src/m.py") == {1, 3}
+    cli._write_cache(cache, "h2", "src/m.py", None)  # 目录已存在也必须写得出
+    assert cli._read_cache(cache, "h2", "src/m.py") == set()
+    assert cli._read_cache(cache, "h1", "src/m.py") is None  # 整份覆盖,不是追加
+
+
+def test_worker_count_defaults_and_limits(monkeypatch):
+    monkeypatch.setattr(cli.os, "cpu_count", lambda: 8)
+    assert cli._worker_count(None, 10) == 4  # 默认 CPU 一半
+    assert cli._worker_count(3, 10) == 3     # 显式请求优先
+    assert cli._worker_count(None, 2) == 2   # 绝不超过位点数
+    monkeypatch.setattr(cli.os, "cpu_count", lambda: 1)
+    assert cli._worker_count(None, 10) == 1  # 下限 1,不能算出 0 个 worker
+    monkeypatch.setattr(cli.os, "cpu_count", lambda: None)
+    assert cli._worker_count(None, 0) == 0   # cpu_count 不可用 -> 兜底 2 核
+
+
+def test_discard_workspaces_tolerates_missing_trees(tmp_path):
+    workspace = tmp_path / ".toolcache" / "mutate4py" / "ws-0"
+    workspace.mkdir(parents=True)
+    cli._discard_workspaces(str(tmp_path), [str(workspace)])
+    assert not (tmp_path / ".toolcache" / "mutate4py").exists()
+    assert (tmp_path / ".toolcache").exists()  # 只回收自己的目录
+    cli._discard_workspaces(str(tmp_path), [str(workspace)])  # 再删一次不抛
+
+
+def test_baseline_returns_exit_code_and_elapsed(tmp_path, monkeypatch):
+    stamps = iter([100.0, 100.25])
+    monkeypatch.setattr(cli, "time", SimpleNamespace(monotonic=lambda: next(stamps)))
+    seen = []
+
+    def run_shell(argv, cwd=None, **kwargs):
+        seen.append(cwd)
+        return SimpleNamespace(returncode=7)
+
+    assert cli._baseline(str(tmp_path), ["pytest"], run_shell) == (7, 0.2)
+    assert seen == [str(tmp_path)]
+
+
+def test_run_suite_baselines_first_workspace_and_scales_timeout(monkeypatch):
+    calls = []
+    monkeypatch.setattr(cli, "_baseline", lambda ws, command, run_shell:
+                        (calls.append(("baseline", ws)), (0, 3.0))[1])
+    monkeypatch.setattr(cli, "_run_trials",
+                        lambda workspaces, state, filtered, command, timeout, run_shell:
+                        (calls.append(("trials", timeout)), {})[1])
+    monkeypatch.setattr(cli, "_report_results",
+                        lambda results, filtered: calls.append(("report",)) or False)
+    monkeypatch.setattr(cli, "_write_manifest",
+                        lambda state, filtered: calls.append(("manifest",)))
+    assert cli._run_suite("state", {"timeout_factor": 10}, [], ["ws-0", "ws-1"],
+                          ["pytest"], None) == 0
+    assert calls == [("baseline", "ws-0"), ("trials", 30.0), ("report",),
+                     ("manifest",)]
+
+
+def test_run_trial_reports_elapsed_of_the_test_run(tmp_path, monkeypatch):
+    stamps = iter([100.0, 100.25])
+    monkeypatch.setattr(cli, "time", SimpleNamespace(monotonic=lambda: next(stamps)))
+    workspace = tmp_path / "ws"
+    (workspace / "pkg").mkdir(parents=True)
+    source = "def f():\n    return 1\n"
+    state = SimpleNamespace(relative=os.path.join("pkg", "m.py"), source=source)
+    site = SimpleNamespace(mutated_source=lambda _src: "def f():\n    return 2\n")
+    run_shell = lambda *args, **kwargs: SimpleNamespace(returncode=1)
+
+    assert cli._run_trial(str(workspace), state, site, ["true"], 1, run_shell) \
+        == ("killed", 0.2)
+
+
+def test_report_results_numbers_sites_from_one_and_counts_timeouts(capsys):
+    sites = [SimpleNamespace(line=2, description="int-swap"),
+             SimpleNamespace(line=5, description="rhs->none")]
+    results = {0: ("killed", 0.5), 1: ("timeout", 1.5)}
+    assert cli._report_results(results, sites) is False
+    out = capsys.readouterr().out
+    assert out.startswith("[1/2] L2: int-swap ... killed (0.5s)")
+    assert "[2/2] L5: rhs->none ... timeout (1.5s)" in out
+    assert "score: 100.0% (2/2 killed, 1 timeout)" in out

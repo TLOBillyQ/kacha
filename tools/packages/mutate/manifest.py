@@ -138,7 +138,7 @@ def write(path, stripped_source: str, data: dict) -> None:
 
 # mutate4py-manifest
 # version=4
-# projectHash=bff7297d8491ac19
+# projectHash=058992dd19e1443c
 # scope.0.id=manifest._last_marker_index
 # scope.0.kind=function
 # scope.0.startLine=34

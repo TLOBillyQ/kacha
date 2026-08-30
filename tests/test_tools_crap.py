@@ -95,15 +95,16 @@ def test_attribution_skips_nested_function_lines():
     source = (
         "def outer(x):\n"
         "    def inner(y):\n"
-        "        return y + 1\n"
+        "        if y > 0 and y < 3:\n"
+        "            return y + 1\n"
         "    return inner(x) + 1\n"
     )
     scope = first_scope(source)
     executable = engine.executable_lines(scope)
+    # 内层的决策点也不计入外层圈复杂度
     assert engine.cyclomatic_complexity(scope) == 1
-    # 内层函数体(第 3 行)不计入 outer 的可执行行
-    assert 3 not in executable
-    assert 4 in executable
+    # 内层定义与其函数体(第 2-4 行)都不计入 outer 的可执行行
+    assert executable == {5}
 
 
 def test_attribute_and_report_shape():
@@ -293,3 +294,32 @@ def test_build_report_skips_unparsable_and_unattributable_scopes():
     entry = engine.build_report([("/p/y.py", only_nested)], coverage)[0]
     assert entry["coverage"] is None and entry["crap"] is None
     assert engine.risk_band(None) == "low"
+
+
+def test_cli_text_line_renders_every_column(tmp_path, capsys):
+    from tools.packages.crap import cli
+
+    root = prepared_project(tmp_path)
+    assert cli.main([], {"repo_root": root}, run_shell=ok_shell()) == 0
+    assert capsys.readouterr().out.strip() == \
+        "src/m.py:1:f CC=1 cov=100% CRAP=1.00 (low)"
+
+
+def test_cli_text_line_shows_na_without_coverage(tmp_path, capsys):
+    from tools.packages.crap import cli
+
+    root = prepared_project(tmp_path)
+    write_artifact(tmp_path, [1], rel="src/other.py")
+    assert cli.main([], {"repo_root": root}, run_shell=ok_shell()) == 0
+    assert "cov=N/A CRAP=N/A (low)" in capsys.readouterr().out
+
+
+def test_cli_json_keeps_non_ascii_names(tmp_path, capsys):
+    from tools.packages.crap import cli
+
+    root = prepared_project(tmp_path, source="def 计算(x):\n    return x + 1\n",
+                           executed=(1, 2))
+    assert cli.main(["--json"], {"repo_root": root}, run_shell=ok_shell()) == 0
+    raw = capsys.readouterr().out
+    assert "计算" in raw and "\\u8ba1" not in raw
+    assert json.loads(raw)["entries"][0]["name"] == "计算"
