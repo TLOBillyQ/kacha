@@ -17,6 +17,8 @@ swarmforge/scripts/
 # Agent scratch and toolchain caches
 tmp/
 .toolcache/
+.coverage
+.coverage.*
 
 # Local gateway credentials
 config.json
