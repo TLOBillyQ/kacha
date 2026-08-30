@@ -1,2 +1,29 @@
 .swarmforge/
 .worktrees/
+
+# Local gateway credentials
+config.json
+
+# Generated images and local issue workspace
+output/
+.scratch/
+
+# Release build artifacts (portable dir, zip, checksums, build info)
+/release/
+
+# Python caches, environments, and build artifacts
+__pycache__/
+*.py[cod]
+.venv/
+.venv-win/
+venv/
+build/
+dist/
+*.egg-info/
+*.spec
+!packaging/ugc-image-tool.spec
+
+# OS and editor files
+.DS_Store
+.idea/
+.vscode/

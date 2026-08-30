@@ -1,0 +1,28 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/v1/images/edits",
+    "headers": {
+      "Accept": "application/json",
+      "Authorization": "[REDACTED]",
+      "Content-Type": "application/json"
+    },
+    "body": {}
+  },
+  "response": {
+    "status": 400,
+    "headers": {
+      "Content-Type": "application/json; charset=utf-8",
+      "X-New-Api-Version": "v0.0.0",
+      "X-Oneapi-Request-Id": "202608171354497324590008268d9d6jJponIcq",
+      "Content-Length": "159"
+    },
+    "body": {
+      "error": {
+        "code": "",
+        "message": "未指定模型名称，模型名称不能为空 (request id: 202608171354497324590008268d9d6jJponIcq)",
+        "type": "new_api_error"
+      }
+    }
+  }
+}

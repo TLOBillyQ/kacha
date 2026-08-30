@@ -1,0 +1,28 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/v1/images/generations",
+    "headers": {
+      "Accept": "application/json",
+      "Authorization": "[REDACTED]",
+      "Content-Type": "application/json"
+    },
+    "body": {}
+  },
+  "response": {
+    "status": 503,
+    "headers": {
+      "Content-Type": "application/json; charset=utf-8",
+      "X-New-Api-Version": "v0.0.0",
+      "X-Oneapi-Request-Id": "202608171354495635823008268d9d6Oa25CMBE",
+      "Content-Length": "190"
+    },
+    "body": {
+      "error": {
+        "code": "model_not_found",
+        "message": "分组 default 下模型 dall-e 无可用渠道（distributor） (request id: 202608171354495635823008268d9d6Oa25CMBE)",
+        "type": "new_api_error"
+      }
+    }
+  }
+}
