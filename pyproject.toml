@@ -16,5 +16,10 @@ test = ["pytest>=8,<10"]
 ugc-contracts = "ugc_image_tool.contracts.cli:main"
 ugc-image-tool = "ugc_image_tool.ui:run"
 
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-q"
+
 [tool.setuptools.packages.find]
 where = ["src"]
