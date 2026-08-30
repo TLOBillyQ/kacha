@@ -43,17 +43,21 @@ def usage() -> str:
     return _usage()
 
 
-def _collect(python: str, repo_root: str, source: str, run_shell=run):
-    """插桩跑测试并产出 .toolcache/coverage.json;失败返回退出码。"""
-    for argv in (
-        [python, "-m", "coverage", "erase"],
-        [python, "-m", "coverage", "run", f"--source={source}", "-m", "pytest"],
-        [python, "-m", "coverage", "json", "-o",
-         os.path.join(repo_root, ".toolcache", "coverage.json")],
-    ):
-        result = run_shell(argv, cwd=repo_root)
-        if result.returncode != 0:
-            return result.returncode
+def _collect(python: str, repo_root: str, source: str, run_shell=run) -> int:
+    """插桩跑测试并产出 .toolcache/coverage.json;仅产物步骤失败才返回非 0。"""
+    result = run_shell([python, "-m", "coverage", "erase"], cwd=repo_root)
+    if result.returncode != 0:
+        return result.returncode
+    result = run_shell([python, "-m", "coverage", "run", f"--source={source}",
+                        "-m", "pytest"], cwd=repo_root)
+    if result.returncode != 0:
+        sys.stderr.write("warning: tests failed under coverage; "
+                         "continuing with partial coverage data\n")
+    result = run_shell([python, "-m", "coverage", "json", "-o",
+                        os.path.join(repo_root, ".toolcache", "coverage.json")],
+                       cwd=repo_root)
+    if result.returncode != 0:
+        return result.returncode
     return 0
 
 
