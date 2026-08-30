@@ -118,3 +118,11 @@ tools/
 
 规范纪律:manifest 不手改,只用 `--update-manifest` 再生成;CRAP/DRY/变异/覆盖率
 一次只跑一个工具;`--max-workers 4`。
+
+## 未覆盖与已知问题
+
+- 未实现 python `arch-view`(依赖边界扫描,lua 版有):two-pack cleaner 的
+  架构审查暂靠角色自查;需要时另行补建。
+- 本仓库 `tests/test_task_queue.py` 的两个用例(`test_default_limit_*_fifo_order`、
+  `test_lowering_limit_does_not_cancel_running_tasks`)存在既有竞态,在基线提交
+  b3636a2 上同样失败;与本工具链无关,但会让 `verify` slim 间歇性非绿。

@@ -72,7 +72,7 @@ class Site:
         else:  # pragma: no cover - unknown kind is a programming error
             raise ValueError(f"unknown site kind: {self.kind}")
 
-    def mutated_source(self, source: str, module_name: str = "m") -> str:
+    def mutated_source(self, source: str) -> str:
         stripped = manifest.strip(source)
         tree = ast.parse(stripped)
         self.apply(tree)

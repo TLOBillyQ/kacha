@@ -241,7 +241,7 @@ def _run_trial(ws_root, target_rel, original_source, site, command, timeout,
     path = os.path.join(ws_root, target_rel)
     try:
         with open(path, "w", encoding="utf-8") as handle:
-            handle.write(site.mutated_source(original_source, module_name=""))
+            handle.write(site.mutated_source(original_source))
         start = time.monotonic()
         try:
             result = run_shell(command, cwd=ws_root, env=env, timeout=timeout)

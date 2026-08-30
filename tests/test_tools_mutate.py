@@ -168,5 +168,5 @@ def test_apply_mutations_change_ast(tmp_path):
     source = "def f(x):\n    return x + 1\n"
     _scopes, sites, _ = engine.scan_module(source)
     for site in sites:
-        mutated = site.mutated_source(source, module_name="m")
+        mutated = site.mutated_source(source)
         assert pyast.dump(pyast.parse(mutated)) != pyast.dump(pyast.parse(source))
