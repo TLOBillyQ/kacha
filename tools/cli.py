@@ -63,14 +63,17 @@ def main(argv=None, env=None, packages=None) -> int:
         return 2
 
     if packages is None:
-        packages = {}
-    pkg = packages.get(name) if packages else None
-    if pkg is None:
         try:
             pkg = _load_package(name)
         except Exception as exc:  # noqa: BLE001 - report any load failure
             sys.stderr.write(f"子命令加载失败: {name} (tools.packages.{name}.cli)\n")
             sys.stderr.write(f"{exc}\n\n{_usage()}")
+            return 2
+    else:
+        pkg = packages.get(name)
+        if pkg is None:
+            sys.stderr.write(f"子命令加载失败: {name} (tools.packages.{name}.cli)\n")
+            sys.stderr.write(f"package not registered\n\n{_usage()}")
             return 2
 
     if any(arg in ("--help", "-h") for arg in rest):
