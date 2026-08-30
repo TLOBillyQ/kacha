@@ -2,7 +2,7 @@
 
 工作原理:
 1. ast 解析每个 Python 源文件
-2. 从 AST 提取函数作用域(模块级函数 + 类方法)
+2. 从 AST 提取函数作用域(模块级函数 + 类方法,复用 ..common 的作用域模型)
 3. 对每个作用域的子树做归一化:标识符 -> ident,字面量 -> literal/<KIND>,
    函数调用的被调用者 -> callee,运算符保留在标签中(如 op/add),节点类型即标签
 4. 构建结构指纹:作用域内所有归一化子树序列化结果的集合
@@ -17,13 +17,16 @@ from __future__ import annotations
 
 import ast
 import dataclasses
-import os
 
-from ..astnorm import normalize_node
+from ..astnorm import META_FIELDS, child_nodes, folded_label, function_scopes, \
+    normalize_node
+from ..common import read_sources
 
-# ast 字段中不属于结构语义的元数据,归一化时剔除
-_META_FIELDS = {"ctx", "type_comment", "lineno", "col_offset", "end_lineno",
-                "end_col_offset"}
+
+#: 默认参数(与上游 dry4lua 一致)
+DEFAULT_THRESHOLD = 0.82
+DEFAULT_MIN_LINES = 4
+DEFAULT_MIN_NODES = 20
 
 
 @dataclasses.dataclass
@@ -47,31 +50,20 @@ class Duplicate:
 
 def _scope_fingerprint(function_node: ast.FunctionDef) -> tuple[frozenset, int]:
     """作用域内所有归一化子树序列化结果的集合,以及遍历节点总数。"""
-    fingerprints = set()
-    count = 0
+    fingerprints: set[str] = set()
+    nodes = _collect_fingerprints(function_node, fingerprints, outer=True)
+    return frozenset(fingerprints), nodes
 
-    def visit(node, outer=False):
-        nonlocal count
-        count += 1
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and not outer:
-            fingerprints.add("(function)")
-            return
-        if isinstance(node, ast.ClassDef) and not outer:
-            fingerprints.add("(class)")
-            return
-        fingerprints.add(normalize_node(node, outer))
-        for field, value in ast.iter_fields(node):
-            if field in _META_FIELDS:
-                continue
-            if isinstance(value, ast.AST):
-                visit(value)
-            elif isinstance(value, list):
-                for item in value:
-                    if isinstance(item, ast.AST):
-                        visit(item)
 
-    visit(function_node, outer=True)
-    return frozenset(fingerprints), count
+def _collect_fingerprints(node, fingerprints: set[str], outer: bool = False) -> int:
+    """收集 node 及其后代的指纹,返回访问到的节点数(折叠叶也计 1)。"""
+    folded = folded_label(node, outer)
+    if folded is not None:
+        fingerprints.add(folded)
+        return 1
+    fingerprints.add(normalize_node(node, outer))
+    return 1 + sum(_collect_fingerprints(child, fingerprints)
+                   for _field, _index, child in child_nodes(node, META_FIELDS))
 
 
 def _make_scope(node: ast.FunctionDef, kind: str) -> Scope:
@@ -87,16 +79,9 @@ def _make_scope(node: ast.FunctionDef, kind: str) -> Scope:
 
 
 def scopes_from_source(source: str) -> list[Scope]:
-    tree = ast.parse(source)
-    scopes: list[Scope] = []
-    for node in tree.body:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            scopes.append(_make_scope(node, "function"))
-        elif isinstance(node, ast.ClassDef):
-            for item in node.body:
-                if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    scopes.append(_make_scope(item, "method"))
-    return scopes
+    """检测单位 = 函数作用域(模块级函数 + 类方法),与 common 的作用域模型一致。"""
+    return [_make_scope(node, kind)
+            for _name, kind, node in function_scopes(source)]
 
 
 def normalize_scope(scope: Scope) -> str:
@@ -118,47 +103,51 @@ def _overlaps(lhs: Scope, rhs: Scope) -> bool:
     return not (lhs.end_line < rhs.start_line or rhs.end_line < lhs.start_line)
 
 
-def _collect_files(paths) -> list[str]:
-    files: list[str] = []
-    for path in paths:
-        if os.path.isdir(path):
-            for root, _dirs, names in os.walk(path):
-                for name in sorted(names):
-                    if name.endswith(".py"):
-                        files.append(os.path.join(root, name))
-        else:
-            files.append(str(path))
-    return sorted(files)
+def find_duplicates(paths, threshold: float = DEFAULT_THRESHOLD,
+                    min_lines: int = DEFAULT_MIN_LINES,
+                    min_nodes: int = DEFAULT_MIN_NODES) -> list[Duplicate]:
+    """报告指纹相似度达到阈值的配对(按相似度降序,同行域并列按行号)。"""
+    return _compare_scopes(candidate_scopes(paths, min_lines, min_nodes), threshold)
 
 
-def find_duplicates(paths, threshold: float = 0.82, min_lines: int = 4,
-                    min_nodes: int = 20) -> list[Duplicate]:
-    scopes: list[tuple[str, Scope]] = []
-    for file in _collect_files(paths):
-        try:
-            with open(file, encoding="utf-8") as handle:
-                source = handle.read()
-        except OSError:
-            continue
-        try:
-            for scope in scopes_from_source(source):
-                if scope.end_line - scope.start_line + 1 < min_lines:
-                    continue
-                if scope.nodes < min_nodes:
-                    continue
-                scopes.append((file, scope))
-        except SyntaxError:
-            continue
+def candidate_scopes(paths, min_lines: int, min_nodes: int) -> list[tuple[str, Scope]]:
+    """参与成对比较的作用域:跳过不可读/不可解析文件与过小作用域。"""
+    return [(file, scope)
+            for file, source in read_sources(paths)
+            for scope in _scopes_in(source)
+            if _large_enough(scope, min_lines, min_nodes)]
 
+
+def _scopes_in(source: str) -> list[Scope]:
+    try:
+        return scopes_from_source(source)
+    except SyntaxError:
+        return []
+
+
+def _large_enough(scope: Scope, min_lines: int, min_nodes: int) -> bool:
+    return (scope.end_line - scope.start_line + 1 >= min_lines
+            and scope.nodes >= min_nodes)
+
+
+def _compare_scopes(scopes, threshold: float) -> list[Duplicate]:
     pairs: list[Duplicate] = []
     for index, (lhs_file, lhs) in enumerate(scopes):
         for rhs_file, rhs in scopes[index + 1:]:
-            if lhs_file == rhs_file and _overlaps(lhs, rhs):
-                continue
-            score = jaccard(lhs.fingerprint, rhs.fingerprint)
-            if score >= threshold:
-                pairs.append(Duplicate(score=score, lhs_file=lhs_file, lhs=lhs,
-                                       rhs_file=rhs_file, rhs=rhs))
-    pairs.sort(key=lambda pair: (-pair.score,
-                                 pair.lhs.start_line, pair.rhs.start_line))
+            if not _excluded_pair(lhs_file, rhs_file, lhs, rhs):
+                _record_pair(pairs, lhs_file, lhs, rhs_file, rhs, threshold)
+    pairs.sort(key=lambda pair: (-pair.score, pair.lhs.start_line,
+                                 pair.rhs.start_line))
     return pairs
+
+
+def _excluded_pair(lhs_file: str, rhs_file: str, lhs: Scope, rhs: Scope) -> bool:
+    """同文件且行域重叠(父作用域与其嵌套子作用域)不成对比较。"""
+    return lhs_file == rhs_file and _overlaps(lhs, rhs)
+
+
+def _record_pair(pairs, lhs_file, lhs, rhs_file, rhs, threshold: float) -> None:
+    score = jaccard(lhs.fingerprint, rhs.fingerprint)
+    if score >= threshold:
+        pairs.append(Duplicate(score=score, lhs_file=lhs_file, lhs=lhs,
+                               rhs_file=rhs_file, rhs=rhs))

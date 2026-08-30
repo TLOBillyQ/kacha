@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 from types import SimpleNamespace
 
-from tools.packages.mutate import cli, manifest
+import subprocess
+
+from tools.packages.mutate import cli, engine, manifest
 
 TARGET = "src/m.py"
 
@@ -54,6 +57,15 @@ def test_update_manifest_writes_footer(tmp_path, capsys):
     assert code == 0
     assert "manifest updated: src/m.py" in capsys.readouterr().out
     assert manifest.read(os.path.join(root, "src/m.py")) is not None
+
+
+def test_help_short_circuits_everything(tmp_path, capsys):
+    root = make_project(tmp_path, "def f():\n    return 1\n")
+    assert cli.main(["--help"], {"repo_root": root}) == 0
+    assert "变异" not in capsys.readouterr().err
+    assert "usage" in cli.usage().lower() or "用法" in cli.usage()
+    assert cli.main(["-h"], {"repo_root": root}) == 0
+    assert "选项:" in capsys.readouterr().out
 
 
 def test_conflict_and_missing_target(tmp_path, capsys):
@@ -113,3 +125,281 @@ def test_scan_shows_changed_scope_prefix(tmp_path, capsys):
     cli.main(["src/m.py", "--scan"], {"repo_root": root})
     out = capsys.readouterr().out
     assert "* L2 " in out  # scope 语义哈希失配 -> 标星
+
+
+# --- 选项、覆盖率过滤与 worker 路径 -----------------------------------------
+
+def test_lines_option_filters_sites_and_validates_input(tmp_path, capsys):
+    root = make_project(tmp_path,
+                        "def f(x):\n    result = x + 1\n    return result\n")
+    write_coverage(tmp_path, [1, 2, 3])
+    run_shell, calls = fake_shell([0, 0, 0, 0, 1])
+    code = cli.main(["src/m.py", "--lines", "2"], {"repo_root": root},
+                    run_shell=run_shell)
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "L2: binop/add->sub ... killed" in out
+    assert "changed mutation sites: 3" in out
+    assert len(calls) == 7  # 3 步覆盖率流水线 + baseline + L2 的 3 个位点
+
+    assert cli.main(["src/m.py", "--lines", "99"], {"repo_root": root}) == 0
+    assert "no mutation sites to test" in capsys.readouterr().out
+
+    assert cli.main(["src/m.py", "--lines", ""], {"repo_root": root}) == 1
+    assert "--lines requires a comma-separated" in capsys.readouterr().err
+    assert cli.main(["src/m.py", "--max-workers", "x"], {"repo_root": root}) == 1
+    assert "--max-workers requires a numeric value" in capsys.readouterr().err
+    assert cli.main(["src/m.py", "--bogus"], {"repo_root": root}) == 1
+    assert "unknown option: --bogus" in capsys.readouterr().err
+    assert cli.main(["src/m.py", "extra.py"], {"repo_root": root}) == 1
+    assert "unknown option: extra.py" in capsys.readouterr().err
+
+
+def test_target_read_failures(tmp_path, capsys):
+    project = tmp_path / "proj"
+    project.mkdir()
+    root = make_project(project, "def f():\n    return 1\n")
+    (tmp_path / "outside.py").write_text("def g():\n    return 1\n")
+    assert cli.main(["../outside.py"], {"repo_root": root}) == 1
+    assert "escapes workspace root" in capsys.readouterr().err
+    assert cli.main(["src/missing.py"], {"repo_root": root}) == 1
+    assert "No such file" in capsys.readouterr().err
+
+    (project / "src" / "broken.py").write_text("def f(:\n    return 1\n")
+    assert cli.main(["src/broken.py"], {"repo_root": root}) == 1
+    assert "cannot parse target" in capsys.readouterr().err
+
+
+def test_test_command_escape_hatch_skips_coverage(tmp_path, capsys):
+    root = make_project(tmp_path, "def f(x):\n    return x + 1\n")
+    run_shell, calls = fake_shell([0, 0, 1])
+    code = cli.main(["src/m.py", "--test-command", "pytest -q", "--verbose"],
+                    {"repo_root": root}, run_shell=run_shell)
+    captured = capsys.readouterr()
+    assert code == 3
+    assert "--test-command disables coverage filtering" in captured.err
+    assert "uncovered mutation sites: 0" in captured.out
+    assert "test command: /bin/sh -c pytest -q" in captured.err
+    assert calls[0][0] == ["/bin/sh", "-c", "pytest -q"]  # 无 coverage 三步流水线
+
+
+def test_coverage_failures_treat_every_site_as_covered(tmp_path, capsys):
+    root = make_project(tmp_path, "def f(x):\n    return x + 1\n")
+    write_coverage(tmp_path, [1, 2, 3])
+
+    run_shell, _ = fake_shell([0, 1, 0, 0, 0])  # 插桩跑测试失败 -> 不过滤
+    assert cli.main(["src/m.py"], {"repo_root": root}, run_shell=run_shell) == 3
+    assert "coverage pass failed" in capsys.readouterr().err
+
+    os.remove(tmp_path / ".toolcache" / "coverage.json")  # 产物缺失 -> 不过滤
+    run_shell, _ = fake_shell([0, 0, 0, 0, 0])
+    assert cli.main(["src/m.py"], {"repo_root": root}, run_shell=run_shell) == 3
+    assert "cannot read coverage artifact" in capsys.readouterr().err
+
+
+def test_reuse_coverage_cache_hit_and_stale(tmp_path, capsys):
+    source = "def f(x):\n    return x > 1\n"
+    root = make_project(tmp_path, source)
+    write_coverage(tmp_path, [1, 2])
+    abs_target = os.path.join(root, "src/m.py")
+    cache = tmp_path / ".toolcache" / "mutate4py-coverage.json"
+    cache.parent.mkdir(exist_ok=True)
+
+    def run_with_cache(project_hash):
+        cache.write_text(json.dumps({"projectHash": project_hash,
+                                     "covered": {"src/m.py": [2]}}))
+        run_shell, calls = fake_shell([0])
+        code = cli.main(["src/m.py", "--reuse-coverage"], {"repo_root": root},
+                        run_shell=run_shell)
+        return code, calls, capsys.readouterr().out
+
+    assert run_with_cache(engine.project_hash(root, abs_target, source))[0] == 3
+    code, calls, out = run_with_cache(engine.project_hash(root, abs_target, source))
+    assert "reusing coverage cache" in out
+    assert len(calls) == 3  # 命中缓存:baseline + 2 个位点,不再跑覆盖率
+
+    code, calls, out = run_with_cache("stale")
+    assert "reusing coverage cache" not in out
+    assert len(calls) == 6  # 哈希不符:3 步覆盖率流水线 + baseline + 2 个位点
+
+    cache.write_text("{broken")
+    run_shell, calls = fake_shell([0])
+    assert cli.main(["src/m.py", "--reuse-coverage"], {"repo_root": root},
+                    run_shell=run_shell) == 3
+    assert len(calls) == 6  # 缓存不可解析 -> 重新取数
+
+
+def test_workers_timeout_and_trial_errors(tmp_path, capsys, monkeypatch):
+    root = make_project(tmp_path, "def f(x):\n    return x > 1\n")
+    write_coverage(tmp_path, [1, 2, 3])
+
+    run_shell, _ = fake_shell([0, 0, 0, 0, 0])
+    code = cli.main(["src/m.py", "--max-workers", "2", "--mutation-warning", "1"],
+                    {"repo_root": root}, run_shell=run_shell)
+    captured = capsys.readouterr()
+    assert code == 3
+    assert "workers: 2 (parallel)" in captured.out
+    assert "2 mutations exceed threshold 1" in captured.err
+
+    def time_out(argv, cwd=None, env=None, timeout=None):
+        raise subprocess.TimeoutExpired(argv, timeout or 1)
+
+    run_shell, _ = fake_shell([0])
+    assert cli.main(["src/m.py", "--mutate-all"], {"repo_root": root},
+                    run_shell=run_shell) == 3
+    assert "manifest updated" not in capsys.readouterr().out
+
+    code = cli.main(["src/m.py", "--timeout-factor", "1", "--mutate-all"],
+                    {"repo_root": root}, run_shell=shell_for(time_out))
+    captured = capsys.readouterr()
+    assert code == 0  # 超时按已击杀计 -> 干净运行写 manifest
+    assert "2 timeout)" in captured.out
+    assert "timeout (" in captured.out  # 逐位点也标注 timeout
+
+    def explode(*args, **kwargs):
+        raise RuntimeError("worker died")
+
+    # 上一步干净运行写入了 manifest 且模块未变 -> 差分选择为空跑
+    run_shell, _ = fake_shell([0])
+    assert cli.main(["src/m.py"], {"repo_root": root}, run_shell=run_shell) == 0
+    differential_run = capsys.readouterr().out
+    assert "no mutation sites to test" in differential_run
+    assert "module hash changed: no" in differential_run
+
+    # --mutate-all 绕过 manifest;worker 抛异常按已击杀计
+    monkeypatch.setattr(cli, "_run_trial", explode)
+    run_shell, _ = fake_shell([0])
+    assert cli.main(["src/m.py", "--mutate-all"], {"repo_root": root},
+                    run_shell=run_shell) == 0
+    assert "score: 100.0%" in capsys.readouterr().out
+
+
+def shell_for(behavior):
+    """baseline 用普通 fake,位点执行用注入的 behavior。"""
+    def run_shell(argv, cwd=None, **kwargs):
+        if "timeout" in kwargs:
+            return behavior(argv, cwd=cwd, timeout=kwargs["timeout"])
+        return SimpleNamespace(returncode=0)
+
+    return run_shell
+
+
+# --- worker 副本的字节码与 manifest 登记范围 --------------------------------
+
+TWO_SCOPES = "def a(x):\n    return x + 1\n\n\ndef b(y):\n    return y * 2\n"
+
+
+def killed_shell():
+    """baseline 绿、每个位点都让测试失败 -> 全部击杀。"""
+    return shell_for(lambda argv, cwd=None, timeout=None: SimpleNamespace(returncode=1))
+
+
+def recorded_scope_ids(root):
+    data = manifest.read(os.path.join(root, "src/m.py"))
+    return [scope["id"] for scope in (data or {}).get("scopes", [])]
+
+
+def test_trial_purges_stale_bytecode_of_target_package(tmp_path):
+    ws = tmp_path / "ws"
+    package = ws / "pkg"
+    package.mkdir(parents=True)
+    source = "def f():\n    return 1\n"
+    (package / "m.py").write_text(source)
+    stale = package / "__pycache__" / "m.cpython-314.pyc"
+    stale.parent.mkdir()
+    stale.write_text("stale")
+    state = SimpleNamespace(relative=os.path.join("pkg", "m.py"), source=source)
+    site = SimpleNamespace(mutated_source=lambda _src: "def f():\n    return 2\n")
+    seen = {}
+
+    def run_shell(argv, cwd=None, **kwargs):
+        seen["purged"] = not stale.exists()
+        seen["written"] = (package / "m.py").read_text()
+        return SimpleNamespace(returncode=0)
+
+    outcome, _seconds = cli._run_trial(str(ws), state, site, ["true"], 1, run_shell)
+    assert outcome == "survived"
+    assert seen["purged"] is True
+    assert "return 2" in seen["written"]
+    assert (package / "m.py").read_text() == source
+
+
+def test_discard_stale_bytecode_tolerates_missing_cache(tmp_path):
+    cli._discard_stale_bytecode(str(tmp_path), "m.py")
+    assert not (tmp_path / "__pycache__").exists()
+
+
+def test_partial_line_run_records_only_verified_scope(tmp_path):
+    root = make_project(tmp_path, TWO_SCOPES)
+    code = cli.main(["src/m.py", "--lines", "2", "--test-command", "true"],
+                    {"repo_root": root}, run_shell=killed_shell())
+    assert code == 0
+    assert recorded_scope_ids(root) == ["m.a"]
+
+
+def test_untouched_scope_keeps_its_record(tmp_path):
+    root = make_project(tmp_path, TWO_SCOPES)
+    assert cli.main(["src/m.py", "--test-command", "true"], {"repo_root": root},
+                    run_shell=killed_shell()) == 0
+    assert recorded_scope_ids(root) == ["m.a", "m.b"]
+    assert cli.main(["src/m.py", "--lines", "2", "--test-command", "true"],
+                    {"repo_root": root}, run_shell=killed_shell()) == 0
+    assert recorded_scope_ids(root) == ["m.a", "m.b"]
+
+
+def test_changed_scope_not_fully_run_loses_its_record(tmp_path):
+    root = make_project(tmp_path, TWO_SCOPES)
+    assert cli.main(["src/m.py", "--test-command", "true"], {"repo_root": root},
+                    run_shell=killed_shell()) == 0
+    assert recorded_scope_ids(root) == ["m.a", "m.b"]
+    (tmp_path / "src" / "m.py").write_text(TWO_SCOPES.replace("y * 2", "y * 3"))
+    assert cli.main(["src/m.py", "--lines", "2", "--test-command", "true"],
+                    {"repo_root": root}, run_shell=killed_shell()) == 0
+    assert recorded_scope_ids(root) == ["m.a"]
+
+
+def test_update_manifest_records_every_scope(tmp_path):
+    root = make_project(tmp_path, TWO_SCOPES)
+    assert cli.main(["src/m.py", "--update-manifest"], {"repo_root": root}) == 0
+    assert recorded_scope_ids(root) == ["m.a", "m.b"]
+
+
+def test_run_env_isolates_tmp_and_pythonpath(tmp_path):
+    env = cli._run_env(str(tmp_path))
+    assert env["PYTHONPATH"].startswith(str(tmp_path / "src"))
+    assert env["TMPDIR"] == env["TEMP"] == env["TMP"]
+    assert os.path.isdir(env["TMPDIR"])
+    assert "mutate4py" not in env["TMPDIR"] or str(tmp_path) in env["TMPDIR"]
+
+
+# --- worker 副本租约:同一副本同一时刻只能跑一个位点 --------------------------
+
+
+def test_leased_trial_holds_workspace_until_it_finishes(monkeypatch):
+    slots = queue.Queue()
+    slots.put("ws-0")
+    seen = []
+
+    def watch(ws_root, state, site, command, timeout, run_shell):
+        seen.append(ws_root)
+        assert slots.empty()          # 租约未还,别人拿不到副本
+        return "killed", 0.1
+
+    monkeypatch.setattr(cli, "_run_trial", watch)
+    assert cli._leased_trial(slots, None, None, None, None, None) == ("killed", 0.1)
+    assert seen == ["ws-0"]
+    assert slots.get_nowait() == "ws-0"
+
+
+def test_run_trials_keys_results_by_site_index(monkeypatch):
+    slots = queue.Queue()
+    slots.put("ws-0")
+    monkeypatch.setattr(cli, "_run_trial",
+                        lambda ws_root, state, site, command, timeout, run_shell:
+                        ("killed", site.line))
+    sites = [SimpleNamespace(line=index) for index in range(4)]
+
+    results = cli._run_trials(["ws-0"], None, sites, ["true"], 1, None)
+    assert {index: outcome for index, (outcome, _seconds) in results.items()} == {
+        0: "killed", 1: "killed", 2: "killed", 3: "killed"}
+    assert [results[index][1] for index in range(4)] == [0, 1, 2, 3]

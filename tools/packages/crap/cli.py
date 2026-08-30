@@ -10,6 +10,8 @@
 3. coverage json -o .toolcache/coverage.json(标准产物)
 4. 解析产物 -> 圈复杂度 -> 覆盖率归因 -> CRAP 公式 -> 排序输出
 
+步骤 1-3 由 ..covdata 适配层持有(与 mutate 共用),本模块只做参数、策略与报告。
+
 退出码:0 成功 / 1 业务失败(无 coverage 产物、coverage 未安装)/ 2 门禁失败或用法错误。
 门禁(--gate):任一非空 CRAP 超过 --gate-threshold(默认 5.0)即退出码 2。
 """
@@ -21,13 +23,22 @@ import os
 import subprocess
 import sys
 
-from ..common import project_python
+from .. import covdata
+from ..common import Flag, Value, as_float, as_int, parse_tokens, project_python, \
+    read_sources, relative_path, repo_root_from, wants_help
 from . import engine
 
 run = subprocess.run
 
+DEFAULT_GATE_THRESHOLD = 5.0
 
-def _usage() -> str:
+_FLAGS = (Flag("--json", "json"), Flag("--gate", "gate"))
+_VALUES = (Value("--top", "top", as_int),
+           Value("--gate-threshold", "gate_threshold", as_float),
+           Value("--source", "source"))
+
+
+def usage() -> str:
     return (
         "用法: python tools/cli.py crap [options] [--source PATH]\n"
         "\n"
@@ -39,129 +50,111 @@ def _usage() -> str:
     )
 
 
-def usage() -> str:
-    return _usage()
+def main(args, env=None, run_shell=run) -> int:
+    repo_root = repo_root_from(env)
+    if wants_help(args):
+        sys.stdout.write(usage())
+        return 0
+    options, _paths, error = parse_tokens(args, flags=_FLAGS, values=_VALUES)
+    if error:
+        sys.stderr.write(f"{error}\n\n{usage()}")
+        return 2
+    source, code = _source_dir(options, repo_root)
+    if source is None:
+        return code
+    entries, code = _analyze(repo_root, source, run_shell)
+    if code:
+        return code
+    _print_report(entries, options.get("top"), bool(options.get("json")), repo_root)
+    return _apply_gate(options, entries)
 
 
-def _collect(python: str, repo_root: str, source: str, run_shell=run) -> int:
-    """插桩跑测试并产出 .toolcache/coverage.json;仅产物步骤失败才返回非 0。"""
-    result = run_shell([python, "-m", "coverage", "erase"], cwd=repo_root)
-    if result.returncode != 0:
-        return result.returncode
-    result = run_shell([python, "-m", "coverage", "run", f"--source={source}",
-                        "-m", "pytest"], cwd=repo_root)
-    if result.returncode != 0:
+def _source_dir(options, repo_root: str) -> tuple[str | None, int]:
+    """--source 指定的被测目录;缺省 <repo_root>/src;不存在即业务失败(1)。"""
+    source = options.get("source") or os.path.join(repo_root,
+                                                   covdata.DEFAULT_SOURCE)
+    if not os.path.isdir(source):
+        sys.stderr.write(f"error: source directory not found: {source}\n")
+        return None, 1
+    return source, 0
+
+
+def _apply_gate(options, entries) -> int:
+    if not options.get("gate"):
+        return 0
+    return _gate(entries, options.get("gate_threshold", DEFAULT_GATE_THRESHOLD))
+
+
+def _analyze(repo_root: str, source: str, run_shell) -> tuple[list[dict], int]:
+    """插桩跑测试 -> 读标准产物 -> 构建报告;返回 (条目, 退出码)。"""
+    collection = covdata.collect(project_python(repo_root), repo_root, source,
+                                 run_shell)
+    if not collection.artifact_ok:
+        sys.stderr.write("error: coverage run failed "
+                         "(is coverage installed in the project python?)\n")
+        return [], 1
+    if collection.tests_failed:
         sys.stderr.write("warning: tests failed under coverage; "
                          "continuing with partial coverage data\n")
-    result = run_shell([python, "-m", "coverage", "json", "-o",
-                        os.path.join(repo_root, ".toolcache", "coverage.json")],
-                       cwd=repo_root)
-    if result.returncode != 0:
-        return result.returncode
-    return 0
+    artifact = covdata.artifact_path(repo_root)
+    if not os.path.isfile(artifact):
+        sys.stderr.write(f"error: coverage artifact missing: {artifact}\n")
+        return [], 1
+    try:
+        coverage = covdata.load(repo_root)
+    except (OSError, ValueError) as exc:
+        sys.stderr.write(f"error: cannot read coverage artifact: {exc}\n")
+        return [], 1
+    return engine.build_report(_scan_files(source), coverage), 0
 
 
 def _scan_files(source_path: str) -> list[tuple[str, str]]:
-    files: list[tuple[str, str]] = []
-    for root, _dirs, names in os.walk(source_path):
-        for name in sorted(names):
-            if not name.endswith(".py"):
-                continue
-            file_path = os.path.join(root, name)
-            try:
-                with open(file_path, encoding="utf-8") as handle:
-                    files.append((os.path.abspath(file_path), handle.read()))
-            except OSError:
-                continue
-    return files
+    """报告按绝对路径归因覆盖率,故在此把读取结果提升为绝对路径。"""
+    return [(os.path.abspath(path), source)
+            for path, source in read_sources([source_path])]
 
 
 def _print_report(entries: list[dict], top: int | None, as_json: bool,
                   repo_root: str) -> None:
-    shown = entries if top is None else entries[:top]
+    shown = entries[:top]
     if as_json:
-        payload = {"entries": [{
-            "file": os.path.relpath(e["file"], repo_root), "name": e["name"],
-            "kind": e["kind"], "start": e["start"], "end": e["end"],
-            "cc": e["cc"], "coverage": e["coverage"], "crap": e["crap"],
-            "band": e["band"],
-        } for e in shown]}
-        sys.stdout.write(json.dumps(payload, ensure_ascii=False) + "\n")
+        _print_json(shown, repo_root)
         return
     if not shown:
         sys.stdout.write("No CRAP hotspots.\n")
         return
     for entry in shown:
-        cov = "N/A" if entry["coverage"] is None else f"{entry['coverage']:.0%}"
-        score = "N/A" if entry["crap"] is None else f"{entry['crap']:.2f}"
-        relative = os.path.relpath(entry["file"], repo_root)
-        sys.stdout.write(
-            f"{relative}:{entry['start']}:{entry['name']} "
-            f"CC={entry['cc']} cov={cov} CRAP={score} ({entry['band']})\n")
+        sys.stdout.write(_entry_line(entry, repo_root) + "\n")
 
 
-def main(args, env=None, run_shell=run) -> int:
-    if any(arg in ("--help", "-h") for arg in args):
-        sys.stdout.write(_usage())
-        return 0
-    env = dict(env or {})
-    repo_root = env.get("repo_root") or os.getcwd()
-    top, as_json, gate = None, False, False
-    gate_threshold, source = 5.0, os.path.join(repo_root, "src")
+def _print_json(shown, repo_root: str) -> None:
+    payload = {"entries": [_entry_view(entry, repo_root) for entry in shown]}
+    sys.stdout.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
-    index = 0
-    while index < len(args):
-        token = args[index]
-        if token == "--top":
-            top = int(args[index + 1]); index += 2
-        elif token == "--json":
-            as_json = True; index += 1
-        elif token == "--gate":
-            gate = True; index += 1
-        elif token == "--gate-threshold":
-            gate_threshold = float(args[index + 1]); index += 2
-        elif token == "--source":
-            source = args[index + 1]; index += 2
-        else:
-            sys.stderr.write(f"未知参数: {token}\n\n{_usage()}")
-            return 2
 
-    if not os.path.isdir(source):
-        sys.stderr.write(f"error: source directory not found: {source}\n")
-        return 1
-
-    python = project_python(repo_root)
-    code = _collect(python, repo_root, source, run_shell)
-    if code != 0:
-        sys.stderr.write("error: coverage run failed "
-                         "(is coverage installed in the project python?)\n")
-        return 1
-
-    artifact = os.path.join(repo_root, ".toolcache", "coverage.json")
-    if not os.path.isfile(artifact):
-        sys.stderr.write(f"error: coverage artifact missing: {artifact}\n")
-        return 1
-    try:
-        coverage = engine._load_coverage_data(artifact)
-    except (OSError, ValueError) as exc:
-        sys.stderr.write(f"error: cannot read coverage artifact: {exc}\n")
-        return 1
-    # coverage json 的键是相对 cwd(仓库根)的路径,统一归一化为绝对路径
-    coverage = {
-        (os.path.abspath(os.path.join(repo_root, key)) if not os.path.isabs(key)
-         else key): value
-        for key, value in coverage.items()
+def _entry_view(entry: dict, repo_root: str) -> dict:
+    return {
+        "file": relative_path(entry["file"], repo_root), "name": entry["name"],
+        "kind": entry["kind"], "start": entry["start"], "end": entry["end"],
+        "cc": entry["cc"], "coverage": entry["coverage"], "crap": entry["crap"],
+        "band": entry["band"],
     }
 
-    entries = engine.build_report(_scan_files(source), coverage)
-    _print_report(entries, top, as_json, repo_root)
 
-    if gate:
-        max_crap = max((e["crap"] for e in entries if e["crap"] is not None),
-                       default=0.0)
-        if max_crap > gate_threshold:
-            sys.stderr.write(
-                f"crap gate failed: max CRAP {max_crap:.2f} > "
-                f"{gate_threshold:.2f}\n")
-            return 2
+def _entry_line(entry: dict, repo_root: str) -> str:
+    cov = "N/A" if entry["coverage"] is None else f"{entry['coverage']:.0%}"
+    score = "N/A" if entry["crap"] is None else f"{entry['crap']:.2f}"
+    return (f"{relative_path(entry['file'], repo_root)}:{entry['start']}:"
+            f"{entry['name']} CC={entry['cc']} cov={cov} CRAP={score} "
+            f"({entry['band']})")
+
+
+def _gate(entries: list[dict], threshold: float) -> int:
+    """任一非空 CRAP 超阈值即门禁失败(退出码 2)。"""
+    max_crap = max((entry["crap"] for entry in entries if entry["crap"] is not None),
+                   default=0.0)
+    if max_crap > threshold:
+        sys.stderr.write(f"crap gate failed: max CRAP {max_crap:.2f} > "
+                         f"{threshold:.2f}\n")
+        return 2
     return 0

@@ -11,7 +11,7 @@ options:
   --limit N        最多输出的配对数量
 
 无路径参数时扫描 <repo_root>/src(不存在则整个 repo_root)。
-退出码:0 成功 / 2 用法错误(未知格式)。
+退出码:0 成功 / 2 用法错误(未知格式、坏数值选项)。
 """
 
 from __future__ import annotations
@@ -20,10 +20,24 @@ import json
 import os
 import sys
 
+from ..common import (POSITIONAL_ANY, Value, as_float, as_int, parse_tokens,
+                      relative_path, repo_root_from, wants_help)
 from . import engine
 
+DEFAULT_THRESHOLD = engine.DEFAULT_THRESHOLD
+DEFAULT_MIN_LINES = engine.DEFAULT_MIN_LINES
+DEFAULT_MIN_NODES = engine.DEFAULT_MIN_NODES
 
-def _usage() -> str:
+_FORMATS = ("text", "json")
+
+_VALUES = (Value("--threshold", "threshold", as_float),
+           Value("--min-lines", "min_lines", as_int),
+           Value("--min-nodes", "min_nodes", as_int),
+           Value("--format", "output_format"),
+           Value("--limit", "limit", as_int))
+
+
+def usage() -> str:
     return (
         "用法: python tools/cli.py dry [options] [file-or-directory ...]\n"
         "\n"
@@ -36,78 +50,71 @@ def _usage() -> str:
     )
 
 
-def usage() -> str:
-    return _usage()
-
-
-def _parse_number(name, value):
-    try:
-        return float(value)
-    except ValueError:
-        sys.stderr.write(f"error: {name} requires a numeric value\n")
-        raise SystemExit(2)
-
-
 def main(args, env=None) -> int:
-    env = dict(env or {})
-    repo_root = env.get("repo_root") or os.getcwd()
-    threshold, min_lines, min_nodes, output_format, limit = 0.82, 4, 20, "text", None
-    paths: list[str] = []
-
-    index = 0
-    while index < len(args):
-        token = args[index]
-        if token in ("--help", "-h"):
-            sys.stdout.write(_usage())
-            return 0
-        if token == "--threshold":
-            threshold = _parse_number(token, args[index + 1]); index += 2
-        elif token == "--min-lines":
-            min_lines = int(_parse_number(token, args[index + 1])); index += 2
-        elif token == "--min-nodes":
-            min_nodes = int(_parse_number(token, args[index + 1])); index += 2
-        elif token == "--format":
-            output_format = args[index + 1]; index += 2
-        elif token == "--limit":
-            limit = int(_parse_number(token, args[index + 1])); index += 2
-        else:
-            paths.append(token); index += 1
-
-    if output_format not in ("text", "json"):
-        sys.stderr.write(f"未知格式: {output_format}\n\n{_usage()}")
-        return 2
-
-    if not paths:
-        src = os.path.join(repo_root, "src")
-        paths = [src if os.path.isdir(src) else repo_root]
-
-    pairs = engine.find_duplicates(paths, threshold=threshold,
-                                   min_lines=min_lines, min_nodes=min_nodes)
-    if limit is not None:
-        pairs = pairs[:limit]
-
-    def show(path: str, scope: engine.Scope) -> dict:
-        relative = os.path.relpath(path, repo_root)
-        if relative.startswith(".."):
-            relative = path
-        return {"file": relative, "start": scope.start_line, "end": scope.end_line,
-                "name": scope.name}
-
-    if output_format == "json":
-        payload = {"pairs": [
-            {"score": round(pair.score, 4),
-             "a": show(pair.lhs_file, pair.lhs), "b": show(pair.rhs_file, pair.rhs)}
-            for pair in pairs]}
-        sys.stdout.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    repo_root = repo_root_from(env)
+    if wants_help(args):
+        sys.stdout.write(usage())
         return 0
+    options, paths, failure = _parse(args)
+    if failure:
+        sys.stderr.write(f"{failure}\n\n{usage()}")
+        return 2
+    pairs = engine.find_duplicates(paths or _default_paths(repo_root),
+                                   **_limits(options))
+    _print_pairs(pairs[:options.get("limit")], options["output_format"],
+                 repo_root)
+    return 0
 
+
+def _parse(args):
+    """共享走查 + 输出格式校验;返回 (options, paths, 错误正文)。"""
+    options, paths, error = parse_tokens(args, flags=(), values=_VALUES,
+                                         positional=POSITIONAL_ANY)
+    output_format = options.get("output_format", "text")
+    options["output_format"] = output_format
+    return options, paths, (error
+                            or (None if output_format in _FORMATS
+                                else f"未知格式: {output_format}"))
+
+
+def _limits(options) -> dict:
+    """引擎阈值参数(缺省沿用 dry 默认值)。"""
+    return {"threshold": options.get("threshold", DEFAULT_THRESHOLD),
+            "min_lines": options.get("min_lines", DEFAULT_MIN_LINES),
+            "min_nodes": options.get("min_nodes", DEFAULT_MIN_NODES)}
+
+
+def _default_paths(repo_root: str) -> list[str]:
+    src = os.path.join(repo_root, "src")
+    return [src if os.path.isdir(src) else repo_root]
+
+
+def _print_pairs(pairs, output_format: str, repo_root: str) -> None:
+    if output_format == "json":
+        payload = {"pairs": [_pair_view(pair, repo_root) for pair in pairs]}
+        sys.stdout.write(json.dumps(payload, ensure_ascii=False) + "\n")
+        return
     if not pairs:
         sys.stdout.write("No duplicate candidates found.\n")
-        return 0
+        return
     for pair in pairs:
-        lhs = show(pair.lhs_file, pair.lhs)
-        rhs = show(pair.rhs_file, pair.rhs)
-        sys.stdout.write(f"DUPLICATE score={pair.score:.2f}\n")
-        sys.stdout.write(f"  {lhs['file']}:{lhs['start']}-{lhs['end']}\n")
-        sys.stdout.write(f"  {rhs['file']}:{rhs['start']}-{rhs['end']}\n")
-    return 0
+        _print_pair(pair, repo_root)
+
+
+def _pair_view(pair, repo_root: str) -> dict:
+    return {"score": round(pair.score, 4),
+            "a": _scope_view(pair.lhs_file, pair.lhs, repo_root),
+            "b": _scope_view(pair.rhs_file, pair.rhs, repo_root)}
+
+
+def _scope_view(path: str, scope: engine.Scope, repo_root: str) -> dict:
+    return {"file": relative_path(path, repo_root),
+            "start": scope.start_line, "end": scope.end_line, "name": scope.name}
+
+
+def _print_pair(pair, repo_root: str) -> None:
+    lhs = _scope_view(pair.lhs_file, pair.lhs, repo_root)
+    rhs = _scope_view(pair.rhs_file, pair.rhs, repo_root)
+    sys.stdout.write(f"DUPLICATE score={pair.score:.2f}\n")
+    for side in (lhs, rhs):
+        sys.stdout.write(f"  {side['file']}:{side['start']}-{side['end']}\n")

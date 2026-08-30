@@ -17,10 +17,12 @@ import importlib
 import os
 import sys
 
-# 以脚本方式运行时仓库根不在 sys.path,补上以便 import tools.packages.*
+# 以脚本方式运行时仓库根不在 sys.path,先补上,才能 import tools.packages.*
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
+
+from tools.packages.common import HELP_TOKENS, wants_help  # noqa: E402
 
 COMMANDS = [
     ("verify", "质量门禁: 默认 slim(pytest 硬地板); --coverage"),
@@ -29,8 +31,11 @@ COMMANDS = [
     ("mutate", "单文件变异测试(manifest 差分)"),
 ]
 
+_COMMAND_NAMES = frozenset(name for name, _summary in COMMANDS)
 
-def _usage() -> str:
+
+def usage() -> str:
+    """顶层用法(封闭命令集)。"""
     lines = ["用法: python tools/cli.py <子命令> [args...]", "", "子命令(封闭命令集):"]
     for name, summary in COMMANDS:
         lines.append(f"  {name:<18} {summary}")
@@ -39,51 +44,62 @@ def _usage() -> str:
 
 
 def _load_package(name: str):
+    """按约定装载 tools.packages.<name>.cli;形状不合视为加载失败。"""
     module = importlib.import_module(f"tools.packages.{name}.cli")
-    main = getattr(module, "main", None)
-    usage = getattr(module, "usage", None)
-    if not callable(main) or not callable(usage):
+    if not all(callable(getattr(module, attr, None)) for attr in ("main", "usage")):
         raise AttributeError(f"bad package shape: tools.packages.{name}.cli")
     return module
 
 
+def _package_for(name: str, packages):
+    """packages 为测试注入口;None 时走真实 import。返回 (pkg, 退出码)。"""
+    if packages is not None:
+        package = packages.get(name)
+        if package is None:
+            return None, "package not registered\n"
+        return package, None
+    try:
+        return _load_package(name), None
+    except Exception as exc:  # noqa: BLE001 - 任何加载失败都归用法错误
+        return None, f"{exc}\n"  # 详情自带换行,调用方只补空行
+
+
 def main(argv=None, env=None, packages=None) -> int:
-    argv = list(argv or [])
-    if argv and argv[0] in ("--help", "-h"):
-        sys.stdout.write(_usage())
-        return 0
-    if not argv:
-        sys.stderr.write(_usage())
+    tokens = list(argv or [])
+    if not tokens:
+        sys.stderr.write(usage())
         return 2
-
-    name, rest = argv[0], argv[1:]
-    entry = next((c for c in COMMANDS if c[0] == name), None)
-    if entry is None:
-        sys.stderr.write(f"未知子命令: {name}\n\n{_usage()}")
-        return 2
-
-    if packages is None:
-        try:
-            pkg = _load_package(name)
-        except Exception as exc:  # noqa: BLE001 - report any load failure
-            sys.stderr.write(f"子命令加载失败: {name} (tools.packages.{name}.cli)\n")
-            sys.stderr.write(f"{exc}\n\n{_usage()}")
-            return 2
-    else:
-        pkg = packages.get(name)
-        if pkg is None:
-            sys.stderr.write(f"子命令加载失败: {name} (tools.packages.{name}.cli)\n")
-            sys.stderr.write(f"package not registered\n\n{_usage()}")
-            return 2
-
-    if any(arg in ("--help", "-h") for arg in rest):
-        sys.stdout.write(pkg.usage())
+    name, rest = tokens[0], tokens[1:]
+    if name in HELP_TOKENS:
+        sys.stdout.write(usage())
         return 0
+    if name not in _COMMAND_NAMES:
+        sys.stderr.write(f"未知子命令: {name}\n\n{usage()}")
+        return 2
+    return _dispatch(name, rest, env, packages)
 
+
+def _dispatch(name: str, rest, env, packages) -> int:
+    package, detail = _package_for(name, packages)
+    if detail is not None:
+        return _load_failure(name, detail)
+    if wants_help(rest):
+        sys.stdout.write(package.usage())
+        return 0
+    return _invoke(package, name, rest, env)
+
+
+def _load_failure(name: str, detail: str) -> int:
+    sys.stderr.write(f"子命令加载失败: {name} (tools.packages.{name}.cli)\n")
+    sys.stderr.write(f"{detail}\n{usage()}")
+    return 2
+
+
+def _invoke(package, name: str, rest, env) -> int:
     env = dict(env or {})
     env.setdefault("repo_root", os.getcwd())
     env.setdefault("command", f"python tools/cli.py {name}")
-    return int(pkg.main(rest, env) or 0)
+    return int(package.main(rest, env) or 0)
 
 
 if __name__ == "__main__":

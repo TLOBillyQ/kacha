@@ -12,6 +12,10 @@
 - 测试经项目 pytest 运行(内置构建工具调用的 Python 对应);
   --test-command 为逃生舱(同时禁用覆盖率过滤)
 - scope 语义哈希 = 归一化 AST 序列化的 FNV-1a(格式无关)
+- 项目哈希与 worker 副本共用同一份排除目录表(见 IGNORED_DIRECTORIES)
+
+位点(kind)与算子的对应关系集中在 _NODE_EDITS / _NODE_REPLACEMENTS 两张表里,
+新增算子 = 生成一条位点 + 登记一条表项,不改控制流。
 """
 
 from __future__ import annotations
@@ -20,7 +24,7 @@ import ast
 import dataclasses
 import os
 
-from ..astnorm import fnv1a64, normalize_node
+from ..astnorm import FUNCTION_NODES, child_nodes, fnv1a64, normalize_node
 from . import manifest
 
 _SWAP_COMPARE = {ast.Eq: ast.NotEq, ast.NotEq: ast.Eq, ast.Lt: ast.Gt,
@@ -30,8 +34,19 @@ _SWAP_COMPARE = {ast.Eq: ast.NotEq, ast.NotEq: ast.Eq, ast.Lt: ast.Gt,
 _SWAP_BINOP = {ast.Add: ast.Sub, ast.Sub: ast.Add, ast.Mult: ast.Div,
                ast.Div: ast.Mult}
 
-_IGNORED_SEGMENTS = ("/.git/", "/.swarmforge/", "/.worktrees/", "/.venv/",
-                     "/__pycache__/", "/.toolcache/", "/.mutate4py/", "/tmp/")
+#: 参与项目哈希的构建清单文件名。
+PROJECT_MARKER = "pyproject.toml"
+
+#: 项目哈希与 worker 副本共同排除的目录名(单一事实来源)。
+IGNORED_DIRECTORIES = (".git", ".venv", ".venv-win", ".swarmforge", ".worktrees",
+                       ".toolcache", ".mutate4py", "__pycache__", "tmp",
+                       "node_modules", ".pytest_cache")
+
+#: 作用域根的声明字段:不是可执行体,不产位点。
+_DECLARATION_FIELDS = ("name", "args", "decorator_list", "returns", "type_params")
+
+#: 嵌套定义(函数/类)不属于外层作用域
+_DEFINITION_NODES = FUNCTION_NODES + (ast.ClassDef,)
 
 
 @dataclasses.dataclass
@@ -54,29 +69,59 @@ class Site:
     meta: dict
 
     def apply(self, tree: ast.Module) -> None:
+        """在解析后的模块上就地施加本变异。"""
         parent, field, index, node = _resolve(tree, self.path)
-        if self.kind == "bool-flip":
-            node.value = not node.value
-        elif self.kind == "int-swap":
-            node.value = 1 - node.value
-        elif self.kind == "compare-swap":
-            node.ops[self.meta["index"]] = _SWAP_COMPARE[type(node.ops[self.meta["index"]])]()
-        elif self.kind == "binop-swap":
-            node.op = _SWAP_BINOP[type(node.op)]()
-        elif self.kind == "boolop-swap":
-            node.op = ast.Or() if isinstance(node.op, ast.And) else ast.And()
-        elif self.kind == "unary-remove":
-            _assign(parent, field, index, node.operand)
-        elif self.kind == "rhs-none":
-            _assign(parent, field, index, ast.Constant(value=None))
-        else:  # pragma: no cover - unknown kind is a programming error
+        edit = _NODE_EDITS.get(self.kind)
+        if edit is not None:
+            edit(node, self.meta)
+            return
+        replacement = _NODE_REPLACEMENTS.get(self.kind)
+        if replacement is None:  # pragma: no cover - 未知 kind 是编程错误
             raise ValueError(f"unknown site kind: {self.kind}")
+        _assign(parent, field, index, replacement(node))
 
     def mutated_source(self, source: str) -> str:
         stripped = manifest.strip(source)
         tree = ast.parse(stripped)
         self.apply(tree)
         return ast.unparse(tree) + "\n"
+
+
+def _flip_bool(node, meta: dict) -> None:
+    node.value = not node.value
+
+
+def _swap_int(node, meta: dict) -> None:
+    node.value = 1 - node.value
+
+
+def _swap_compare(node, meta: dict) -> None:
+    position = meta["index"]
+    node.ops[position] = _SWAP_COMPARE[type(node.ops[position])]()
+
+
+def _swap_binop(node, meta: dict) -> None:
+    node.op = _SWAP_BINOP[type(node.op)]()
+
+
+def _swap_boolop(node, meta: dict) -> None:
+    node.op = ast.Or() if isinstance(node.op, ast.And) else ast.And()
+
+
+#: 就地改写节点属性的算子。
+_NODE_EDITS = {
+    "bool-flip": _flip_bool,
+    "int-swap": _swap_int,
+    "compare-swap": _swap_compare,
+    "binop-swap": _swap_binop,
+    "boolop-swap": _swap_boolop,
+}
+
+#: 用另一个节点替换目标位置的算子。
+_NODE_REPLACEMENTS = {
+    "unary-remove": lambda node: node.operand,
+    "rhs-none": lambda node: ast.Constant(value=None),
+}
 
 
 def _assign(parent, field, index, value) -> None:
@@ -105,16 +150,21 @@ def _collect_scopes(tree: ast.Module, module_name: str
     """返回 (scope, node, 从模块根到该节点的 path)。"""
     found: list[tuple[Scope, ast.FunctionDef, tuple]] = []
     for index, node in enumerate(tree.body):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        if isinstance(node, FUNCTION_NODES):
             found.append((_make_scope(node, module_name + "." + node.name,
                                       "function"), node, (("body", index),)))
         elif isinstance(node, ast.ClassDef):
-            for inner, item in enumerate(node.body):
-                if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    found.append((_make_scope(
-                        item, f"{module_name}.{node.name}.{item.name}",
-                        "method"), item, (("body", index), ("body", inner))))
+            found.extend(_class_scopes(node, module_name, index))
     return found
+
+
+def _class_scopes(class_node: ast.ClassDef, module_name: str,
+                  outer_index: int) -> list[tuple[Scope, ast.FunctionDef, tuple]]:
+    prefix = f"{module_name}.{class_node.name}."
+    return [(_make_scope(item, prefix + item.name, "method"),
+             item, (("body", outer_index), ("body", inner)))
+            for inner, item in enumerate(class_node.body)
+            if isinstance(item, FUNCTION_NODES)]
 
 
 def _make_scope(node: ast.FunctionDef, scope_id: str, kind: str) -> Scope:
@@ -132,94 +182,136 @@ def semantic_hash_for_node(node: ast.AST) -> str:
 
 
 def _should_suppress(node, site_kind: str) -> bool:
-    """构造性等价变异抑制链(首条命中即抑制;顺序固定便于评审)。"""
-    if site_kind == "boolop-swap":
-        operands = [normalize_node(item, False, False) for item in node.values]
-        if len(set(operands)) == 1:
-            return True
-    if site_kind == "binop-swap":
-        for operand in (node.left, node.right):
-            if isinstance(operand, ast.Constant) and operand.value == 0:
-                return True
-    return False
+    """构造性等价变异抑制链:按位点 kind 查谓词表,任一命中即抑制。"""
+    return any(test(node) for test in _EQUIVALENT_PREDICATES.get(site_kind, ()))
 
 
-def _walk_scope(scope_node, scope_id, sites, path) -> int:
-    """遍历作用域并收集位点;返回本作用域的抑制数。"""
-    suppressed = 0
-    for field, value in ast.iter_fields(scope_node):
-        if field in ("name", "args", "decorator_list", "returns", "type_params"):
-            continue
-        if field == "body":
-            for index, stmt in enumerate(value):
-                suppressed += _walk_node(stmt, scope_id, sites,
-                                         path + ((field, index),))
-        elif isinstance(value, ast.AST):
-            suppressed += _walk_node(value, scope_id, sites,
-                                     path + ((field, None),))
-        elif isinstance(value, list):
-            for index, item in enumerate(value):
-                if isinstance(item, ast.AST):
-                    suppressed += _walk_node(item, scope_id, sites,
-                                             path + ((field, index),))
-    return suppressed
+def _boolop_operands_identical(node: ast.BoolOp) -> bool:
+    return len({normalize_node(item, False, False)
+                for item in node.values}) == 1
 
 
-def _walk_node(node, scope_id, sites, path) -> int:
-    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-        return 0  # 嵌套定义不是本作用域的位点
-    generated: list[tuple[str, str, dict, tuple]] = []
+def _operates_on_zero(node) -> bool:
+    return any(_is_zero(operand) for operand in (node.left, node.right))
 
-    if isinstance(node, ast.Constant):
-        if isinstance(node.value, bool):
-            generated.append(("bool-flip", "bool-flip", {}, ()))
-        elif isinstance(node.value, int) and node.value in (0, 1):
-            generated.append(("int-swap", "int-swap", {}, ()))
-    elif isinstance(node, ast.Compare):
-        for index, op in enumerate(node.ops):
-            if type(op) in _SWAP_COMPARE:
-                generated.append(("compare-swap",
-                                  f"compare/{_op_name(type(op))}->{_op_name(_SWAP_COMPARE[type(op)])}",
-                                  {"index": index}, ()))
-    elif isinstance(node, ast.BinOp):
-        if type(node.op) in _SWAP_BINOP:
-            generated.append(("binop-swap",
-                              f"binop/{_op_name(type(node.op))}->{_op_name(_SWAP_BINOP[type(node.op)])}",
-                              {}, ()))
-    elif isinstance(node, ast.BoolOp):
-        generated.append(("boolop-swap",
-                          "boolop/and->or" if isinstance(node.op, ast.And)
-                          else "boolop/or->and", {}, ()))
-    elif isinstance(node, ast.UnaryOp):
-        if isinstance(node.op, (ast.Not, ast.USub)):
-            generated.append(("unary-remove",
-                              "unary/not-remove" if isinstance(node.op, ast.Not)
-                              else "unary/usub-remove", {}, ()))
-    elif isinstance(node, (ast.Assign, ast.AugAssign)):
-        generated.append(("rhs-none", "rhs->none", {}, (("value", None),)))
-    elif isinstance(node, ast.AnnAssign):
-        if node.value is not None:
-            generated.append(("rhs-none", "rhs->none", {}, (("value", None),)))
 
-    suppressed = 0
-    for kind, description, meta, extra_path in generated:
-        if _should_suppress(node, kind):
-            suppressed += 1
-            continue
-        line = getattr(node, "lineno", 0)
-        sites.append(Site(scope_id=scope_id, line=line, description=description,
-                          kind=kind, path=path + extra_path, meta=meta))
-    total = suppressed
+def _is_zero(operand) -> bool:
+    return isinstance(operand, ast.Constant) and operand.value == 0
 
-    for field, value in ast.iter_fields(node):
-        if isinstance(value, ast.AST):
-            total += _walk_node(value, scope_id, sites, path + ((field, None),))
-        elif isinstance(value, list):
-            for index, item in enumerate(value):
-                if isinstance(item, ast.AST):
-                    total += _walk_node(item, scope_id, sites,
-                                        path + ((field, index),))
-    return total
+
+def _assigns_none(node) -> bool:
+    """右值本来就是 None 字面量:rhs-none 变异写回同一个节点,构造性等价。"""
+    value = getattr(node, "value", None)
+    return isinstance(value, ast.Constant) and value.value is None
+
+
+#: 位点 kind -> 构造性等价谓词(链可扩展:新增一类"改回去等价"的算子就在这里登记
+#: 一条谓词;表内顺序固定,便于逐条评审)。
+_EQUIVALENT_PREDICATES = {
+    "boolop-swap": (_boolop_operands_identical,),
+    "binop-swap": (_operates_on_zero,),
+    "rhs-none": (_assigns_none,),
+}
+
+
+def _no_sites(node) -> list:
+    return []
+
+
+def _constant_sites(node: ast.Constant) -> list:
+    if isinstance(node.value, bool):
+        return [("bool-flip", "bool-flip", {}, ())]
+    if isinstance(node.value, int) and node.value in (0, 1):
+        return [("int-swap", "int-swap", {}, ())]
+    return []
+
+
+def _compare_sites(node: ast.Compare) -> list:
+    sites = []
+    for index, op in enumerate(node.ops):
+        target = _SWAP_COMPARE.get(type(op))
+        if target is not None:
+            sites.append(("compare-swap",
+                          _swap_description("compare", op, target),
+                          {"index": index}, ()))
+    return sites
+
+
+def _binop_sites(node: ast.BinOp) -> list:
+    target = _SWAP_BINOP.get(type(node.op))
+    if target is None:
+        return []
+    return [("binop-swap", _swap_description("binop", node.op, target), {}, ())]
+
+
+def _boolop_sites(node: ast.BoolOp) -> list:
+    return [("boolop-swap",
+             "boolop/and->or" if isinstance(node.op, ast.And)
+             else "boolop/or->and", {}, ())]
+
+
+def _unary_sites(node: ast.UnaryOp) -> list:
+    if not isinstance(node.op, (ast.Not, ast.USub)):
+        return []
+    return [("unary-remove",
+             "unary/not-remove" if isinstance(node.op, ast.Not)
+             else "unary/usub-remove", {}, ())]
+
+
+def _assign_sites(node) -> list:
+    if getattr(node, "value", None) is None:
+        return []
+    return [("rhs-none", "rhs->none", {}, (("value", None),))]
+
+
+def _swap_description(family: str, op, target) -> str:
+    return f"{family}/{_op_name(type(op))}->{_op_name(target)}"
+
+
+#: 节点类型 -> 位点生成器(封闭集;未登记的类型不产位点)。
+_SITE_GENERATORS = {
+    ast.Constant: _constant_sites,
+    ast.Compare: _compare_sites,
+    ast.BinOp: _binop_sites,
+    ast.BoolOp: _boolop_sites,
+    ast.UnaryOp: _unary_sites,
+    ast.Assign: _assign_sites,
+    ast.AugAssign: _assign_sites,
+    ast.AnnAssign: _assign_sites,
+}
+
+
+@dataclasses.dataclass
+class _Sink:
+    """位点收集器:sites 累加,构造性等价位点计入 suppressed。"""
+
+    sites: list[Site] = dataclasses.field(default_factory=list)
+    suppressed: int = 0
+
+    def visit(self, node, scope_id: str, path: tuple) -> None:
+        if isinstance(node, _DEFINITION_NODES):
+            return  # 嵌套定义不是本作用域的位点
+        self._record(node, scope_id, path)
+        self._visit_children(node, scope_id, path)
+
+    def visit_scope(self, node, scope_id: str, path: tuple) -> None:
+        self._visit_children(node, scope_id, path, skip=_DECLARATION_FIELDS)
+
+    def _record(self, node, scope_id: str, path: tuple) -> None:
+        generate = _SITE_GENERATORS.get(type(node), _no_sites)
+        for kind, description, meta, extra_path in generate(node):
+            if _should_suppress(node, kind):
+                self.suppressed += 1
+                continue
+            self.sites.append(Site(scope_id=scope_id,
+                                   line=getattr(node, "lineno", 0),
+                                   description=description, kind=kind,
+                                   path=path + extra_path, meta=meta))
+
+    def _visit_children(self, node, scope_id: str, path: tuple,
+                        skip: tuple = ()) -> None:
+        for field, index, child in child_nodes(node, skip):
+            self.visit(child, scope_id, path + ((field, index),))
 
 
 def _op_name(op_class) -> str:
@@ -230,22 +322,18 @@ def scan_module(source: str, module_name: str = "mod"
                 ) -> tuple[list[Scope], list[Site], int]:
     """返回 (scopes, sites, 构造性等价抑制数)。"""
     tree = ast.parse(source)
+    sink = _Sink()
     scopes: list[Scope] = []
-    sites: list[Site] = []
-    suppressed = 0
     for scope, node, scope_path in _collect_scopes(tree, module_name):
         scopes.append(scope)
-        suppressed += _walk_scope(node, scope.id, sites, scope_path)
-    return scopes, sites, suppressed
+        sink.visit_scope(node, scope.id, scope_path)
+    return scopes, sink.sites, sink.suppressed
 
 
 def find_root(workspace_root: str, target_abs: str) -> str:
     cursor = os.path.dirname(os.path.abspath(target_abs))
     while cursor and cursor != os.path.dirname(cursor):
-        markers = (os.path.isdir(os.path.join(cursor, ".git")),
-                   os.path.isfile(os.path.join(cursor, "pyproject.toml")),
-                   os.path.isdir(os.path.join(cursor, "tests")))
-        if any(markers):
+        if _is_project_root(cursor):
             return cursor
         if os.path.abspath(cursor) == os.path.abspath(workspace_root):
             break
@@ -253,55 +341,93 @@ def find_root(workspace_root: str, target_abs: str) -> str:
     return workspace_root
 
 
+def _is_project_root(path: str) -> bool:
+    return (os.path.isdir(os.path.join(path, ".git"))
+            or os.path.isfile(os.path.join(path, "pyproject.toml"))
+            or os.path.isdir(os.path.join(path, "tests")))
+
+
 def _project_files(project_root: str) -> list[str]:
+    """参与内容哈希的文件:.py 与 pyproject.toml,跳过 IGNORED_DIRECTORIES。"""
+    ignored = frozenset(IGNORED_DIRECTORIES)
     files: list[str] = []
     for root, dirs, names in os.walk(project_root):
-        dirs[:] = [d for d in dirs if "/" + d + "/" not in _IGNORED_SEGMENTS]
-        for name in sorted(names):
-            if name.endswith(".py") or name == "pyproject.toml":
-                files.append(os.path.join(root, name))
+        dirs[:] = [name for name in dirs if name not in ignored]
+        files.extend(_hashable_files(root, names))
     return sorted(files)
 
 
+def _hashable_files(root: str, names) -> list[str]:
+    return [os.path.join(root, name) for name in sorted(names)
+            if name.endswith(".py") or name == PROJECT_MARKER]
+
+
 def project_hash(project_root: str, target_abs: str, stripped_source: str) -> str:
+    """项目内容哈希:目标文件以"去掉 manifest 后的源码"参与,页边稳定。"""
     parts: list[str] = []
     target_abs = os.path.abspath(target_abs)
     for path in _project_files(project_root):
-        relative = os.path.relpath(path, project_root)
-        if any(segment in "/" + relative for segment in _IGNORED_SEGMENTS):
+        content = _hash_content(path, target_abs, stripped_source)
+        if content is None:
             continue
-        try:
-            with open(path, encoding="utf-8") as handle:
-                content = handle.read().replace("\r\n", "\n")
-        except OSError:
-            continue
-        if os.path.abspath(path) == target_abs:
-            content = stripped_source.replace("\r\n", "\n")
-        parts += [relative.replace(os.sep, "/"), "\n", content, "\n\0\n"]
+        relative = os.path.relpath(path, project_root).replace(os.sep, "/")
+        parts += [relative, "\n", content, "\n\0\n"]
     return fnv1a64("".join(parts))
 
 
+def _hash_content(path: str, target_abs: str, stripped_source: str) -> str | None:
+    if os.path.abspath(path) == target_abs:
+        return stripped_source.replace("\r\n", "\n")
+    try:
+        with open(path, encoding="utf-8") as handle:
+            return handle.read().replace("\r\n", "\n")
+    except OSError:
+        return None
+
+
 def scope_changed(scope: Scope, old_manifest: dict) -> bool:
-    for old in old_manifest.get("scopes", []):
-        if old.get("id") == scope.id:
-            return old.get("semantic_hash", "") != scope.semantic_hash
-    return True
+    """manifest 中同名 scope 的语义哈希是否与当前不同(缺失也算变更)。"""
+    recorded = _manifest_scopes(old_manifest).get(scope.id)
+    if recorded is None:
+        return True
+    return recorded.get("semantic_hash", "") != scope.semantic_hash
+
+
+def _manifest_scopes(old_manifest: dict) -> dict:
+    return {scope.get("id"): scope for scope in old_manifest.get("scopes", [])}
+
+
+def changed_scope_ids(scopes: list[Scope], old_manifest: dict | None) -> set[str]:
+    """需要重新变异的 scope 身份;无 manifest 时全部视为变更。"""
+    if old_manifest is None:
+        return {scope.id for scope in scopes}
+    return {scope.id for scope in scopes if scope_changed(scope, old_manifest)}
 
 
 def select_sites(sites: list[Site], scopes: list[Scope], old_manifest: dict | None,
                  options: dict, module_hash_changed: bool) -> list[Site]:
-    line_set = options.get("line_set")
-    if line_set:
-        return [site for site in sites if site.line in line_set]
+    """差分选择变异位点:行号 / 全集 / 变更 scope / 模块哈希未变则空跑。"""
+    if options.get("line_set"):
+        return _sites_on_lines(sites, options["line_set"])
     if options.get("mutate_all"):
-        return sites
-    changed = {scope.id for scope in scopes
-               if old_manifest is None or scope_changed(scope, old_manifest)}
-    if options.get("since_last_run"):
-        return [site for site in sites if site.scope_id in changed]
-    if old_manifest and not module_hash_changed:
+        return list(sites)
+    if _module_untouched(options, old_manifest, module_hash_changed):
         return []
-    return [site for site in sites if site.scope_id in changed]
+    return _sites_in_scopes(sites, changed_scope_ids(scopes, old_manifest))
+
+
+def _sites_on_lines(sites: list[Site], line_set: set[int]) -> list[Site]:
+    return [site for site in sites if site.line in line_set]
+
+
+def _sites_in_scopes(sites: list[Site], scope_ids: set[str]) -> list[Site]:
+    return [site for site in sites if site.scope_id in scope_ids]
+
+
+def _module_untouched(options, old_manifest, module_hash_changed: bool) -> bool:
+    """manifest 在、模块内容哈希未变、且调用方没有强制看 diff -> 无事可做。"""
+    return (old_manifest is not None and not module_hash_changed
+            and not options.get("since_last_run"))
 
 
 def surface_areas(sites: list[Site], scopes: list[Scope],
@@ -309,14 +435,17 @@ def surface_areas(sites: list[Site], scopes: list[Scope],
     """differential = 不在 manifest 中 scope 的位点数;violating = 语义哈希失配的位数。"""
     if not old_manifest:
         return len(sites), 0
-    by_id = {scope.id: scope for scope in scopes}
-    differential, violating = 0, 0
-    for site in sites:
-        old = next((scope for scope in old_manifest.get("scopes", [])
-                    if scope.get("id") == site.scope_id), None)
-        current = by_id.get(site.scope_id)
-        if old is None or current is None:
-            differential += 1
-        elif old.get("semantic_hash", "") != current.semantic_hash:
-            violating += 1
-    return differential, violating
+    recorded = _manifest_scopes(old_manifest)
+    current = {scope.id: scope for scope in scopes}
+    states = [_area_state(site, recorded, current) for site in sites]
+    return states.count("differential"), states.count("violating")
+
+
+def _area_state(site: Site, recorded: dict, current: dict) -> str:
+    """单个位点相对 manifest 的表面面积归类。"""
+    previous, present = recorded.get(site.scope_id), current.get(site.scope_id)
+    if previous is None or present is None:
+        return "differential"
+    if previous.get("semantic_hash", "") != present.semantic_hash:
+        return "violating"
+    return "matched"

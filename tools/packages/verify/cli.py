@@ -12,16 +12,16 @@
 
 from __future__ import annotations
 
-import os
 import subprocess
 import sys
 
-from ..common import project_python
+from .. import covdata
+from ..common import project_python, repo_root_from, wants_help
 
 run = subprocess.run
 
 
-def _usage() -> str:
+def usage() -> str:
     return (
         "用法: python tools/cli.py verify [--coverage]\n"
         "\n"
@@ -30,26 +30,23 @@ def _usage() -> str:
     )
 
 
-def usage() -> str:
-    return _usage()
-
-
 def main(args, env=None) -> int:
-    if any(arg in ("--help", "-h") for arg in args):
-        sys.stdout.write(_usage())
+    if wants_help(args):
+        sys.stdout.write(usage())
         return 0
-    env = dict(env or {})
-    repo_root = env.get("repo_root") or os.getcwd()
+    repo_root = repo_root_from(env)
     python = project_python(repo_root)
-    coverage = "--coverage" in args
+    if "--coverage" in args:
+        return _run_with_coverage(python, repo_root)
+    return run([python, "-m", "pytest"], cwd=repo_root).returncode
 
-    if coverage:
-        result = run([python, "-m", "coverage", "run", "--source=src", "-m", "pytest"],
-                     cwd=repo_root)
-        if result.returncode != 0:
-            return result.returncode
-        run([python, "-m", "coverage", "report", "-m"], cwd=repo_root)
-        return 0
 
-    result = run([python, "-m", "pytest"], cwd=repo_root)
-    return result.returncode
+def _run_with_coverage(python: str, repo_root: str) -> int:
+    """coverage.py 插桩跑测试:测试失败即透传退出码,不跑报告。"""
+    source = covdata.DEFAULT_SOURCE
+    result = run([python, "-m", "coverage", "run", f"--source={source}",
+                  "-m", "pytest"], cwd=repo_root)
+    if result.returncode != 0:
+        return result.returncode
+    run([python, "-m", "coverage", "report", "-m"], cwd=repo_root)
+    return 0

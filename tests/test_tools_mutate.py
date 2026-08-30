@@ -170,3 +170,184 @@ def test_apply_mutations_change_ast(tmp_path):
     for site in sites:
         mutated = site.mutated_source(source)
         assert pyast.dump(pyast.parse(mutated)) != pyast.dump(pyast.parse(source))
+
+
+# --- 算子施加、差分选择与表面面积 -------------------------------------------
+
+ALL_OPERATORS = '''\
+def flags(on, off):
+    ok = True
+    count = 0
+    total = count + 1
+    total -= 2
+    text: str = "x"
+    other: str
+    if on and not off:
+        return total or text
+    return 0
+
+
+def compares(a, b):
+    if a == b or a != b or a < b or a <= b or a > b:
+        pass
+    if a >= b or a is b or a is not b or a in b or a not in b:
+        pass
+    return a * b
+
+
+class Box:
+    def shift(self, value):
+        value //= 2
+        value **= 2
+        return value << 1 | value >> 1 & value @ value
+'''
+
+
+def test_every_operator_kind_applies():
+    """每种算子都要能在"每次重新解析"的前提下施加成功并改变结构。"""
+    _scopes, sites, _suppressed = engine.scan_module(ALL_OPERATORS)
+    original = pyast.dump(pyast.parse(ALL_OPERATORS))
+    kinds = set()
+    for site in sites:
+        site.apply(pyast.parse(ALL_OPERATORS))
+        kinds.add(site.kind)
+        assert pyast.dump(pyast.parse(site.mutated_source(ALL_OPERATORS))) != original
+    assert {"bool-flip", "int-swap", "compare-swap", "binop-swap",
+            "boolop-swap", "unary-remove", "rhs-none"} == kinds
+
+
+def test_unknown_site_kind_is_a_programming_error():
+    site = engine.Site(scope_id="m.f", line=1, description="?", kind="nope",
+                       path=(), meta={})
+    import pytest
+
+    with pytest.raises(ValueError) as bad:
+        site.apply(pyast.parse("def f():\n    return 1\n"))
+    assert "unknown site kind" in str(bad.value)
+
+
+def test_annassign_without_value_yields_no_site():
+    _scopes, sites, _ = engine.scan_module("def f():\n    x: int\n    return x\n")
+    assert sites == []
+
+
+def test_changed_scope_ids_without_and_with_manifest():
+    scopes, _sites, _ = engine.scan_module("def f(x):\n    return x > 1\n")
+    assert engine.changed_scope_ids(scopes, None) == {scope.id for scope in scopes}
+
+    recorded = {"scopes": [{"id": scopes[0].id,
+                            "semantic_hash": scopes[0].semantic_hash}]}
+    assert engine.changed_scope_ids(scopes, recorded) == set()
+    assert engine.changed_scope_ids(scopes, {"scopes": []}) == {scopes[0].id}
+
+
+def test_select_sites_without_manifest_and_with_untouched_module():
+    scopes, sites, _ = engine.scan_module("def f(x):\n    return x > 1\n")
+    options = {}
+    assert engine.select_sites(sites, scopes, None, options, False) == sites
+    same = {"scopes": [{"id": scopes[0].id,
+                        "semantic_hash": scopes[0].semantic_hash}]}
+    assert engine.select_sites(sites, scopes, same, options, True) == []
+    # 语义哈希未变:即便强制 --since-last-run 也没有变更 scope
+    assert engine.select_sites(sites, scopes, same,
+                               {"since_last_run": True}, True) == []
+    stale = {"scopes": [{"id": scopes[0].id, "semantic_hash": "stale"}]}
+    assert engine.select_sites(sites, scopes, stale,
+                               {"since_last_run": True}, True) == sites
+
+
+def test_surface_areas_counts_differential_and_violating():
+    scopes, sites, _ = engine.scan_module("def f(x):\n    return x > 1\n")
+    assert engine.surface_areas(sites, scopes, None) == (len(sites), 0)
+
+    stale = {"scopes": [{"id": scopes[0].id, "semantic_hash": "stale"}]}
+    assert engine.surface_areas(sites, scopes, stale) == (0, len(sites))
+
+    other = {"scopes": [{"id": "gone", "semantic_hash": "stale"}]}
+    assert engine.surface_areas(sites, scopes, other) == (len(sites), 0)
+
+
+def test_find_root_walks_up_to_marker(tmp_path):
+    nested = tmp_path / "pkg" / "deep"
+    nested.mkdir(parents=True)
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n")
+    target = nested / "m.py"
+    target.write_text("def f():\n    return 1\n")
+    assert engine.find_root(str(tmp_path), str(target)) == str(tmp_path)
+    # workspace_root 是上界:再向上也不会越过它
+    assert engine.find_root(str(nested), str(target)) == str(nested)
+
+    loose = tmp_path / "loose"
+    loose.mkdir()
+    assert engine.find_root(str(loose), str(target)) == str(tmp_path)
+
+    outside = tmp_path / "only"
+    outside.mkdir()
+    lonely = outside / "m.py"
+    lonely.write_text("x = 1\n")
+    assert engine.find_root(str(lonely.parent), str(lonely)) == str(lonely.parent)
+
+
+# --- footer 识别:真 footer 只在文件末尾,引用文本不得截断源文件 ------------
+
+FOOTER = "# mutate4py-manifest\n# version=4\n# projectHash=h\n"
+MARKER_LINE = manifest.MARKER_LINE
+
+
+def test_footer_recognised_after_code():
+    source = "x = 1\n\n" + FOOTER
+    assert manifest.strip(source) == "x = 1\n"
+    assert manifest.parse_text(source)["version"] == 4
+
+
+def test_marker_inside_string_does_not_truncate_source():
+    """文档/示例里行首出现的 marker 后面还有代码:不是 footer,源文件保持原样。"""
+    source = '"""\n格式:\n' + FOOTER + '\nx = 1\n"""\n'
+    assert manifest.strip(source) == source
+    assert manifest.parse_text(source) is None
+
+
+def test_marker_must_own_its_line():
+    """marker 前面还有别的字符(行中)且其后只剩注释:也不算 footer。"""
+    source = "x = 1\n# note # mutate4py-manifest\n# version=4\n"
+    assert manifest.strip(source) == source
+    assert manifest.parse_text(source) is None
+
+
+def test_footer_must_run_to_end_of_file():
+    """marker 之后还有代码:整个文件视为没有 manifest。"""
+    source = FOOTER + "raise SystemExit(1)\n"
+    assert manifest.parse_text(source) is None
+    assert manifest.strip(source) == source
+
+
+def test_footer_at_offset_zero_without_trailing_newline():
+    assert manifest.parse_text("# mutate4py-manifest\n# version=7")["version"] == 7
+
+
+def test_last_valid_footer_wins_over_earlier_quoted_marker():
+    source = '# note: # mutate4py-manifest\n# version=1\nx = 1\n\n' + FOOTER
+    assert manifest.parse_text(source)["version"] == 4
+    assert manifest.strip(source) == '# note: # mutate4py-manifest\n# version=1\nx = 1\n'
+
+
+def test_assign_none_rhs_is_equivalent_and_suppressed():
+    """`x = None` 的 rhs-none 变异写回同一个字面量:构造性等价,不产位点。"""
+    _scopes, sites, suppressed = engine.scan_module("def f():\n    x = None\n    return x\n")
+    assert sites == []
+    assert suppressed == 1
+
+
+def test_footer_may_contain_blank_lines():
+    """footer 注释块里的空行不算"代码":仍要识别,且正文按 marker 行切分。"""
+    source = "x = 1\n\n" + MARKER_LINE + "# version=4\n\n# projectHash=h\n"
+    assert manifest.strip(source) == "x = 1\n"
+    assert manifest.parse_text(source)["project_hash"] == "h"
+
+
+def test_serialize_fills_missing_scope_fields_with_defaults():
+    footer = manifest.serialize({"version": 4, "project_hash": "h",
+                                 "scopes": [{"id": "m.f"}]})
+    assert manifest.parse_text("x = 1\n\n" + footer)["scopes"] == [
+        {"id": "m.f", "kind": "function", "start_line": 0, "end_line": 0,
+         "semantic_hash": ""}]
