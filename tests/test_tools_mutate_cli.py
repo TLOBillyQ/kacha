@@ -488,6 +488,9 @@ def test_worker_count_defaults_and_limits(monkeypatch):
     assert cli._worker_count(None, 10) == 4  # 默认 CPU 一半
     assert cli._worker_count(3, 10) == 3     # 显式请求优先
     assert cli._worker_count(None, 2) == 2   # 绝不超过位点数
+    monkeypatch.setattr(cli.os, "cpu_count", lambda: 16)
+    assert cli._worker_count(None, 10) == 4  # 默认封顶 4(worker 越多越易超时误判)
+    assert cli._worker_count(8, 10) == 8     # 显式请求不受封顶影响
     monkeypatch.setattr(cli.os, "cpu_count", lambda: 1)
     assert cli._worker_count(None, 10) == 1  # 下限 1,不能算出 0 个 worker
     monkeypatch.setattr(cli.os, "cpu_count", lambda: None)

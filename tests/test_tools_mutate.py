@@ -124,8 +124,12 @@ def test_scan_skips_nested_functions():
 
 
 def test_equivalent_boolop_swap_suppressed():
-    _scopes, sites, _ = engine.scan_module("def f(x):\n    return x and x\n")
-    assert not [s for s in sites if s.description.startswith("boolop/")]
+    """纯操作数逐字相同才抑制:`x and x` 与 `x or x` 都只会返回 x。"""
+    for source in ("def f(x):\n    return x and x\n",
+                   "def f():\n    return True or True\n"):
+        _scopes, sites, suppressed = engine.scan_module(source)
+        assert not [s for s in sites if s.description.startswith("boolop/")], source
+        assert suppressed == 1, source
     _scopes, sites, _ = engine.scan_module("def f(x):\n    return x and True\n")
     assert [s for s in sites if s.description.startswith("boolop/")]
 
@@ -407,6 +411,18 @@ def test_distinct_boolop_operands_are_not_suppressed():
     _scopes, sites, suppressed = engine.scan_module("def f(a, b):\n    return a and b\n")
     assert [s.description for s in sites] == ["boolop/and->or"]
     assert suppressed == 0
+
+
+def test_side_effecting_boolop_operands_are_not_suppressed():
+    """`f() and f()` 操作数逐字相同,但 and/or 短路方向相反、求值次数不同。"""
+    for source in ("def f(g):\n    return g() and g()\n",
+                   "def f(g):\n    return g.x and g.x\n",
+                   "def f(g):\n    return g[0] and g[0]\n"):
+        _scopes, sites, suppressed = engine.scan_module(source)
+        boolops = [site.description for site in sites
+                   if site.description.startswith("boolop/")]
+        assert boolops == ["boolop/and->or"], source
+        assert suppressed == 0, source
 
 
 def test_only_bool_and_zero_one_literals_produce_sites():

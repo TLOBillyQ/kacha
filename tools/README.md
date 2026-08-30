@@ -161,3 +161,5 @@ tools/
   并触发一次全量重跑 —— 属于口径变更,留给 coder 决定。
 - worker 私有 `TMPDIR` 位于副本内部,因此依赖「祖先目录没有项目 marker」的测试
   在变异运行里不成立(已把唯一受影响用例改成显式 monkeypatch)。
+- `--test-command` 走 `/bin/sh`(硬编码):Windows 上不可用,需要在该平台上跑
+  变异时改成 `sh`/`cmd /c` 适配层。工具链自身的其余部分与平台无关。

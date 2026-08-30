@@ -191,14 +191,22 @@ def _should_suppress(node, site_kind: str) -> bool:
     return any(test(node) for test in _EQUIVALENT_PREDICATES.get(site_kind, ()))
 
 
-def _boolop_operands_identical(node: ast.BoolOp) -> bool:
-    """操作数按完整 AST 结构比较:全部逐字相同,and/or 互换才是构造性等价变异。
+#: 求值不产生副作用、也不会被重载的操作数:and/or 互换在它们身上才是等价式。
+_PURE_OPERANDS = (ast.Name, ast.Constant)
 
-    这里不能用 semantic_hash_for_node:那个哈希按归一化口径掩蔽标识符与字面量
-    取值,会把 `a and b` 误判成同操作数,从而丢掉一条真实的变异。
+
+def _boolop_operands_identical(node: ast.BoolOp) -> bool:
+    """操作数逐字相同且无副作用,and/or 互换才是构造性等价变异。
+
+    两点都不能省:
+    - 比较必须用完整 AST。semantic_hash_for_node 按归一化口径掩蔽标识符与字面量
+      取值,会把 `a and b` 判成同操作数,从而丢掉一条真实的变异。
+    - 操作数必须纯净。即使逐字相同,`and` 与 `or` 的短路方向相反,求值次数不同,
+      调用/下标/属性都可能带副作用;只在 Name 与 Constant 上抑制。
     """
-    return len({ast.dump(item, include_attributes=False)
-                for item in node.values}) == 1
+    return (len({ast.dump(item, include_attributes=False) for item in node.values})
+            == 1
+            and all(isinstance(item, _PURE_OPERANDS) for item in node.values))
 
 
 def _operates_on_zero(node) -> bool:
@@ -461,7 +469,7 @@ def _area_state(site: Site, recorded: dict, current: dict) -> str:
 
 # mutate4py-manifest
 # version=4
-# projectHash=9b197a7cd635cf5f
+# projectHash=c0d95bc81102bacd
 # scope.0.id=engine.Site.apply
 # scope.0.kind=method
 # scope.0.startLine=71
@@ -539,166 +547,166 @@ def _area_state(site: Site, recorded: dict, current: dict) -> str:
 # scope.14.semanticHash=f78351556b7d4a22
 # scope.15.id=engine._boolop_operands_identical
 # scope.15.kind=function
-# scope.15.startLine=194
-# scope.15.endLine=201
-# scope.15.semanticHash=30839c41f694fa65
+# scope.15.startLine=198
+# scope.15.endLine=209
+# scope.15.semanticHash=b72f3ceee1c5c1a6
 # scope.16.id=engine._operates_on_zero
 # scope.16.kind=function
-# scope.16.startLine=204
-# scope.16.endLine=205
+# scope.16.startLine=212
+# scope.16.endLine=213
 # scope.16.semanticHash=bf0d932e99fb2cd7
 # scope.17.id=engine._is_zero
 # scope.17.kind=function
-# scope.17.startLine=208
-# scope.17.endLine=209
+# scope.17.startLine=216
+# scope.17.endLine=217
 # scope.17.semanticHash=ec6ef1c57805ea1c
 # scope.18.id=engine._assigns_none
 # scope.18.kind=function
-# scope.18.startLine=212
-# scope.18.endLine=215
+# scope.18.startLine=220
+# scope.18.endLine=223
 # scope.18.semanticHash=02a88d769ff0bc67
 # scope.19.id=engine._no_sites
 # scope.19.kind=function
-# scope.19.startLine=227
-# scope.19.endLine=228
+# scope.19.startLine=235
+# scope.19.endLine=236
 # scope.19.semanticHash=5a2c54d610a44ecd
 # scope.20.id=engine._constant_sites
 # scope.20.kind=function
-# scope.20.startLine=231
-# scope.20.endLine=236
+# scope.20.startLine=239
+# scope.20.endLine=244
 # scope.20.semanticHash=914f0d5c8c47d5b2
 # scope.21.id=engine._compare_sites
 # scope.21.kind=function
-# scope.21.startLine=239
-# scope.21.endLine=247
+# scope.21.startLine=247
+# scope.21.endLine=255
 # scope.21.semanticHash=1ee8446afd35644d
 # scope.22.id=engine._binop_sites
 # scope.22.kind=function
-# scope.22.startLine=250
-# scope.22.endLine=254
+# scope.22.startLine=258
+# scope.22.endLine=262
 # scope.22.semanticHash=8c5e54a16de77983
 # scope.23.id=engine._boolop_sites
 # scope.23.kind=function
-# scope.23.startLine=257
-# scope.23.endLine=260
+# scope.23.startLine=265
+# scope.23.endLine=268
 # scope.23.semanticHash=35dd81a7e1a4e570
 # scope.24.id=engine._unary_sites
 # scope.24.kind=function
-# scope.24.startLine=263
-# scope.24.endLine=268
+# scope.24.startLine=271
+# scope.24.endLine=276
 # scope.24.semanticHash=aab104cb56c7646b
 # scope.25.id=engine._assign_sites
 # scope.25.kind=function
-# scope.25.startLine=271
-# scope.25.endLine=274
+# scope.25.startLine=279
+# scope.25.endLine=282
 # scope.25.semanticHash=8812eedea97456ab
 # scope.26.id=engine._swap_description
 # scope.26.kind=function
-# scope.26.startLine=277
-# scope.26.endLine=278
+# scope.26.startLine=285
+# scope.26.endLine=286
 # scope.26.semanticHash=94b5c93c5fb34e80
 # scope.27.id=engine._Sink.visit
 # scope.27.kind=method
-# scope.27.startLine=301
-# scope.27.endLine=305
+# scope.27.startLine=309
+# scope.27.endLine=313
 # scope.27.semanticHash=75dbf8b13180eb80
 # scope.28.id=engine._Sink.visit_scope
 # scope.28.kind=method
-# scope.28.startLine=307
-# scope.28.endLine=308
+# scope.28.startLine=315
+# scope.28.endLine=316
 # scope.28.semanticHash=a709634ac1700ffd
 # scope.29.id=engine._Sink._record
 # scope.29.kind=method
-# scope.29.startLine=310
-# scope.29.endLine=318
+# scope.29.startLine=318
+# scope.29.endLine=326
 # scope.29.semanticHash=3da684f662276200
 # scope.30.id=engine._Sink._visit_children
 # scope.30.kind=method
-# scope.30.startLine=320
-# scope.30.endLine=323
+# scope.30.startLine=328
+# scope.30.endLine=331
 # scope.30.semanticHash=37068480c8570d11
 # scope.31.id=engine._op_name
 # scope.31.kind=function
-# scope.31.startLine=326
-# scope.31.endLine=327
+# scope.31.startLine=334
+# scope.31.endLine=335
 # scope.31.semanticHash=c33ad8f01f54adcb
 # scope.32.id=engine.scan_module
 # scope.32.kind=function
-# scope.32.startLine=330
-# scope.32.endLine=339
+# scope.32.startLine=338
+# scope.32.endLine=347
 # scope.32.semanticHash=6ea273e68da150e0
 # scope.33.id=engine.find_root
 # scope.33.kind=function
-# scope.33.startLine=342
-# scope.33.endLine=350
+# scope.33.startLine=350
+# scope.33.endLine=358
 # scope.33.semanticHash=7291114dc849f35b
 # scope.34.id=engine._is_project_root
 # scope.34.kind=function
-# scope.34.startLine=353
-# scope.34.endLine=356
+# scope.34.startLine=361
+# scope.34.endLine=364
 # scope.34.semanticHash=a5deb576cb96bc0f
 # scope.35.id=engine._project_files
 # scope.35.kind=function
-# scope.35.startLine=359
-# scope.35.endLine=366
+# scope.35.startLine=367
+# scope.35.endLine=374
 # scope.35.semanticHash=3bfebe57e43eeb60
 # scope.36.id=engine._hashable_files
 # scope.36.kind=function
-# scope.36.startLine=369
-# scope.36.endLine=371
+# scope.36.startLine=377
+# scope.36.endLine=379
 # scope.36.semanticHash=60baca0fdf10845d
 # scope.37.id=engine.project_hash
 # scope.37.kind=function
-# scope.37.startLine=374
-# scope.37.endLine=384
+# scope.37.startLine=382
+# scope.37.endLine=392
 # scope.37.semanticHash=3a0ff1eb13b36790
 # scope.38.id=engine._hash_content
 # scope.38.kind=function
-# scope.38.startLine=387
-# scope.38.endLine=394
+# scope.38.startLine=395
+# scope.38.endLine=402
 # scope.38.semanticHash=67b3f0aac7600c81
 # scope.39.id=engine.scope_changed
 # scope.39.kind=function
-# scope.39.startLine=397
-# scope.39.endLine=402
+# scope.39.startLine=405
+# scope.39.endLine=410
 # scope.39.semanticHash=656548b6989df2fb
 # scope.40.id=engine._manifest_scopes
 # scope.40.kind=function
-# scope.40.startLine=405
-# scope.40.endLine=406
+# scope.40.startLine=413
+# scope.40.endLine=414
 # scope.40.semanticHash=7549bae80d8b14d6
 # scope.41.id=engine.changed_scope_ids
 # scope.41.kind=function
-# scope.41.startLine=409
-# scope.41.endLine=413
+# scope.41.startLine=417
+# scope.41.endLine=421
 # scope.41.semanticHash=cd4b5a6e9bca8db9
 # scope.42.id=engine.select_sites
 # scope.42.kind=function
-# scope.42.startLine=416
-# scope.42.endLine=425
+# scope.42.startLine=424
+# scope.42.endLine=433
 # scope.42.semanticHash=0d3558d88bcd43a5
 # scope.43.id=engine._sites_on_lines
 # scope.43.kind=function
-# scope.43.startLine=428
-# scope.43.endLine=429
+# scope.43.startLine=436
+# scope.43.endLine=437
 # scope.43.semanticHash=2a3417fa705f34ed
 # scope.44.id=engine._sites_in_scopes
 # scope.44.kind=function
-# scope.44.startLine=432
-# scope.44.endLine=433
+# scope.44.startLine=440
+# scope.44.endLine=441
 # scope.44.semanticHash=2a3417fa705f34ed
 # scope.45.id=engine._module_untouched
 # scope.45.kind=function
-# scope.45.startLine=436
-# scope.45.endLine=439
+# scope.45.startLine=444
+# scope.45.endLine=447
 # scope.45.semanticHash=fd5ca255cdf0792b
 # scope.46.id=engine.surface_areas
 # scope.46.kind=function
-# scope.46.startLine=442
-# scope.46.endLine=450
+# scope.46.startLine=450
+# scope.46.endLine=458
 # scope.46.semanticHash=e7d007c0c4b52af1
 # scope.47.id=engine._area_state
 # scope.47.kind=function
-# scope.47.startLine=453
-# scope.47.endLine=460
+# scope.47.startLine=461
+# scope.47.endLine=468
 # scope.47.semanticHash=f7cfcf144cf3fdd5
