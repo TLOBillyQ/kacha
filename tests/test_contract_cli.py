@@ -204,6 +204,23 @@ class ContractCliTests(unittest.TestCase):
 
         self.assertEqual(0, result.returncode, result.stderr)
 
+    def test_recorded_edit_boundaries_fixture_is_valid(self) -> None:
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "ugc_image_tool.contracts.cli",
+                "validate",
+                "contracts/fixtures/2026-08-31-team-gateway-edit-boundaries",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            env={"PYTHONPATH": "src"},
+        )
+
+        self.assertEqual(0, result.returncode, result.stderr)
+
     def test_partially_redacted_values_are_rejected(self) -> None:
         cases = (
             ("sk-live[REDACTED]", "脱敏标记必须结构完整，不能仅作子串出现"),

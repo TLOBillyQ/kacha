@@ -8,15 +8,15 @@
 
 - **模型发现**：`GET /v1/models`，`Authorization: Bearer` 鉴权；`data[].id` 作为模型 ID 交给本地能力表合并，未知模型保持禁用。
 - **文生图**：`POST /v1/images/generations`，仅发送实测字段 `model`、`prompt`、`negative_prompt`、`n`、`size`（`WxH`）、`watermark`。
-- **图片编辑**：`POST /v1/images/edits`，JSON 编码（`Content-Type: application/json`）。顶层字段为 `model`、`prompt`（网关 `binding:required`，必填，即使已提供 `input`）、`parameters`、`input`。参考图编码为 data-URL，按顺序作为 `input.messages[0].content` 的多个 `image` 项，提示词作为末尾 `text` 项；`parameters.size` 必须用「宽*高」星号格式（如 `1024*1024`，透传路径不做 `x`→`*` 转换，与文生图顶层 `size` 的 `WxH` 习惯不同），出图数量放 `parameters.n`，水印放 `parameters.watermark`。能力边界：参考图 1～3 张（实测 1 与 2 张）、`n` ≤ 5（实测到 2，3～5 按 issue #34 开放但未实测）。成功响应以 `metadata.output.choices[].message.content[].image` 为出图真源保存，并检测顶层 `data` 数量不一致。
+- **图片编辑**：`POST /v1/images/edits`，JSON 编码（`Content-Type: application/json`）。顶层字段为 `model`、`prompt`（网关 `binding:required`，必填，即使已提供 `input`）、`parameters`、`input`。参考图编码为 data-URL，按顺序作为 `input.messages[0].content` 的多个 `image` 项，提示词作为末尾 `text` 项；提示词发送前由客户端注入数量与顺序前缀（如「本次提供 2 张参考图，按顺序为图1、图2。」），让用户提示词里的「图1/图2」有确定所指；`parameters.size` 必须用「宽*高」星号格式（如 `1024*1024`，透传路径不做 `x`→`*` 转换，与文生图顶层 `size` 的 `WxH` 习惯不同），出图数量放 `parameters.n`，水印放 `parameters.watermark`。能力边界：参考图 1～3 张（2026-08-29 实测 1 与 2 张，2026-08-31 实测 3 张采纳 `input_image_count=3`）、`n` ≤ 5（2026-08-31 实测 3 与 5，`output_image_count` 与 choice 内图数一致）。成功响应以 `metadata.output.choices[].message.content[].image` 为出图真源保存，并检测顶层 `data` 数量不一致。
 - **错误映射**：401 → 鉴权失败；429 → 网关限流（可操作提示，不依赖 `Retry-After`）；4xx → 网关拒绝；5xx → 网关服务错误；连接失败 → 网络不可达（任务状态为结果未知）。
 - **重试**：模型列表等只读请求由发现层有限重试；生成请求不自动重发，契约未确认幂等键，不使用稳定任务 ID 重试。
 - **保持关闭（未实测）**：生成请求的幂等键、运行中取消、任务查询和 `Retry-After`。这些能力在真实交互验证前不向网关发出。
-- **开放试用（未实测）**：图片编辑的负向提示词并入主提示词文本发送；源码层面确认的正确位置 `input.negative_prompt` 尚未实测，首次真实提交后应补录夹具并更新本节。
+- **开放试用**：图片编辑的负向提示词并入主提示词文本发送；原生 `input.negative_prompt` 已于 2026-08-31 实测被网关接受（HTTP 200 正常出图，见 `contracts/fixtures/2026-08-31-team-gateway-edit-boundaries/`），但对出图效果的约束强度未经视觉验证，故客户端暂不切换。
 
 ## 当前结论
 
-截至 2026-08-29，以下契约已在内网主机 `http://lzxsvn:3001`（new-api v1.0.0-rc.27，官方零补丁）真实验证；文生图与模型列表夹具保存于 `contracts/fixtures/2026-08-17-team-gateway/`，JSON 图片编辑夹具保存于 `contracts/fixtures/2026-08-29-team-gateway-edit-json/`：
+截至 2026-08-31，以下契约已在内网主机 `http://lzxsvn:3001`（new-api，2026-08-29 为 v1.0.0-rc.27 官方零补丁，2026-08-31 上游已升级、版本号未重新核对）真实验证；文生图与模型列表夹具保存于 `contracts/fixtures/2026-08-17-team-gateway/`，JSON 图片编辑夹具保存于 `contracts/fixtures/2026-08-29-team-gateway-edit-json/`，编辑边界（3 张参考图、n=3/5、原生负向提示词）夹具保存于 `contracts/fixtures/2026-08-31-team-gateway-edit-boundaries/`：
 
 - 鉴权使用 `Authorization` 头；无效密钥返回 401 和 `new_api_error`。
 - 模型列表为 `GET /v1/models`，返回 `data` 模型数组和 `success: true`。
@@ -28,7 +28,7 @@
 
 部分失败、幂等键、运行中取消、任务查询和可靠 `Retry-After` 没有得到足够的真实证据，均记录为 `unknown`，客户端不得依赖这些行为。顶层 `data` 与元数据输出数量不一致只能证明响应视图不可靠，不能证明网关提供了可依赖的部分失败语义，适配器必须将其视为未知结果并保守处理。`parameters.n` 经网关按百炼 `usage.image_count` 结算，JSON 透传不会造成漏计费。
 
-未实测（如实标注）：非法或不支持的 size 档位报错形态；`n` 的实际上限（能力表按 issue #34 开放到 5，实测到 2）；`input.negative_prompt` 编辑透传；JSON 路径失败场景的错误映射是否与 multipart 一致；其余模型的图片编辑。
+未实测（如实标注）：非法或不支持的 size 档位报错形态；JSON 路径失败场景的错误映射是否与 multipart 一致；其余模型的图片编辑；`input.negative_prompt` 对出图效果的实际约束强度（协议层已实测接受，需人工视觉对比）。
 
 ## 探测流程
 

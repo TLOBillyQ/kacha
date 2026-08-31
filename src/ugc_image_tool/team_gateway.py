@@ -169,10 +169,13 @@ class TeamGateway:
         # JSON 透传载荷（contracts/fixtures/2026-08-29-team-gateway-edit-json 实测）：
         # 参考图编码为 data-URL，按顺序进入 input.messages[0].content 的多个
         # image 项，提示词作为末尾 text 项；顶层 prompt 为网关必填字段。
-        # input.negative_prompt 尚未实测，负向提示词先并入主提示词文本。
-        prompt_text = request.prompt
+        # input.negative_prompt 已实测被网关接受（2026-08-31 夹具），但对出图
+        # 效果的约束强度未经视觉验证，负向提示词仍并入主提示词文本。
+        # 协议层面无法给参考图标注角色，多图时模型只能靠顺序区分；
+        # 把数量与顺序写进提示词，让用户提示词里的“图1/图2”有确定所指。
+        prompt_text = f"{_reference_note(len(request.references))}\n{request.prompt}"
         if request.negative_prompt:
-            prompt_text = f"{request.prompt}\n避免出现：{request.negative_prompt}"
+            prompt_text = f"{prompt_text}\n避免出现：{request.negative_prompt}"
         content: list[dict[str, str]] = [
             {"image": _reference_data_url(reference)}
             for reference in request.references
@@ -296,6 +299,14 @@ def _reference_data_url(reference: ReferenceImage) -> str:
     """把参考图编码为 JSON 编辑载荷使用的 data-URL。"""
     encoded = base64.b64encode(reference.content).decode("ascii")
     return f"data:{reference.media_type};base64,{encoded}"
+
+
+def _reference_note(count: int) -> str:
+    """参考图数量与顺序说明，作为提示词前缀注入。"""
+    if count <= 1:
+        return f"本次提供 {count} 张参考图。"
+    ordered = "、".join(f"图{index}" for index in range(1, count + 1))
+    return f"本次提供 {count} 张参考图，按顺序为{ordered}。"
 
 
 def _edit_size_error(size: SizeSpec, capability: WorkflowCapability) -> str | None:
