@@ -1,11 +1,9 @@
-from .image_edit import ImageEditPage
+from .generate import GeneratePage
 from .settings_page import SettingsPage
 from .task_center import TaskCenterPage
-from .text_to_image import TextToImagePage
 
 __all__ = [
-    "ImageEditPage",
+    "GeneratePage",
     "SettingsPage",
     "TaskCenterPage",
-    "TextToImagePage",
 ]

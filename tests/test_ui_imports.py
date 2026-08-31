@@ -8,10 +8,9 @@ from PySide6.QtWidgets import QWidget
 from ugc_image_tool.ui import MainWindow, run
 from ugc_image_tool.ui.controllers.discovery_controller import DiscoveryController
 from ugc_image_tool.ui.pages import (
-    ImageEditPage,
+    GeneratePage,
     SettingsPage,
     TaskCenterPage,
-    TextToImagePage,
 )
 
 
@@ -21,8 +20,7 @@ class UiImportSmokeTests(unittest.TestCase):
         self.assertTrue(issubclass(MainWindow, QWidget))
 
     def test_page_components_are_importable_without_creating_qapplication(self) -> None:
-        self.assertTrue(issubclass(TextToImagePage, QWidget))
-        self.assertTrue(issubclass(ImageEditPage, QWidget))
+        self.assertTrue(issubclass(GeneratePage, QWidget))
         self.assertTrue(issubclass(SettingsPage, QWidget))
         self.assertTrue(issubclass(TaskCenterPage, QWidget))
         self.assertTrue(issubclass(DiscoveryController, object))

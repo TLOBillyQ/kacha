@@ -295,5 +295,91 @@ class EditContractEnforcementTests(unittest.TestCase):
             self.assertTrue((task_directory / "reference-1.png").is_file())
 
 
+class GenerateSubmissionTests(unittest.TestCase):
+    """合并页统一提交入口：参考图数量定任务类型（验收口径 #1 类型判定边界）。"""
+
+    def _dual_gateway(self):
+        class DualGateway:
+            def __init__(self) -> None:
+                self.text_requests: list = []
+                self.edit_requests: list = []
+
+            def generate_text(self, request) -> GatewayGenerationResult:
+                self.text_requests.append(request)
+                return GatewayGenerationResult(images=(GeneratedImage(PNG_1X1, "image/png"),))
+
+            def generate_image_edit(self, request) -> GatewayGenerationResult:
+                self.edit_requests.append(request)
+                return GatewayGenerationResult(images=(GeneratedImage(PNG_1X1, "image/png"),))
+
+        return DualGateway()
+
+    def test_no_reference_routes_to_text_to_image(self) -> None:
+        with TemporaryDirectory() as directory:
+            gateway = self._dual_gateway()
+            application = GenerationApplication(
+                gateway=gateway,
+                results=FileResultRepository(Path(directory)),
+            )
+            try:
+                task_id = application.submit_generate(
+                    ImageEditDraft(prompt="无参考图", model_id="qwen-image-3.0-pro")
+                )
+                task = application.wait_for(task_id, timeout=1)
+            finally:
+                application.close()
+
+        self.assertEqual(GenerationStatus.SUCCEEDED, task.status)
+        self.assertEqual(Workflow.TEXT_TO_IMAGE, task.workflow)
+        self.assertEqual(1, len(gateway.text_requests))
+        self.assertEqual([], gateway.edit_requests)
+
+    def test_reference_routes_to_image_edit(self) -> None:
+        with TemporaryDirectory() as directory:
+            source = Path(directory) / "reference.png"
+            source.write_bytes(PNG_1X1)
+            gateway = self._dual_gateway()
+            application = GenerationApplication(
+                gateway=gateway,
+                results=FileResultRepository(Path(directory) / "output"),
+            )
+            try:
+                task_id = application.submit_generate(
+                    ImageEditDraft(
+                        prompt="有参考图",
+                        model_id="qwen-image-3.0-pro",
+                        reference_paths=(source,),
+                    )
+                )
+                task = application.wait_for(task_id, timeout=1)
+            finally:
+                application.close()
+
+        self.assertEqual(GenerationStatus.SUCCEEDED, task.status)
+        self.assertEqual(Workflow.IMAGE_EDIT, task.workflow)
+        self.assertEqual(1, len(gateway.edit_requests))
+        self.assertEqual([], gateway.text_requests)
+
+    def test_reference_rejected_for_model_without_edit_workflow(self) -> None:
+        """只支持文生图的模型提交参考图，在服务层被拒（验收口径 #2 兜底）。"""
+        with TemporaryDirectory() as directory:
+            source = Path(directory) / "reference.png"
+            source.write_bytes(PNG_1X1)
+            application = GenerationApplication(
+                gateway=EditGateway(),
+                results=FileResultRepository(Path(directory)),
+            )
+            self.addCleanup(application.close)
+            with self.assertRaises(ValueError) as raised:
+                application.submit_generate(
+                    ImageEditDraft(
+                        prompt="x",
+                        model_id="z-image-turbo",
+                        reference_paths=(source,),
+                    )
+                )
+        self.assertIn("图片编辑", str(raised.exception))
+
+
 if __name__ == "__main__":
     unittest.main()

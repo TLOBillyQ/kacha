@@ -256,9 +256,22 @@ assert window._dock.isFloating()
     def test_page_feedback_still_uses_status_bar(self) -> None:
         self.run_qt_case(
             """
-window._text_page.status_message.emit("已提交生成任务")
+window._generate_page.status_message.emit("已提交生成任务")
 assert window.statusBar().currentMessage() == "已提交生成任务"
 assert window._status_text.text() == "正在连接网关…"
+"""
+        )
+
+    def test_generation_entry_is_a_single_generate_tab(self) -> None:
+        """结构验收：生成入口收敛为一个「生成」标签，无文生图/图片编辑标签。"""
+        self.run_qt_case(
+            """
+labels = [window._tabs.tabText(i) for i in range(window._tabs.count())]
+assert labels == ["生成", "设置"], labels
+assert window._tabs.widget(0) is window._generate_page
+assert window._tabs.widget(1) is window._settings_page
+assert not hasattr(window, "_text_page")
+assert not hasattr(window, "_edit_page")
 """
         )
 

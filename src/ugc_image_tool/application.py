@@ -126,6 +126,26 @@ class GenerationApplication:
             self._max_concurrency = limit
             self._schedule_locked()
 
+    def submit_generate(self, draft: ImageEditDraft) -> str:
+        """合并页统一提交入口：参考图数量决定任务类型（有→图片编辑，无→文生图）。
+
+        类型判定只有一个落点：按 draft.reference_paths 是否为空路由到
+        submit_edit / submit_text，各自复用对应工作流现有的校验规则。
+        """
+        if draft.reference_paths:
+            return self.submit_edit(draft)
+        return self.submit_text(
+            TextToImageDraft(
+                prompt=draft.prompt,
+                model_id=draft.model_id,
+                negative_prompt=draft.negative_prompt,
+                size_mode=draft.size_mode,
+                size_width=draft.size_width,
+                size_height=draft.size_height,
+                image_count=draft.image_count,
+            )
+        )
+
     def submit_text(self, draft: TextToImageDraft) -> str:
         """Validate and freeze a draft, then place one task in the FIFO queue."""
         self._ensure_submission_allowed()

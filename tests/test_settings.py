@@ -446,5 +446,56 @@ class _StubResults:
         pass
 
 
+class PageStateConvergenceTests(unittest.TestCase):
+    """合并页收敛为一份状态：新键缺省回退 image_edit 旧值、弃用 text_to_image。"""
+
+    def test_page_tier_reads_image_edit_value_ignoring_text_to_image(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.json"
+            path.write_text(
+                '{"schema_version": 1, '
+                '"selected_tiers": {"text_to_image": "flagship", "image_edit": "economy"}}',
+                encoding="utf-8",
+            )
+            application = SettingsApplication(
+                SettingsStore(Path(directory)),
+                MemoryCredentialService(),
+            )
+
+            self.assertEqual(ModelTier.ECONOMY, application.page_tier())
+
+    def test_page_negative_reads_image_edit_value_ignoring_text_to_image(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.json"
+            path.write_text(
+                '{"schema_version": 1, '
+                '"negative_prompt_enabled": {"text_to_image": false, "image_edit": true}}',
+                encoding="utf-8",
+            )
+            application = SettingsApplication(
+                SettingsStore(Path(directory)),
+                MemoryCredentialService(),
+            )
+
+            self.assertTrue(application.page_negative_prompt_enabled())
+
+    def test_page_save_persists_round_trip(self) -> None:
+        with TemporaryDirectory() as directory:
+            application = SettingsApplication(
+                SettingsStore(Path(directory)),
+                MemoryCredentialService(),
+            )
+            application.save_page_tier(ModelTier.ECONOMY)
+            application.save_page_negative_prompt_enabled(True)
+
+            reloaded = SettingsApplication(
+                SettingsStore(Path(directory)),
+                MemoryCredentialService(),
+            )
+
+            self.assertEqual(ModelTier.ECONOMY, reloaded.page_tier())
+            self.assertTrue(reloaded.page_negative_prompt_enabled())
+
+
 if __name__ == "__main__":
     unittest.main()
