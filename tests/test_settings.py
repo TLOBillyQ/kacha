@@ -132,6 +132,12 @@ class SettingsValidationTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 validate_base_url(invalid)
 
+    def test_base_url_rejects_non_ascii_characters(self) -> None:
+        """实测事故：地址里混入“→”时 httpx 抛 UnicodeEncodeError，保存时就应拦下。"""
+        for invalid in ("http://lzxsvn:3001→", "http://网关:3001", "http://lzxsvn：3001"):
+            with self.assertRaises(ValueError):
+                validate_base_url(invalid)
+
     def test_base_url_accepts_http_and_https(self) -> None:
         self.assertEqual("http://lzxsvn.com:3001", validate_base_url("http://lzxsvn.com:3001"))
         self.assertEqual("https://gateway.example.com", validate_base_url("https://gateway.example.com/"))
@@ -321,6 +327,17 @@ class SettingsApplicationTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 application.save_api_key("   ")
 
+    def test_non_ascii_api_key_is_rejected(self) -> None:
+        """实测事故：整段中文说明被粘进密钥框，httpx 编码认证头时抛编解码错误。"""
+        with TemporaryDirectory() as directory:
+            application = SettingsApplication(
+                SettingsStore(Path(directory)),
+                MemoryCredentialService(),
+            )
+            with self.assertRaises(ValueError):
+                application.save_api_key("→ 建议：开发版签名")
+            self.assertIsNone(application.api_key)
+
     def test_set_output_root_persists_and_creates_directory(self) -> None:
         with TemporaryDirectory() as directory:
             application = SettingsApplication(
@@ -427,6 +444,57 @@ class _StubResults:
 
     def close(self) -> None:
         pass
+
+
+class PageStateConvergenceTests(unittest.TestCase):
+    """合并页收敛为一份状态：新键缺省回退 image_edit 旧值、弃用 text_to_image。"""
+
+    def test_page_tier_reads_image_edit_value_ignoring_text_to_image(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.json"
+            path.write_text(
+                '{"schema_version": 1, '
+                '"selected_tiers": {"text_to_image": "flagship", "image_edit": "economy"}}',
+                encoding="utf-8",
+            )
+            application = SettingsApplication(
+                SettingsStore(Path(directory)),
+                MemoryCredentialService(),
+            )
+
+            self.assertEqual(ModelTier.ECONOMY, application.page_tier())
+
+    def test_page_negative_reads_image_edit_value_ignoring_text_to_image(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.json"
+            path.write_text(
+                '{"schema_version": 1, '
+                '"negative_prompt_enabled": {"text_to_image": false, "image_edit": true}}',
+                encoding="utf-8",
+            )
+            application = SettingsApplication(
+                SettingsStore(Path(directory)),
+                MemoryCredentialService(),
+            )
+
+            self.assertTrue(application.page_negative_prompt_enabled())
+
+    def test_page_save_persists_round_trip(self) -> None:
+        with TemporaryDirectory() as directory:
+            application = SettingsApplication(
+                SettingsStore(Path(directory)),
+                MemoryCredentialService(),
+            )
+            application.save_page_tier(ModelTier.ECONOMY)
+            application.save_page_negative_prompt_enabled(True)
+
+            reloaded = SettingsApplication(
+                SettingsStore(Path(directory)),
+                MemoryCredentialService(),
+            )
+
+            self.assertEqual(ModelTier.ECONOMY, reloaded.page_tier())
+            self.assertTrue(reloaded.page_negative_prompt_enabled())
 
 
 if __name__ == "__main__":

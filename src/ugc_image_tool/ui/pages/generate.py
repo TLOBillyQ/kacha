@@ -1,0 +1,827 @@
+"""生成页：合并文生图与图片编辑，参考图数量即任务类型，无模式开关。
+
+参考图面板常驻并占视觉主位；预设区、提示词区（含负向勾选）、模型档位、
+尺寸与出图数量围绕它排布。只调用应用服务，不直接访问存储、凭据库或网关。
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import cast
+
+from PySide6.QtCore import QSize, Qt, Signal, Slot
+from PySide6.QtGui import QIcon, QStandardItemModel
+from PySide6.QtWidgets import (
+    QCheckBox,
+    QComboBox,
+    QFileDialog,
+    QGroupBox,
+    QHBoxLayout,
+    QInputDialog,
+    QLabel,
+    QListWidget,
+    QListWidgetItem,
+    QMessageBox,
+    QPushButton,
+    QSizePolicy,
+    QSpinBox,
+    QSplitter,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
+)
+
+from ...capabilities import ModelTier, Workflow
+from ...generation import ImageEditDraft, SizeMode
+from ...presets import PresetProject, PresetStoreError, ProjectPreset
+from ...references import inspect_reference_image
+from ...services import ApplicationServices
+from ..presentation import (
+    CUSTOM_SIZE_LABEL,
+    SUBMIT_BUTTON_STYLE,
+    UI_CARD_MARGIN,
+    UI_ERROR,
+    UI_SPACING,
+    combo_preset_size,
+    combo_size_mode,
+)
+from ..tier_switch import TierSegment, TierSwitch
+
+
+class _ReferenceListWidget(QListWidget):
+    files_dropped = Signal(list)
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setAcceptDrops(True)
+        self.setDragDropMode(QListWidget.DragDropMode.InternalMove)
+
+    def dragEnterEvent(self, event) -> None:
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+
+    def dropEvent(self, event) -> None:
+        urls = event.mimeData().urls()
+        if urls:
+            self.files_dropped.emit([url.toLocalFile() for url in urls if url.isLocalFile()])
+            event.acceptProposedAction()
+        else:
+            super().dropEvent(event)
+
+
+class GeneratePage(QWidget):
+    """生成输入页；参考图数量决定任务类型，无模式开关。"""
+
+    status_message = Signal(str)
+
+    def __init__(
+        self,
+        services: ApplicationServices,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._services = services
+        self._settings = services.settings
+        self._presets = services.presets
+        self._capabilities = services.capabilities
+        self._application = services.generation
+        self._updating_prompt_controls = False
+        self._has_configured_models = False
+        self._selected_tier: ModelTier | None = None
+        self._tier_models: dict[ModelTier, str] = {}
+        self._model_ids: tuple[str, ...] = ()
+        self._edit_max_references = 0
+        self._draft_count = 1
+        self._output_error: str | None = None
+        self._build_form()
+        self._populate_presets()
+        self.refresh_output_state()
+
+    def _current_workflow(self) -> Workflow:
+        """参考图数量决定任务类型：有→图片编辑，无→文生图。"""
+        return Workflow.IMAGE_EDIT if self._references.count() > 0 else Workflow.TEXT_TO_IMAGE
+
+    def _build_form(self) -> None:
+        self._tier_switch = TierSwitch()
+        self._tier_switch.tier_changed.connect(self._on_tier_changed)
+
+        self._prompt = QTextEdit()
+        self._prompt.setPlaceholderText("输入正向提示词")
+        self._prompt.textChanged.connect(self._on_prompt_changed)
+
+        self._negative_prompt = QTextEdit()
+        self._negative_prompt.setPlaceholderText("输入负向提示词（可留空）")
+        self._negative_prompt.textChanged.connect(self._on_prompt_changed)
+        # 勾选状态按页面持久化：勾选才展开输入区，未勾选只留一个勾选框。
+        self._negative_prompt_check = QCheckBox("负向提示词")
+        self._negative_prompt_check.toggled.connect(self._toggle_negative_prompt)
+        self._negative_prompt.setVisible(False)
+        self._negative_prompt_check.setChecked(
+            self._settings.page_negative_prompt_enabled()
+        )
+
+        self._preset_combo = QComboBox()
+        self._preset_combo.setPlaceholderText("选择项目预设")
+        self._preset_combo.currentIndexChanged.connect(self._update_preset_actions)
+        self._apply_preset = QPushButton("应用项目预设")
+        self._apply_preset.clicked.connect(self._apply_selected_preset)
+        self._copy_preset = QPushButton("复制为个人预设")
+        self._copy_preset.clicked.connect(self._copy_selected_preset)
+        self._save_preset = QPushButton("新建个人预设")
+        self._save_preset.clicked.connect(self._save_personal_preset)
+        self._edit_preset = QPushButton("编辑个人预设")
+        self._edit_preset.clicked.connect(self._edit_selected_preset)
+        self._delete_preset = QPushButton("删除个人预设")
+        self._delete_preset.clicked.connect(self._delete_selected_preset)
+
+        self._size_combo = QComboBox()
+        self._size_combo.currentIndexChanged.connect(self._on_size_changed)
+        self._width_box = QSpinBox()
+        self._width_box.setRange(1, 16384)
+        self._width_box.valueChanged.connect(self._revalidate)
+        self._height_box = QSpinBox()
+        self._height_box.setRange(1, 16384)
+        self._height_box.valueChanged.connect(self._revalidate)
+        self._count_box = QSpinBox()
+        self._count_box.setRange(1, 1)
+        self._count_box.valueChanged.connect(self._on_count_changed)
+
+        self._references = _ReferenceListWidget()
+        self._references.files_dropped.connect(self._add_reference_paths)
+        self._references.model().rowsMoved.connect(lambda *_: self._renumber_references())
+        self._references.setToolTip("拖动条目可调整参考图顺序")
+        self._references.setViewMode(QListWidget.ViewMode.ListMode)
+        self._references.setIconSize(QSize(48, 48))
+        self._references.setUniformItemSizes(True)
+        self._add_reference = QPushButton("添加参考图")
+        self._add_reference.setToolTip("支持 PNG 和 JPEG")
+        self._add_reference.clicked.connect(self._choose_references)
+        self._reference_hint = QLabel(
+            "当前团队网关契约仅验证 1 张参考图，超出部分已禁用"
+        )
+        self._reference_hint.setWordWrap(True)
+        self._reference_hint.setVisible(False)
+        self._reference_disabled = QLabel(
+            "当前模型不支持图片编辑，参考图区已停用，将按文生图提交"
+        )
+        self._reference_disabled.setWordWrap(True)
+        self._reference_disabled.setVisible(False)
+        self._warnings = QLabel()
+        self._warnings.setWordWrap(True)
+        self._warnings.setStyleSheet("color: #996c00;")
+
+        self._validation = QLabel()
+        self._validation.setWordWrap(True)
+        self._validation.setStyleSheet(f"color: {UI_ERROR};")
+
+        self._submit = QPushButton("提交生成")
+        self._submit.setObjectName("submit")
+        self._submit.setStyleSheet(SUBMIT_BUTTON_STYLE)
+        self._submit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._submit.clicked.connect(self._submit_generate)
+
+        reference_panel = QGroupBox("参考图")
+        reference_layout = QVBoxLayout(reference_panel)
+        reference_layout.setContentsMargins(
+            UI_CARD_MARGIN, UI_CARD_MARGIN, UI_CARD_MARGIN, UI_CARD_MARGIN
+        )
+        reference_layout.setSpacing(UI_SPACING)
+        reference_layout.addWidget(self._references, 1)
+        reference_layout.addWidget(self._reference_hint)
+        reference_layout.addWidget(self._reference_disabled)
+        reference_layout.addWidget(self._warnings)
+        reference_layout.addWidget(self._add_reference)
+
+        model_row = QHBoxLayout()
+        model_row.setSpacing(UI_SPACING)
+        model_row.addWidget(QLabel("模型档位"))
+        model_row.addWidget(self._tier_switch, 1)
+
+        size_row = QHBoxLayout()
+        size_row.setSpacing(UI_SPACING)
+        size_row.addWidget(QLabel("尺寸"))
+        size_row.addWidget(self._size_combo, 1)
+        size_row.addWidget(QLabel("宽"))
+        size_row.addWidget(self._width_box)
+        size_row.addWidget(QLabel("高"))
+        size_row.addWidget(self._height_box)
+
+        prompt_group = QGroupBox("正向提示词")
+        prompt_layout = QVBoxLayout(prompt_group)
+        prompt_layout.setContentsMargins(
+            UI_CARD_MARGIN, UI_CARD_MARGIN, UI_CARD_MARGIN, UI_CARD_MARGIN
+        )
+        prompt_layout.addWidget(self._prompt)
+
+        controls = QHBoxLayout()
+        controls.setSpacing(UI_SPACING)
+        controls.addWidget(QLabel("出图数量"))
+        controls.addWidget(self._count_box)
+        controls.addStretch(1)
+        controls.addWidget(self._submit, 1)
+
+        preset_group = QGroupBox("预设与模型")
+        preset_layout = QVBoxLayout(preset_group)
+        preset_layout.setContentsMargins(
+            UI_CARD_MARGIN, UI_CARD_MARGIN, UI_CARD_MARGIN, UI_CARD_MARGIN
+        )
+        preset_layout.setSpacing(UI_SPACING)
+        preset_layout.addLayout(model_row)
+        preset_layout.addWidget(QLabel("项目预设"))
+        preset_layout.addWidget(self._preset_combo)
+        preset_actions = QHBoxLayout()
+        for button in (self._apply_preset, self._copy_preset, self._save_preset):
+            preset_actions.addWidget(button)
+        preset_layout.addLayout(preset_actions)
+        personal_actions = QHBoxLayout()
+        personal_actions.addWidget(self._edit_preset)
+        personal_actions.addWidget(self._delete_preset)
+        personal_actions.addStretch(1)
+        preset_layout.addLayout(personal_actions)
+
+        right_panel = QWidget()
+        right_layout = QVBoxLayout(right_panel)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(UI_SPACING)
+        right_layout.addWidget(preset_group)
+        right_layout.addWidget(prompt_group, 1)
+        right_layout.addWidget(self._negative_prompt_check)
+        right_layout.addWidget(self._negative_prompt)
+        right_layout.addLayout(size_row)
+        right_layout.addWidget(self._validation)
+        right_layout.addLayout(controls)
+
+        self._splitter = QSplitter(Qt.Orientation.Horizontal)
+        self._splitter.addWidget(reference_panel)
+        self._splitter.addWidget(right_panel)
+        self._splitter.setChildrenCollapsible(False)
+        self._splitter.setStretchFactor(0, 0)
+        self._splitter.setStretchFactor(1, 1)
+        self._splitter.setSizes([190, 710])
+
+        layout = QVBoxLayout()
+        layout.setContentsMargins(
+            UI_CARD_MARGIN, UI_CARD_MARGIN, UI_CARD_MARGIN, UI_CARD_MARGIN
+        )
+        layout.setSpacing(UI_SPACING)
+        layout.addWidget(self._splitter)
+        self.setLayout(layout)
+
+    # -- 模型档位 ------------------------------------------------------------
+
+    def set_models(self, gateway_model_ids: tuple[str, ...]) -> None:
+        """按上架档位与当前任务类型刷新分段开关。"""
+        self._model_ids = gateway_model_ids
+        self._rebuild_tiers()
+
+    def _rebuild_tiers(self) -> None:
+        """按当前任务类型（参考图有无）重建分段开关；未上架的档位不出现。"""
+        workflow = self._current_workflow()
+        available = set(self._model_ids)
+        segments: dict[ModelTier, TierSegment] = {}
+        self._tier_models = {}
+        for tier in ModelTier:
+            capability = self._capabilities.resolve_tier(workflow, tier)
+            if capability is None:
+                segments[tier] = TierSegment(visible=False, enabled=False)
+            elif capability.model_id in available:
+                segments[tier] = TierSegment(
+                    visible=True, enabled=True, model_id=capability.model_id
+                )
+                self._tier_models[tier] = capability.model_id
+            else:
+                segments[tier] = TierSegment(
+                    visible=True,
+                    enabled=False,
+                    reason="网关当前未提供该档模型，暂时无法使用",
+                )
+        self._tier_switch.apply(segments)
+        self._restore_tier_selection()
+        self._has_configured_models = bool(self._tier_models)
+        self._apply_current_tier()
+        self._update_submit_state()
+
+    def _restore_tier_selection(self) -> None:
+        """优先持久化档位（用户的真实选择），其次当前选择，最后回退旗舰档。"""
+        persisted = self._settings.page_tier()
+        candidates = (persisted, self._selected_tier, *ModelTier)
+        for candidate in candidates:
+            if candidate is not None and candidate in self._tier_models:
+                self._selected_tier = candidate
+                break
+        else:
+            self._selected_tier = None
+        self._tier_switch.select(self._selected_tier)
+
+    def _current_model_id(self) -> str | None:
+        """当前选中档位解析到的模型 ID；已提交任务按此 ID 执行。"""
+        if self._selected_tier is None:
+            return None
+        return self._tier_models.get(self._selected_tier)
+
+    @Slot(ModelTier)
+    def _on_tier_changed(self, tier: ModelTier) -> None:
+        self._selected_tier = tier
+        self._settings.save_page_tier(tier)
+        self._apply_current_tier()
+
+    def _current_workflow_capability(self):
+        """当前任务类型下选中模型的能力；不支持该工作流时返回 None。"""
+        model_id = self._current_model_id()
+        capability = (
+            self._capabilities.capability(model_id) if model_id is not None else None
+        )
+        if capability is None:
+            return None
+        return capability.for_workflow(self._current_workflow())
+
+    def _apply_current_tier(self) -> None:
+        model_id = self._current_model_id()
+        capability = (
+            self._capabilities.capability(model_id) if model_id is not None else None
+        )
+        workflow = self._current_workflow()
+        current = (
+            capability.for_workflow(workflow) if capability is not None else None
+        )
+        edit = (
+            capability.for_workflow(Workflow.IMAGE_EDIT)
+            if capability is not None
+            else None
+        )
+        supports_negative = current is not None and current.supports_negative_prompt
+        self._negative_prompt_check.setVisible(supports_negative)
+        # 只同步可见性；勾选状态由用户操作触发持久化，模型刷新不重复写设置。
+        self._negative_prompt.setVisible(
+            supports_negative and self._negative_prompt_check.isChecked()
+        )
+        self._edit_max_references = (
+            edit.reference_limits.max_references if edit is not None else 0
+        )
+        self._apply_reference_state(edit)
+        if current is None:
+            self._size_combo.clear()
+            self._revalidate()
+            return
+        self._count_box.blockSignals(True)
+        self._count_box.setRange(current.min_images, current.max_images)
+        self._count_box.setValue(
+            min(max(self._draft_count, current.min_images), current.max_images)
+        )
+        self._count_box.blockSignals(False)
+        self._refresh_size_controls(current)
+        self._revalidate()
+
+    def _apply_reference_state(self, edit_capability) -> None:
+        """当前模型无图片编辑能力时停用参考图区并给原因（验收口径 #2）。"""
+        if edit_capability is None:
+            self._references.setEnabled(False)
+            self._add_reference.setEnabled(False)
+            self._reference_disabled.setVisible(True)
+            self._reference_hint.setVisible(False)
+            return
+        self._references.setEnabled(True)
+        self._add_reference.setEnabled(True)
+        self._reference_disabled.setVisible(False)
+        self._reference_hint.setVisible(edit_capability.reference_limits.max_references == 1)
+
+    @Slot()
+    def _on_size_changed(self) -> None:
+        data = self._size_combo.currentData()
+        mode = combo_size_mode(data)
+        self._width_box.setVisible(mode is SizeMode.CUSTOM)
+        self._height_box.setVisible(mode is SizeMode.CUSTOM)
+        if mode is SizeMode.PRESET:
+            preset_size = combo_preset_size(data)
+            if preset_size is not None:
+                self._width_box.setValue(preset_size[0])
+                self._height_box.setValue(preset_size[1])
+        self._revalidate()
+
+    def _refresh_size_controls(self, capability) -> None:
+        """按当前能力重建尺寸选项；尽量保留当前选择，否则回退到首个允许模式。"""
+        current_mode = combo_size_mode(self._size_combo.currentData())
+        self._size_combo.blockSignals(True)
+        self._size_combo.clear()
+        modes: list[SizeMode] = []
+        if capability.size.auto_allowed:
+            self._size_combo.addItem("模型自动决定", (SizeMode.AUTO, None))
+            modes.append(SizeMode.AUTO)
+        for width, height in capability.size.presets:
+            self._size_combo.addItem(f"{width}×{height}", (SizeMode.PRESET, (width, height)))
+            modes.append(SizeMode.PRESET)
+        if capability.size.custom_size_allowed:
+            self._size_combo.addItem(CUSTOM_SIZE_LABEL, (SizeMode.CUSTOM, None))
+            modes.append(SizeMode.CUSTOM)
+        target = current_mode if current_mode in modes else modes[0]
+        self._size_combo.setCurrentIndex(modes.index(target))
+        self._size_combo.blockSignals(False)
+        self._width_box.setVisible(SizeMode.CUSTOM == target)
+        self._height_box.setVisible(SizeMode.CUSTOM == target)
+
+    @Slot(bool)
+    def _toggle_negative_prompt(self, expanded: bool) -> None:
+        self._negative_prompt.setVisible(expanded)
+        self._settings.save_page_negative_prompt_enabled(expanded)
+
+    @Slot(int)
+    def _on_count_changed(self, value: int) -> None:
+        self._draft_count = value
+        self._revalidate()
+
+    # -- 参考图 --------------------------------------------------------------
+
+    @Slot()
+    def _choose_references(self) -> None:
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, "选择参考图", "", "图片 (*.png *.jpg *.jpeg)"
+        )
+        self._add_reference_paths(paths)
+
+    def _add_reference_paths(self, paths: list[str]) -> None:
+        existing = [
+            self._references.item(i).data(Qt.ItemDataRole.UserRole)
+            for i in range(self._references.count())
+        ]
+        for path in paths:
+            if path in existing or self._references.count() >= self._edit_max_references:
+                continue
+            try:
+                reference = inspect_reference_image(Path(path))
+            except ValueError as error:
+                self._validation.setText(str(error))
+                continue
+            item = QListWidgetItem(
+                QIcon(str(path)), f"{self._references.count() + 1}. {Path(path).name}"
+            )
+            item.setData(Qt.ItemDataRole.UserRole, path)
+            item.setToolTip("；".join(reference.warnings) or "尺寸正常")
+            self._references.addItem(item)
+        self._renumber_references()
+        warnings = [
+            self._references.item(index).toolTip()
+            for index in range(self._references.count())
+            if self._references.item(index).toolTip() != "尺寸正常"
+        ]
+        self._warnings.setText("；".join(warnings))
+        self._on_references_changed()
+
+    def _renumber_references(self) -> None:
+        for index in range(self._references.count()):
+            item = self._references.item(index)
+            item.setText(f"{index + 1}. {Path(item.data(Qt.ItemDataRole.UserRole)).name}")
+        self._on_references_changed()
+
+    def _on_references_changed(self) -> None:
+        """参考图数量变化即任务类型变化：重建档位并按新约束校验。"""
+        self._rebuild_tiers()
+        data = self._size_combo.currentData()
+        if self._references.count() > 1 and combo_size_mode(data) is SizeMode.AUTO:
+            self._validation.setText(
+                "多张参考图使用模型自动决定尺寸时，最后一张参考图会影响默认输出宽高比"
+            )
+        self._revalidate()
+
+    # -- 项目预设 ------------------------------------------------------------
+
+    def _populate_presets(self) -> None:
+        selected_id = self._preset_combo.currentData()
+        self._preset_combo.blockSignals(True)
+        self._preset_combo.clear()
+        for project, presets in self._presets.grouped_presets().items():
+            self._preset_combo.addItem(project.display_name)
+            model = cast(QStandardItemModel, self._preset_combo.model())
+            header = model.item(self._preset_combo.count() - 1)
+            if header is not None:
+                header.setEnabled(False)
+            for preset in presets:
+                source = "内置" if preset.read_only else "个人"
+                self._preset_combo.addItem(
+                    f"  {preset.display_name}（{source}）",
+                    preset.preset_id,
+                )
+        restored = -1
+        if isinstance(selected_id, str):
+            for index in range(self._preset_combo.count()):
+                if self._preset_combo.itemData(index) == selected_id:
+                    restored = index
+                    break
+        self._preset_combo.setCurrentIndex(restored)
+        self._preset_combo.blockSignals(False)
+        self._update_preset_actions()
+
+    def _selected_preset(self) -> ProjectPreset | None:
+        preset_id = self._preset_combo.currentData()
+        if not isinstance(preset_id, str):
+            return None
+        return self._presets.get(preset_id)
+
+    @Slot(int)
+    def _update_preset_actions(self, _index: int = -1) -> None:
+        preset = self._selected_preset()
+        self._apply_preset.setVisible(preset is not None)
+        self._copy_preset.setVisible(preset is not None and preset.read_only)
+        self._edit_preset.setVisible(preset is not None and not preset.read_only)
+        self._delete_preset.setVisible(preset is not None and not preset.read_only)
+        self._apply_preset.setEnabled(preset is not None)
+        self._copy_preset.setEnabled(preset is not None and preset.read_only)
+        self._edit_preset.setEnabled(preset is not None and not preset.read_only)
+        self._delete_preset.setEnabled(preset is not None and not preset.read_only)
+
+    @Slot()
+    def _on_prompt_changed(self) -> None:
+        if not self._updating_prompt_controls:
+            self._presets.update_prompt(
+                self._prompt.toPlainText(),
+                self._negative_prompt.toPlainText() or None,
+            )
+        self._revalidate()
+
+    def _set_prompt_values(self) -> None:
+        values = self._presets.prompt_values
+        self._updating_prompt_controls = True
+        self._prompt.blockSignals(True)
+        self._negative_prompt.blockSignals(True)
+        try:
+            self._prompt.setPlainText(values.prompt)
+            self._negative_prompt.setPlainText(values.negative_prompt or "")
+        finally:
+            self._negative_prompt.blockSignals(False)
+            self._prompt.blockSignals(False)
+            self._updating_prompt_controls = False
+        self._revalidate()
+
+    def _confirm_discard_prompt_changes(self) -> bool:
+        answer = QMessageBox.question(
+            self,
+            "确认应用预设",
+            "当前提示词有未提交修改，应用预设会覆盖这些修改。确定继续吗？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return answer is QMessageBox.StandardButton.Yes
+
+    @Slot()
+    def _apply_selected_preset(self) -> None:
+        preset = self._selected_preset()
+        if preset is None:
+            return
+        if not self._presets.apply_preset(
+            preset.preset_id,
+            confirm_discard=self._confirm_discard_prompt_changes,
+        ):
+            self.status_message.emit("已取消应用项目预设")
+            return
+        self._set_prompt_values()
+        self.status_message.emit(f"已应用项目预设：{preset.display_name}")
+
+    @Slot()
+    def _save_personal_preset(self) -> None:
+        name, accepted = QInputDialog.getText(self, "新建个人预设", "显示名称")
+        if not accepted:
+            return
+        project_name, accepted = QInputDialog.getItem(
+            self,
+            "选择项目",
+            "项目",
+            [project.display_name for project in PresetProject],
+            0,
+            False,
+        )
+        if not accepted:
+            return
+        project = next(
+            project for project in PresetProject if project.display_name == project_name
+        )
+        try:
+            preset = self._presets.save_personal_preset(name, project)
+        except (ValueError, PresetStoreError) as error:
+            self.status_message.emit(f"新建个人预设失败：{error}")
+            return
+        self._populate_presets()
+        self._select_preset(preset.preset_id)
+        self.status_message.emit(f"个人预设已保存：{preset.display_name}")
+
+    @Slot()
+    def _copy_selected_preset(self) -> None:
+        source = self._selected_preset()
+        if source is None:
+            return
+        name, accepted = QInputDialog.getText(
+            self,
+            "复制为个人预设",
+            "显示名称",
+            text=source.display_name,
+        )
+        if not accepted:
+            return
+        try:
+            preset = self._presets.copy_builtin_as_personal(source.preset_id, name)
+        except (ValueError, PresetStoreError, KeyError) as error:
+            self.status_message.emit(f"复制个人预设失败：{error}")
+            return
+        self._populate_presets()
+        self._select_preset(preset.preset_id)
+        self.status_message.emit(f"个人预设已创建：{preset.display_name}")
+
+    @Slot()
+    def _edit_selected_preset(self) -> None:
+        source = self._selected_preset()
+        if source is None or source.read_only:
+            return
+        name, accepted = QInputDialog.getText(
+            self,
+            "编辑个人预设",
+            "显示名称",
+            text=source.display_name,
+        )
+        if not accepted:
+            return
+        try:
+            preset = self._presets.update_personal_preset(source.preset_id, name)
+        except (ValueError, PresetStoreError, KeyError) as error:
+            self.status_message.emit(f"编辑个人预设失败：{error}")
+            return
+        self._populate_presets()
+        self._select_preset(preset.preset_id)
+        self.status_message.emit(f"个人预设已更新：{preset.display_name}")
+
+    @Slot()
+    def _delete_selected_preset(self) -> None:
+        preset = self._selected_preset()
+        if preset is None or preset.read_only:
+            return
+        answer = QMessageBox.question(
+            self,
+            "删除个人预设",
+            f"确定删除个人预设“{preset.display_name}”吗？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer is not QMessageBox.StandardButton.Yes:
+            return
+        try:
+            self._presets.delete_personal_preset(preset.preset_id)
+        except (KeyError, PermissionError, PresetStoreError) as error:
+            self.status_message.emit(f"删除个人预设失败：{error}")
+            return
+        self._populate_presets()
+        self.status_message.emit(f"个人预设已删除：{preset.display_name}")
+
+    def _select_preset(self, preset_id: str) -> None:
+        for index in range(self._preset_combo.count()):
+            if self._preset_combo.itemData(index) == preset_id:
+                self._preset_combo.setCurrentIndex(index)
+                return
+
+    # -- 草稿与提交 ----------------------------------------------------------
+
+    def _read_draft(self) -> ImageEditDraft:
+        data = self._size_combo.currentData()
+        mode = combo_size_mode(data)
+        size_width: int | None = None
+        size_height: int | None = None
+        if mode is SizeMode.CUSTOM:
+            size_width, size_height = self._width_box.value(), self._height_box.value()
+        elif mode is SizeMode.PRESET:
+            preset_size = combo_preset_size(data)
+            if preset_size is not None:
+                size_width, size_height = preset_size
+        return ImageEditDraft(
+            prompt=self._prompt.toPlainText(),
+            model_id=self._current_model_id(),
+            # 取消勾选后文本保留在输入框里但不发送，重新勾选即可找回。
+            negative_prompt=(
+                (self._negative_prompt.toPlainText() or None)
+                if self._negative_prompt_check.isChecked()
+                else None
+            ),
+            size_mode=mode,
+            size_width=size_width,
+            size_height=size_height,
+            image_count=self._count_box.value(),
+            reference_paths=tuple(
+                Path(self._references.item(i).data(Qt.ItemDataRole.UserRole))
+                for i in range(self._references.count())
+            ),
+        )
+
+    def refresh_output_state(self) -> None:
+        self._output_error = self._settings.output_directory_error()
+        self._revalidate()
+
+    def _update_submit_state(self) -> None:
+        """网关离线或输出目录不可写时禁用提交，避免创建排队任务。"""
+        if self._services.submission_block_reason() is not None:
+            self._submit.setEnabled(False)
+
+    @Slot()
+    def _revalidate(self) -> None:
+        if self._output_error:
+            self._validation.setText(self._output_error)
+            self._submit.setEnabled(False)
+            return
+        block = self._services.discovery_block_reason()
+        if block is not None:
+            self._validation.setText(block)
+            self._submit.setEnabled(False)
+            return
+        if not self._has_configured_models:
+            self._validation.setText("没有可用的上架档位，无法提交")
+            self._submit.setEnabled(False)
+            return
+        draft = self._read_draft()
+        if draft.model_id is None:
+            self._validation.setText("请选择模型")
+            self._submit.setEnabled(False)
+            return
+        capability = self._capabilities.capability(draft.model_id)
+        workflow = self._current_workflow()
+        workflow_capability = (
+            capability.for_workflow(workflow) if capability is not None else None
+        )
+        if workflow_capability is None:
+            self._validation.setText("该模型不支持当前任务类型")
+            self._submit.setEnabled(False)
+            return
+        errors = _draft_errors(draft, capability, workflow)
+        if errors:
+            self._validation.setText("；".join(errors))
+            self._submit.setEnabled(False)
+        else:
+            self._validation.clear()
+            self._submit.setEnabled(True)
+
+    @Slot()
+    def _submit_generate(self) -> None:
+        if self._output_error:
+            self._validation.setText(self._output_error)
+            return
+        try:
+            self._application.submit_generate(self._read_draft())
+        except ValueError as error:
+            self.status_message.emit(str(error))
+        else:
+            self._presets.mark_prompt_submitted()
+
+
+def _draft_errors(draft: ImageEditDraft, capability, workflow: Workflow) -> list[str]:
+    """按当前任务类型的工作流能力校验草稿，返回全部具体错误。"""
+    workflow_capability = capability.for_workflow(workflow)
+    if workflow_capability is None:
+        return ["该模型不支持当前任务类型"]
+    errors: list[str] = []
+    if not draft.prompt.strip():
+        errors.append("请输入正向提示词")
+    if (
+        draft.negative_prompt
+        and not workflow_capability.supports_negative_prompt
+    ):
+        errors.append("该模型不支持负向提示词")
+    if not (
+        workflow_capability.min_images
+        <= draft.image_count
+        <= workflow_capability.max_images
+    ):
+        errors.append(
+            f"出图数量需在 {workflow_capability.min_images}～"
+            f"{workflow_capability.max_images} 之间"
+        )
+    if workflow is Workflow.IMAGE_EDIT:
+        limits = workflow_capability.reference_limits
+        if not (limits.min_references <= len(draft.reference_paths) <= limits.max_references):
+            if limits.min_references == limits.max_references:
+                errors.append(f"参考图数量需为 {limits.min_references} 张")
+            else:
+                errors.append(
+                    f"参考图数量需在 {limits.min_references}～{limits.max_references} 之间"
+                )
+    errors.extend(_size_errors(draft, workflow_capability))
+    return errors
+
+
+def _size_errors(draft: ImageEditDraft, capability) -> list[str]:
+    errors: list[str] = []
+    if draft.size_mode is SizeMode.AUTO:
+        if not capability.size.auto_allowed:
+            errors.append("该模型不支持模型自动决定尺寸")
+        return errors
+    if draft.size_mode is SizeMode.PRESET:
+        if (draft.size_width, draft.size_height) not in capability.size.presets:
+            errors.append("所选常用尺寸不在模型允许的预设中")
+        return errors
+    width, height = draft.size_width, draft.size_height
+    if (
+        not isinstance(width, int)
+        or not isinstance(height, int)
+        or width <= 0
+        or height <= 0
+    ):
+        errors.append("请输入有效的自定义宽高")
+        return errors
+    if not capability.size.custom_size_allowed:
+        errors.append("该模型不支持自定义尺寸")
+        return errors
+    return capability.size.custom_size_errors(width, height)

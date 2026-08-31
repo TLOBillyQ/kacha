@@ -8,6 +8,7 @@ Qt 界面只使用本模块给出的服务组合，不直接构造或访问存�
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 from typing import Protocol
 
@@ -24,6 +25,7 @@ from .presets import PresetApplication, PresetStore
 from .results import FileResultRepository
 from .settings import (
     CredentialService,
+    KeychainCredentialService,
     MemoryCredentialService,
     SettingsApplication,
     SettingsStore,
@@ -49,9 +51,11 @@ class ServiceGateway(Gateway, Protocol):
 
 
 def default_credential_service() -> CredentialService:
-    """Windows 上使用当前用户凭据库；其他平台回退到内存实现便于测试。"""
+    """Windows 用当前用户凭据库，macOS 用钥匙串；其他平台回退内存实现便于测试。"""
     if os.name == "nt":
         return WindowsCredentialService()
+    if sys.platform == "darwin":
+        return KeychainCredentialService()
     return MemoryCredentialService()
 
 

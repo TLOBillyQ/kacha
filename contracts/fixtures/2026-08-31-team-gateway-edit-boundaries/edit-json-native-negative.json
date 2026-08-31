@@ -1,0 +1,97 @@
+{
+  "interface": "image_edit",
+  "recorded_at": "2026-08-31T03:18:38.028163+00:00",
+  "request": {
+    "method": "POST",
+    "path": "/v1/images/edits",
+    "headers": {
+      "Accept": "application/json",
+      "Authorization": "[REDACTED]",
+      "Content-Type": "application/json"
+    },
+    "body": {
+      "model": "qwen-image-3.0-pro",
+      "prompt": "[REDACTED_PROMPT]",
+      "input": {
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "image": "[REDACTED_IMAGE]"
+              },
+              {
+                "text": "[REDACTED_PROMPT]"
+              }
+            ]
+          }
+        ],
+        "negative_prompt": "[REDACTED_PROMPT]"
+      }
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Length": "952",
+      "Content-Type": "application/json",
+      "Date": "Mon, 31 Aug 2026 03:18:37 GMT",
+      "Req-Arrive-Time": "1788146240995",
+      "Req-Cost-Time": "76775",
+      "Resp-Start-Time": "1788146317771",
+      "Server": "istio-envoy",
+      "Vary": "Origin,Access-Control-Request-Method,Access-Control-Request-Headers, Accept-Encoding",
+      "X-Dashscope-Apikeyid": "[REDACTED]",
+      "X-Dashscope-Apikeyloc": "header",
+      "X-Dashscope-Bwid": "[REDACTED]",
+      "X-Dashscope-Call-Gateway": "true",
+      "X-Dashscope-Finished": "true",
+      "X-Dashscope-Requestid": "08687d4c-695c-9044-9081-68d4eac990c9",
+      "X-Dashscope-Timeout": "3600",
+      "X-Dashscope-Uid": "[REDACTED]",
+      "X-Dashscope-Workspace": "[REDACTED]",
+      "X-Envoy-Upstream-Service-Time": "76762",
+      "X-New-Api-Version": "v0.0.0",
+      "X-Oneapi-Request-Id": "202608310317208423071008268d9d6hrPopdH8",
+      "X-Request-Id": "08687d4c-695c-9044-9081-68d4eac990c9",
+      "Connection": "close"
+    },
+    "body": {
+      "data": [
+        {
+          "url": "https://example.invalid/redacted",
+          "b64_json": "[REDACTED_IMAGE]",
+          "revised_prompt": ""
+        }
+      ],
+      "created": 1788146240,
+      "metadata": {
+        "output": {
+          "choices": [
+            {
+              "finish_reason": "stop",
+              "message": {
+                "content": [
+                  {
+                    "image": "[REDACTED_IMAGE]"
+                  }
+                ],
+                "role": "assistant"
+              }
+            }
+          ],
+          "rewrite_status": "success"
+        },
+        "usage": {
+          "input_image_count": 1,
+          "input_image_type": "qima_input_2k",
+          "output_height": 2048,
+          "output_image_count": 1,
+          "output_image_type": "qima_output_2k",
+          "output_width": 2048
+        },
+        "request_id": "08687d4c-695c-9044-9081-68d4eac990c9"
+      }
+    }
+  }
+}

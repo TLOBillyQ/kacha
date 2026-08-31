@@ -321,10 +321,11 @@ class TeamGatewayImageEditTests(unittest.TestCase):
         self.assertEqual("/v1/images/edits", request.url.path)
         self.assertEqual("application/json", request.headers["Content-Type"])
         sent = json.loads(request.content)
+        expected_prompt = "本次提供 1 张参考图。\n保留构图，把背景换成黄昏"
         self.assertEqual(
             {
                 "model": "qwen-image-3.0-pro",
-                "prompt": "保留构图，把背景换成黄昏",
+                "prompt": expected_prompt,
                 "input": {
                     "messages": [
                         {
@@ -333,7 +334,7 @@ class TeamGatewayImageEditTests(unittest.TestCase):
                                 {
                                     "image": "data:image/png;base64," + BASE64_PNG_1X1
                                 },
-                                {"text": "保留构图，把背景换成黄昏"},
+                                {"text": expected_prompt},
                             ],
                         }
                     ]
@@ -362,16 +363,19 @@ class TeamGatewayImageEditTests(unittest.TestCase):
 
         sent = json.loads(captured["request"].content)
         self.assertEqual({"size": "1024*1024", "n": 2}, sent["parameters"])
+        expected_prompt = (
+            "本次提供 2 张参考图，按顺序为图1、图2。\n" + request_model.prompt
+        )
         content = sent["input"]["messages"][0]["content"]
         self.assertEqual(
             [
                 {"image": "data:image/png;base64," + BASE64_PNG_1X1},
                 {"image": "data:image/jpeg;base64,/9j/"},
-                {"text": request_model.prompt},
+                {"text": expected_prompt},
             ],
             content,
         )
-        self.assertEqual(request_model.prompt, sent["prompt"])
+        self.assertEqual(expected_prompt, sent["prompt"])
 
         # n=2 时顶层 data 仅 1 条且 url 被上游覆盖成最后一张图地址；
         # 出图真源是 metadata.output.choices，两张图的地址都取自 metadata。
@@ -399,7 +403,7 @@ class TeamGatewayImageEditTests(unittest.TestCase):
         self.assertNotIn("n", sent)
 
     def test_image_edit_merges_negative_prompt_into_prompt_text(self) -> None:
-        """input.negative_prompt 未实测；负向提示词并入主提示词文本发送。"""
+        """input.negative_prompt 已实测被网关接受，但效果未经视觉验证，仍并入主提示词。"""
         client, captured = replay("edit-json-single.json", EDIT_JSON_FIXTURES)
         with client:
             gateway = make_gateway(client)
@@ -408,7 +412,10 @@ class TeamGatewayImageEditTests(unittest.TestCase):
             )
 
         sent = json.loads(captured["request"].content)
-        merged = "保留构图，把背景换成黄昏\n避免出现：模糊，低清晰度"
+        merged = (
+            "本次提供 1 张参考图。\n"
+            "保留构图，把背景换成黄昏\n避免出现：模糊，低清晰度"
+        )
         self.assertEqual(merged, sent["prompt"])
         self.assertEqual(merged, sent["input"]["messages"][0]["content"][-1]["text"])
         self.assertNotIn("negative_prompt", sent)

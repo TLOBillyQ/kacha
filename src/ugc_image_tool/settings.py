@@ -59,6 +59,15 @@ def validate_base_url(value: str) -> str:
     parsed = urlparse(stripped)
     if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
         raise ValueError("网关基础地址必须以 http:// 或 https:// 开头并包含主机名")
+    # urlparse 接受 Unicode 主机名，但 httpx 发请求时按 ASCII 编码会直接抛
+    # UnicodeEncodeError（实测：地址里混入“→”时连接检查报看不懂的编解码错误）。
+    # 在保存时就拦下并指出具体字符。
+    for char in stripped:
+        if ord(char) > 127:
+            raise ValueError(
+                f"网关基础地址含有非法字符“{char}”，"
+                "请确认没有混入箭头、中文标点或多余文字"
+            )
     return stripped
 
 
@@ -303,6 +312,34 @@ class MemoryCredentialService:
         self._key = None
 
 
+class KeychainCredentialService:
+    """macOS 钥匙串凭据服务；keyring 只在 darwin 安装（pyproject 平台标记），
+    导入延迟到构造时，避免其他平台 import 失败。"""
+
+    _USERNAME = "api-key"
+
+    def __init__(self) -> None:
+        import keyring
+        import keyring.errors
+
+        self._keyring = keyring
+        self._delete_error = keyring.errors.PasswordDeleteError
+
+    def save_api_key(self, key: str) -> None:
+        if not isinstance(key, str):
+            raise TypeError("API 密钥必须是字符串")
+        self._keyring.set_password(CREDENTIAL_SERVICE_NAME, self._USERNAME, key)
+
+    def api_key(self) -> str | None:
+        return self._keyring.get_password(CREDENTIAL_SERVICE_NAME, self._USERNAME)
+
+    def clear_api_key(self) -> None:
+        try:
+            self._keyring.delete_password(CREDENTIAL_SERVICE_NAME, self._USERNAME)
+        except self._delete_error:
+            pass
+
+
 _CRED_TYPE_GENERIC = 1
 _CRED_PERSIST_LOCAL_MACHINE = 2
 _ERROR_NOT_FOUND = 1168
@@ -436,6 +473,22 @@ class SettingsApplication:
     def save_negative_prompt_enabled(self, workflow: Workflow, enabled: bool) -> None:
         self._store.save_negative_prompt_enabled(workflow, enabled)
 
+    # 合并后的单一「生成」页只有一套状态（档位 + 负向勾选）。持久化复用
+    # image_edit 工作流键作为单一来源：旧版本设置文件里 image_edit 的值优先，
+    # text_to_image 那份弃用（不写迁移代码）。Workflow 枚举仍保留两值仅供任务
+    # 内部类型与工作流校验复用。
+    def page_tier(self) -> ModelTier:
+        return self._store.selected_tier(Workflow.IMAGE_EDIT)
+
+    def save_page_tier(self, tier: ModelTier) -> None:
+        self._store.save_selected_tier(Workflow.IMAGE_EDIT, tier)
+
+    def page_negative_prompt_enabled(self) -> bool:
+        return self._store.negative_prompt_enabled(Workflow.IMAGE_EDIT)
+
+    def save_page_negative_prompt_enabled(self, enabled: bool) -> None:
+        self._store.save_negative_prompt_enabled(Workflow.IMAGE_EDIT, enabled)
+
     def output_directory_error(self) -> str | None:
         """返回阻止提交的可操作错误；输出目录可写时返回 None。"""
         return self._output_directory_error(probe=True)
@@ -459,6 +512,14 @@ class SettingsApplication:
     def save_api_key(self, key: str) -> None:
         if not isinstance(key, str) or not key.strip():
             raise ValueError("API 密钥不能为空")
+        # 实测事故：把整段中文说明文字粘进密钥框后，httpx 在编码认证头时抛
+        # UnicodeEncodeError，连接检查只报看不懂的编解码错误。保存时拦下。
+        for char in key:
+            if ord(char) > 127:
+                raise ValueError(
+                    f"API 密钥含有非法字符“{char}”，"
+                    "请确认粘贴的是密钥本身，没有混入其他文字"
+                )
         self._credentials.save_api_key(key)
 
     @property

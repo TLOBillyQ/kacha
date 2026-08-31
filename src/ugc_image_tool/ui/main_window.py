@@ -29,7 +29,7 @@ from ..settings import (
     SettingsStoreError,
 )
 from .controllers.discovery_controller import DiscoveryController
-from .pages import ImageEditPage, SettingsPage, TaskCenterPage, TextToImagePage
+from .pages import GeneratePage, SettingsPage, TaskCenterPage
 from .presentation import (
     UI_BORDER,
     UI_ERROR,
@@ -112,8 +112,7 @@ class MainWindow(QMainWindow):
         indicator_layout.addWidget(self._status_dot)
         indicator_layout.addWidget(self._status_text)
         self.statusBar().addPermanentWidget(status_indicator)
-        self._text_page = TextToImagePage(self._services, parent=self)
-        self._edit_page = ImageEditPage(self._services, parent=self)
+        self._generate_page = GeneratePage(self._services, parent=self)
         self._settings_page = SettingsPage(
             self._services,
             self._discovery_controller,
@@ -143,14 +142,13 @@ class MainWindow(QMainWindow):
         self._settings_page.discovery_restart_requested.connect(
             self._restart_discovery
         )
-        self._text_page.status_message.connect(self.statusBar().showMessage)
+        self._generate_page.status_message.connect(self.statusBar().showMessage)
         self._settings_page.status_message.connect(self.statusBar().showMessage)
         self._task_center.status_message.connect(self.statusBar().showMessage)
 
     def _build_window(self) -> None:
         self._tabs = QTabWidget()
-        self._tabs.addTab(self._text_page, "文生图")
-        self._tabs.addTab(self._edit_page, "图片编辑")
+        self._tabs.addTab(self._generate_page, "生成")
         self._tabs.addTab(self._settings_page, "设置")
         self._connection_banner = self._build_connection_banner()
         root = QVBoxLayout()
@@ -247,13 +245,11 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _on_output_state_changed(self) -> None:
-        self._text_page.refresh_output_state()
-        self._edit_page.refresh_output_state()
+        self._generate_page.refresh_output_state()
 
     @Slot(object)
     def _on_discovery_state(self, state: DiscoveryState) -> None:
-        self._text_page.set_models(state.model_ids)
-        self._edit_page.set_models(state.model_ids)
+        self._generate_page.set_models(state.model_ids)
         self._update_connection_status()
 
     def _update_connection_status(self) -> None:

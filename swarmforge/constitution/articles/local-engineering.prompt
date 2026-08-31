@@ -1,5 +1,8 @@
 # Local Engineering Rules
 
+## Project Language
+- Project language: Python 3.12 (PySide6 desktop client, pytest unit tests).
+
 ## Language Tool Table (Python 3.12)
 - The language table in engineering.prompt does not cover Python; use this table instead.
 - Mutation: `python tools/cli.py mutate <file>`; CRAP: `python tools/cli.py crap`; DRY: `python tools/cli.py dry`; unit tests: `python tools/cli.py verify`. All ship in this repo under `tools/`; no separate install step. Project python is `.venv/bin/python` (create with `python3 -m venv .venv && .venv/bin/pip install -e '.[test]'`).
