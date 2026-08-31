@@ -581,6 +581,35 @@ class GenerationStateConvergenceTests(unittest.TestCase):
             self.assertEqual(ModelTier.ECONOMY, reloaded.generation_tier())
             self.assertTrue(reloaded.generation_negative_prompt_enabled())
 
+    def test_generation_disclosure_state_persists_round_trip(self) -> None:
+        with TemporaryDirectory() as directory:
+            application = SettingsApplication(
+                SettingsStore(Path(directory)),
+                MemoryCredentialService(),
+            )
+
+            self.assertFalse(application.generation_reference_expanded())
+            self.assertFalse(application.generation_image_count_expanded())
+            self.assertFalse(application.generation_disclosure_hint_seen())
+            self.assertIsNone(application.generation_selected_preset_id())
+
+            application.save_generation_reference_expanded(True)
+            application.save_generation_image_count_expanded(True)
+            application.save_generation_disclosure_hint_seen(True)
+            application.save_generation_selected_preset_id("builtin-test")
+
+            reloaded = SettingsApplication(
+                SettingsStore(Path(directory)),
+                MemoryCredentialService(),
+            )
+
+            self.assertTrue(reloaded.generation_reference_expanded())
+            self.assertTrue(reloaded.generation_image_count_expanded())
+            self.assertTrue(reloaded.generation_disclosure_hint_seen())
+            self.assertEqual(
+                "builtin-test", reloaded.generation_selected_preset_id()
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

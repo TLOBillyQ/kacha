@@ -318,6 +318,9 @@ class PresetApplication:
     def grouped_presets(self) -> dict[PresetProject, tuple[ProjectPreset, ...]]:
         return self._store.grouped_presets()
 
+    def first_builtin(self) -> ProjectPreset | None:
+        return next(iter(self._store.builtin_presets), None)
+
     def get(self, preset_id: str) -> ProjectPreset | None:
         return self._store.get(preset_id)
 

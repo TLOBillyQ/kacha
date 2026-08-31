@@ -1,7 +1,7 @@
 """生成页：合并文生图与图片编辑，参考图数量即任务类型，无模式开关。
 
-参考图面板常驻并占视觉主位；预设区、提示词区（含负向勾选）、模型档位、
-尺寸与出图数量围绕它排布。只调用应用服务，不直接访问存储、凭据库或网关。
+正向提示词占据主要创作空间；参考图与负向提示词渐进披露，项目预设、
+模型档位、生成尺寸、出图数量与提交动作集中在「本次生成」右栏。
 """
 
 from __future__ import annotations
@@ -10,9 +10,8 @@ from pathlib import Path
 from typing import Callable, cast
 
 from PySide6.QtCore import QSize, Qt, Signal, Slot
-from PySide6.QtGui import QIcon, QStandardItemModel
+from PySide6.QtGui import QAction, QIcon, QStandardItemModel
 from PySide6.QtWidgets import (
-    QCheckBox,
     QComboBox,
     QFileDialog,
     QGroupBox,
@@ -22,11 +21,13 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMessageBox,
+    QMenu,
     QPushButton,
     QSizePolicy,
     QSpinBox,
     QSplitter,
     QTextEdit,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -36,12 +37,15 @@ from ...generation import ImageEditDraft, SizeMode, generate_draft_errors
 from ...presets import PresetProject, PresetStoreError, ProjectPreset
 from ...references import inspect_reference_image
 from ...services import ApplicationServices
+from ..disclosure import CollapsibleSection
 from ..presentation import (
     CUSTOM_SIZE_LABEL,
     SUBMIT_BUTTON_STYLE,
     UI_CARD_MARGIN,
     UI_ERROR,
+    UI_HINT_BACKGROUND,
     UI_SPACING,
+    UI_TEXT_MUTED,
     combo_preset_size,
     combo_size_mode,
 )
@@ -108,33 +112,46 @@ class GeneratePage(QWidget):
         self._tier_switch.tier_changed.connect(self._on_tier_changed)
 
         self._prompt = QTextEdit()
-        self._prompt.setPlaceholderText("输入正向提示词")
+        self._prompt.setPlaceholderText("描述画面、角色、风格与构图……")
         self._prompt.textChanged.connect(self._on_prompt_changed)
 
         self._negative_prompt = QTextEdit()
-        self._negative_prompt.setPlaceholderText("输入负向提示词（可留空）")
+        self._negative_prompt.setPlaceholderText("输入不希望出现的内容")
         self._negative_prompt.textChanged.connect(self._on_prompt_changed)
-        # 勾选状态按页面持久化：勾选才展开输入区，未勾选只留一个勾选框。
-        self._negative_prompt_check = QCheckBox("负向提示词")
-        self._negative_prompt_check.toggled.connect(self._toggle_negative_prompt)
-        self._negative_prompt.setVisible(False)
-        self._negative_prompt_check.setChecked(
-            self._settings.generation_negative_prompt_enabled()
-        )
 
         self._preset_combo = QComboBox()
         self._preset_combo.setPlaceholderText("选择项目预设")
+        self._preset_combo.currentIndexChanged.connect(
+            self._on_preset_selection_changed
+        )
         self._preset_combo.currentIndexChanged.connect(self._update_preset_actions)
-        self._apply_preset = QPushButton("应用项目预设")
-        self._apply_preset.clicked.connect(self._apply_selected_preset)
-        self._copy_preset = QPushButton("复制为个人预设")
-        self._copy_preset.clicked.connect(self._copy_selected_preset)
-        self._save_preset = QPushButton("新建个人预设")
-        self._save_preset.clicked.connect(self._save_personal_preset)
-        self._edit_preset = QPushButton("编辑个人预设")
-        self._edit_preset.clicked.connect(self._edit_selected_preset)
-        self._delete_preset = QPushButton("删除个人预设")
-        self._delete_preset.clicked.connect(self._delete_selected_preset)
+        self._preset_menu = QMenu(self)
+        self._apply_preset = QAction("应用项目预设", self)
+        self._apply_preset.triggered.connect(self._apply_selected_preset)
+        self._copy_preset = QAction("复制为个人预设", self)
+        self._copy_preset.triggered.connect(self._copy_selected_preset)
+        self._save_preset = QAction("新建个人预设", self)
+        self._save_preset.triggered.connect(self._save_personal_preset)
+        self._edit_preset = QAction("编辑个人预设", self)
+        self._edit_preset.triggered.connect(self._edit_selected_preset)
+        self._delete_preset = QAction("删除个人预设", self)
+        self._delete_preset.triggered.connect(self._delete_selected_preset)
+        self._preset_menu.addActions(
+            (
+                self._apply_preset,
+                self._copy_preset,
+                self._save_preset,
+                self._edit_preset,
+                self._delete_preset,
+            )
+        )
+        self._preset_actions = QToolButton()
+        self._preset_actions.setText("预设操作…")
+        self._preset_actions.setToolTip("应用、复制、新建、编辑或删除项目预设")
+        self._preset_actions.setPopupMode(
+            QToolButton.ToolButtonPopupMode.InstantPopup
+        )
+        self._preset_actions.setMenu(self._preset_menu)
 
         self._size_combo = QComboBox()
         self._size_combo.currentIndexChanged.connect(self._on_size_changed)
@@ -155,7 +172,7 @@ class GeneratePage(QWidget):
         self._references.setViewMode(QListWidget.ViewMode.ListMode)
         self._references.setIconSize(QSize(48, 48))
         self._references.setUniformItemSizes(True)
-        self._add_reference = QPushButton("添加参考图")
+        self._add_reference = QPushButton("＋ 添加参考图（可选，最多 3 张）")
         self._add_reference.setToolTip("支持 PNG 和 JPEG")
         self._add_reference.clicked.connect(self._choose_references)
         self._reference_hint = QLabel(
@@ -182,17 +199,55 @@ class GeneratePage(QWidget):
         self._submit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._submit.clicked.connect(self._submit_generate)
 
-        reference_panel = QGroupBox("参考图")
-        reference_layout = QVBoxLayout(reference_panel)
-        reference_layout.setContentsMargins(
-            UI_CARD_MARGIN, UI_CARD_MARGIN, UI_CARD_MARGIN, UI_CARD_MARGIN
-        )
+        reference_layout = QVBoxLayout()
+        reference_layout.setContentsMargins(0, 0, 0, 0)
         reference_layout.setSpacing(UI_SPACING)
         reference_layout.addWidget(self._references, 1)
         reference_layout.addWidget(self._reference_hint)
         reference_layout.addWidget(self._reference_disabled)
         reference_layout.addWidget(self._warnings)
         reference_layout.addWidget(self._add_reference)
+        reference_help = QLabel(
+            "拖放 PNG / JPEG 到这里；添加的参考图将用于图片编辑生成"
+        )
+        reference_help.setWordWrap(True)
+        reference_help.setStyleSheet(f"color: {UI_TEXT_MUTED};")
+        reference_layout.addWidget(reference_help)
+        self._reference_section = CollapsibleSection(
+            "参考图（可选）(&R)",
+            expanded=self._settings.generation_reference_expanded(),
+        )
+        self._reference_section.set_content_layout(reference_layout)
+        self._reference_section.toggled.connect(self._on_reference_toggled)
+
+        negative_layout = QVBoxLayout()
+        negative_layout.setContentsMargins(0, 0, 0, 0)
+        negative_layout.addWidget(self._negative_prompt)
+        self._negative_section = CollapsibleSection(
+            "负向提示词(&N)",
+            expanded=self._settings.generation_negative_prompt_enabled(),
+        )
+        self._negative_section.set_content_layout(negative_layout)
+        self._negative_section.toggled.connect(self._toggle_negative_prompt)
+
+        self._disclosure_hint = QWidget()
+        self._disclosure_hint.setStyleSheet(
+            f"background-color: {UI_HINT_BACKGROUND};"
+        )
+        hint_layout = QHBoxLayout(self._disclosure_hint)
+        hint_layout.setContentsMargins(UI_SPACING, 4, 4, 4)
+        hint_text = QLabel("参考图与负向提示词收在这里，点开即用")
+        hint_text.setStyleSheet(f"color: {UI_TEXT_MUTED};")
+        hint_layout.addWidget(hint_text, 1)
+        self._dismiss_disclosure_hint = QToolButton()
+        self._dismiss_disclosure_hint.setText("关闭")
+        self._dismiss_disclosure_hint.clicked.connect(
+            self._mark_disclosure_hint_seen
+        )
+        hint_layout.addWidget(self._dismiss_disclosure_hint)
+        self._disclosure_hint.setVisible(
+            not self._settings.generation_disclosure_hint_seen()
+        )
 
         model_row = QHBoxLayout()
         model_row.setSpacing(UI_SPACING)
@@ -201,12 +256,17 @@ class GeneratePage(QWidget):
 
         size_row = QHBoxLayout()
         size_row.setSpacing(UI_SPACING)
-        size_row.addWidget(QLabel("尺寸"))
+        size_row.addWidget(QLabel("生成尺寸"))
         size_row.addWidget(self._size_combo, 1)
-        size_row.addWidget(QLabel("宽"))
-        size_row.addWidget(self._width_box)
-        size_row.addWidget(QLabel("高"))
-        size_row.addWidget(self._height_box)
+
+        self._custom_size = QWidget()
+        custom_size_layout = QHBoxLayout(self._custom_size)
+        custom_size_layout.setContentsMargins(0, 0, 0, 0)
+        custom_size_layout.addWidget(QLabel("宽"))
+        custom_size_layout.addWidget(self._width_box)
+        custom_size_layout.addWidget(QLabel("高"))
+        custom_size_layout.addWidget(self._height_box)
+        self._custom_size.hide()
 
         prompt_group = QGroupBox("正向提示词")
         prompt_layout = QVBoxLayout(prompt_group)
@@ -215,51 +275,56 @@ class GeneratePage(QWidget):
         )
         prompt_layout.addWidget(self._prompt)
 
-        controls = QHBoxLayout()
-        controls.setSpacing(UI_SPACING)
-        controls.addWidget(QLabel("出图数量"))
-        controls.addWidget(self._count_box)
-        controls.addStretch(1)
-        controls.addWidget(self._submit, 1)
+        count_layout = QHBoxLayout()
+        count_layout.setContentsMargins(0, 0, 0, 0)
+        count_layout.addWidget(self._count_box)
+        count_layout.addStretch(1)
+        self._count_section = CollapsibleSection(
+            "出图数量(&C)",
+            expanded=self._settings.generation_image_count_expanded(),
+        )
+        self._count_section.set_content_layout(count_layout)
+        self._count_section.toggled.connect(
+            self._settings.save_generation_image_count_expanded
+        )
 
-        preset_group = QGroupBox("预设与模型")
-        preset_layout = QVBoxLayout(preset_group)
+        preset_row = QHBoxLayout()
+        preset_row.setSpacing(UI_SPACING)
+        preset_row.addWidget(self._preset_combo, 1)
+        preset_row.addWidget(self._preset_actions)
+
+        self._generation_panel = QGroupBox("本次生成")
+        preset_layout = QVBoxLayout(self._generation_panel)
         preset_layout.setContentsMargins(
             UI_CARD_MARGIN, UI_CARD_MARGIN, UI_CARD_MARGIN, UI_CARD_MARGIN
         )
         preset_layout.setSpacing(UI_SPACING)
-        preset_layout.addLayout(model_row)
         preset_layout.addWidget(QLabel("项目预设"))
-        preset_layout.addWidget(self._preset_combo)
-        preset_actions = QHBoxLayout()
-        for button in (self._apply_preset, self._copy_preset, self._save_preset):
-            preset_actions.addWidget(button)
-        preset_layout.addLayout(preset_actions)
-        personal_actions = QHBoxLayout()
-        personal_actions.addWidget(self._edit_preset)
-        personal_actions.addWidget(self._delete_preset)
-        personal_actions.addStretch(1)
-        preset_layout.addLayout(personal_actions)
+        preset_layout.addLayout(preset_row)
+        preset_layout.addLayout(model_row)
+        preset_layout.addLayout(size_row)
+        preset_layout.addWidget(self._custom_size)
+        preset_layout.addWidget(self._count_section)
+        preset_layout.addWidget(self._validation)
+        preset_layout.addStretch(1)
+        preset_layout.addWidget(self._submit)
 
-        right_panel = QWidget()
-        right_layout = QVBoxLayout(right_panel)
-        right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(UI_SPACING)
-        right_layout.addWidget(preset_group)
-        right_layout.addWidget(prompt_group, 1)
-        right_layout.addWidget(self._negative_prompt_check)
-        right_layout.addWidget(self._negative_prompt)
-        right_layout.addLayout(size_row)
-        right_layout.addWidget(self._validation)
-        right_layout.addLayout(controls)
+        main_panel = QWidget()
+        main_layout = QVBoxLayout(main_panel)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(UI_SPACING)
+        main_layout.addWidget(prompt_group, 1)
+        main_layout.addWidget(self._disclosure_hint)
+        main_layout.addWidget(self._reference_section)
+        main_layout.addWidget(self._negative_section)
 
         self._splitter = QSplitter(Qt.Orientation.Horizontal)
-        self._splitter.addWidget(reference_panel)
-        self._splitter.addWidget(right_panel)
+        self._splitter.addWidget(main_panel)
+        self._splitter.addWidget(self._generation_panel)
         self._splitter.setChildrenCollapsible(False)
-        self._splitter.setStretchFactor(0, 0)
-        self._splitter.setStretchFactor(1, 1)
-        self._splitter.setSizes([190, 710])
+        self._splitter.setStretchFactor(0, 1)
+        self._splitter.setStretchFactor(1, 0)
+        self._splitter.setSizes([620, 280])
 
         layout = QVBoxLayout()
         layout.setContentsMargins(
@@ -352,17 +417,14 @@ class GeneratePage(QWidget):
             else None
         )
         supports_negative = current is not None and current.supports_negative_prompt
-        self._negative_prompt_check.setVisible(supports_negative)
-        # 只同步可见性；勾选状态由用户操作触发持久化，模型刷新不重复写设置。
-        self._negative_prompt.setVisible(
-            supports_negative and self._negative_prompt_check.isChecked()
-        )
+        self._negative_section.setVisible(supports_negative)
         self._edit_max_references = (
             edit.reference_limits.max_references if edit is not None else 0
         )
         self._apply_reference_state(edit)
         if current is None:
             self._size_combo.clear()
+            self._custom_size.hide()
             self._revalidate()
             return
         self._count_box.blockSignals(True)
@@ -391,8 +453,7 @@ class GeneratePage(QWidget):
     def _on_size_changed(self) -> None:
         data = self._size_combo.currentData()
         mode = combo_size_mode(data)
-        self._width_box.setVisible(mode is SizeMode.CUSTOM)
-        self._height_box.setVisible(mode is SizeMode.CUSTOM)
+        self._custom_size.setVisible(mode is SizeMode.CUSTOM)
         if mode is SizeMode.PRESET:
             preset_size = combo_preset_size(data)
             if preset_size is not None:
@@ -418,13 +479,24 @@ class GeneratePage(QWidget):
         target = current_mode if current_mode in modes else modes[0]
         self._size_combo.setCurrentIndex(modes.index(target))
         self._size_combo.blockSignals(False)
-        self._width_box.setVisible(SizeMode.CUSTOM == target)
-        self._height_box.setVisible(SizeMode.CUSTOM == target)
+        self._custom_size.setVisible(SizeMode.CUSTOM == target)
 
     @Slot(bool)
     def _toggle_negative_prompt(self, expanded: bool) -> None:
-        self._negative_prompt.setVisible(expanded)
         self._settings.save_generation_negative_prompt_enabled(expanded)
+        if expanded:
+            self._mark_disclosure_hint_seen()
+
+    @Slot(bool)
+    def _on_reference_toggled(self, expanded: bool) -> None:
+        self._settings.save_generation_reference_expanded(expanded)
+        if expanded:
+            self._mark_disclosure_hint_seen()
+
+    @Slot()
+    def _mark_disclosure_hint_seen(self) -> None:
+        self._settings.save_generation_disclosure_hint_seen(True)
+        self._disclosure_hint.hide()
 
     @Slot(int)
     def _on_count_changed(self, value: int) -> None:
@@ -476,6 +548,7 @@ class GeneratePage(QWidget):
 
     def _on_references_changed(self) -> None:
         """参考图数量变化即任务类型变化：重建档位并按新约束校验。"""
+        self._reference_section.toggle.setChecked(self._references.count() > 0)
         self._rebuild_tiers()
         data = self._size_combo.currentData()
         if self._references.count() > 1 and combo_size_mode(data) is SizeMode.AUTO:
@@ -487,7 +560,14 @@ class GeneratePage(QWidget):
     # -- 项目预设 ------------------------------------------------------------
 
     def _populate_presets(self) -> None:
-        selected_id = self._preset_combo.currentData()
+        current_id = self._preset_combo.currentData()
+        persisted_id = self._settings.generation_selected_preset_id()
+        selected_id = current_id if isinstance(current_id, str) else persisted_id
+        default_preset = (
+            self._presets.first_builtin() if selected_id is None else None
+        )
+        if default_preset is not None:
+            selected_id = default_preset.preset_id
         self._preset_combo.blockSignals(True)
         self._preset_combo.clear()
         for project, presets in self._presets.grouped_presets().items():
@@ -511,6 +591,10 @@ class GeneratePage(QWidget):
         self._preset_combo.setCurrentIndex(restored)
         self._preset_combo.blockSignals(False)
         self._update_preset_actions()
+        if default_preset is not None:
+            self._settings.save_generation_selected_preset_id(default_preset.preset_id)
+            self._presets.apply_preset(default_preset.preset_id)
+            self._set_prompt_values()
 
     def _selected_preset(self) -> ProjectPreset | None:
         preset_id = self._preset_combo.currentData()
@@ -519,10 +603,17 @@ class GeneratePage(QWidget):
         return self._presets.get(preset_id)
 
     @Slot(int)
+    def _on_preset_selection_changed(self, _index: int) -> None:
+        preset = self._selected_preset()
+        if preset is not None:
+            self._settings.save_generation_selected_preset_id(preset.preset_id)
+
+    @Slot(int)
     def _update_preset_actions(self, _index: int = -1) -> None:
         preset = self._selected_preset()
         self._apply_preset.setVisible(preset is not None)
         self._copy_preset.setVisible(preset is not None and preset.read_only)
+        self._save_preset.setVisible(True)
         self._edit_preset.setVisible(preset is not None and not preset.read_only)
         self._delete_preset.setVisible(preset is not None and not preset.read_only)
         self._apply_preset.setEnabled(preset is not None)
@@ -709,7 +800,8 @@ class GeneratePage(QWidget):
             # 取消勾选后文本保留在输入框里但不发送，重新勾选即可找回。
             negative_prompt=(
                 (self._negative_prompt.toPlainText() or None)
-                if self._negative_prompt_check.isChecked()
+                if self._negative_section.isVisible()
+                and self._negative_section.toggle.isChecked()
                 else None
             ),
             size_mode=mode,

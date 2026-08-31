@@ -79,6 +79,10 @@ class AppSettings:
     concurrency_limit: int
     selected_tier: ModelTier = ModelTier.FLAGSHIP
     negative_prompt_enabled: bool = False
+    reference_expanded: bool = False
+    image_count_expanded: bool = False
+    disclosure_hint_seen: bool = False
+    selected_preset_id: str | None = None
 
 
 class SettingsStoreError(ValueError):
@@ -142,6 +146,38 @@ class SettingsStore:
             raise ValueError("负向提示词勾选状态必须是布尔值")
         return self._update(negative_prompt_enabled=enabled)
 
+    def reference_expanded(self) -> bool:
+        return self._settings.reference_expanded
+
+    def save_reference_expanded(self, expanded: bool) -> AppSettings:
+        if not isinstance(expanded, bool):
+            raise ValueError("参考图区展开状态必须是布尔值")
+        return self._update(reference_expanded=expanded)
+
+    def image_count_expanded(self) -> bool:
+        return self._settings.image_count_expanded
+
+    def save_image_count_expanded(self, expanded: bool) -> AppSettings:
+        if not isinstance(expanded, bool):
+            raise ValueError("出图数量展开状态必须是布尔值")
+        return self._update(image_count_expanded=expanded)
+
+    def disclosure_hint_seen(self) -> bool:
+        return self._settings.disclosure_hint_seen
+
+    def save_disclosure_hint_seen(self, seen: bool) -> AppSettings:
+        if not isinstance(seen, bool):
+            raise ValueError("进阶项提示已读状态必须是布尔值")
+        return self._update(disclosure_hint_seen=seen)
+
+    def selected_preset_id(self) -> str | None:
+        return self._settings.selected_preset_id
+
+    def save_selected_preset_id(self, preset_id: str) -> AppSettings:
+        if not isinstance(preset_id, str) or not preset_id.strip():
+            raise ValueError("项目预设 ID 不能为空")
+        return self._update(selected_preset_id=preset_id)
+
     def _update(
         self,
         *,
@@ -150,6 +186,10 @@ class SettingsStore:
         concurrency_limit: int | None = None,
         selected_tier: ModelTier | None = None,
         negative_prompt_enabled: bool | None = None,
+        reference_expanded: bool | None = None,
+        image_count_expanded: bool | None = None,
+        disclosure_hint_seen: bool | None = None,
+        selected_preset_id: str | None = None,
     ) -> AppSettings:
         current = self._settings
         updated = AppSettings(
@@ -167,6 +207,26 @@ class SettingsStore:
                 negative_prompt_enabled
                 if negative_prompt_enabled is not None
                 else current.negative_prompt_enabled
+            ),
+            reference_expanded=(
+                reference_expanded
+                if reference_expanded is not None
+                else current.reference_expanded
+            ),
+            image_count_expanded=(
+                image_count_expanded
+                if image_count_expanded is not None
+                else current.image_count_expanded
+            ),
+            disclosure_hint_seen=(
+                disclosure_hint_seen
+                if disclosure_hint_seen is not None
+                else current.disclosure_hint_seen
+            ),
+            selected_preset_id=(
+                selected_preset_id
+                if selected_preset_id is not None
+                else current.selected_preset_id
             ),
         )
         self._persist(updated)
@@ -209,13 +269,31 @@ class SettingsStore:
         negative_prompt_enabled = self._parse_negative_prompt_enabled(
             raw.get("negative_prompt_enabled")
         )
+        reference_expanded = self._parse_bool_setting(raw, "reference_expanded")
+        image_count_expanded = self._parse_bool_setting(raw, "image_count_expanded")
+        disclosure_hint_seen = self._parse_bool_setting(raw, "disclosure_hint_seen")
+        selected_preset_id = raw.get("selected_preset_id")
+        if selected_preset_id is not None and (
+            not isinstance(selected_preset_id, str) or not selected_preset_id.strip()
+        ):
+            raise SettingsStoreError("设置文件的 selected_preset_id 无效")
         return AppSettings(
             output_root,
             base_url,
             concurrency_limit,
             selected_tier,
             negative_prompt_enabled,
+            reference_expanded,
+            image_count_expanded,
+            disclosure_hint_seen,
+            selected_preset_id,
         )
+
+    def _parse_bool_setting(self, raw: dict[str, object], key: str) -> bool:
+        value = raw.get(key, False)
+        if not isinstance(value, bool):
+            raise SettingsStoreError(f"设置文件的 {key} 无效")
+        return value
 
     def _parse_selected_tier(self, raw: dict[str, object]) -> ModelTier:
         if "selected_tier" in raw:
@@ -280,6 +358,10 @@ class SettingsStore:
                 "concurrency_limit": settings.concurrency_limit,
                 "selected_tier": settings.selected_tier.value,
                 "negative_prompt_enabled": settings.negative_prompt_enabled,
+                "reference_expanded": settings.reference_expanded,
+                "image_count_expanded": settings.image_count_expanded,
+                "disclosure_hint_seen": settings.disclosure_hint_seen,
+                "selected_preset_id": settings.selected_preset_id,
             },
             ensure_ascii=False,
             indent=2,
@@ -478,6 +560,30 @@ class SettingsApplication:
 
     def save_generation_negative_prompt_enabled(self, enabled: bool) -> None:
         self._store.save_negative_prompt_enabled(enabled)
+
+    def generation_reference_expanded(self) -> bool:
+        return self._store.reference_expanded()
+
+    def save_generation_reference_expanded(self, expanded: bool) -> None:
+        self._store.save_reference_expanded(expanded)
+
+    def generation_image_count_expanded(self) -> bool:
+        return self._store.image_count_expanded()
+
+    def save_generation_image_count_expanded(self, expanded: bool) -> None:
+        self._store.save_image_count_expanded(expanded)
+
+    def generation_disclosure_hint_seen(self) -> bool:
+        return self._store.disclosure_hint_seen()
+
+    def save_generation_disclosure_hint_seen(self, seen: bool) -> None:
+        self._store.save_disclosure_hint_seen(seen)
+
+    def generation_selected_preset_id(self) -> str | None:
+        return self._store.selected_preset_id()
+
+    def save_generation_selected_preset_id(self, preset_id: str) -> None:
+        self._store.save_selected_preset_id(preset_id)
 
     def output_directory_error(self) -> str | None:
         """返回阻止提交的可操作错误；输出目录可写时返回 None。"""

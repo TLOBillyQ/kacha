@@ -18,7 +18,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QListWidget
+from PySide6.QtWidgets import QApplication, QToolButton
 
 PNG_1X1 = bytes.fromhex(
     "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c6360606060000000050001a5f645400000000049454e44ae426082"
@@ -236,34 +236,39 @@ class GeneratePageLayoutUiTests(unittest.TestCase):
         )
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
 
-    def test_layout_uses_left_reference_splitter(self) -> None:
+    def test_layout_prioritizes_prompt_and_uses_native_disclosures(self) -> None:
         self.run_qt_case(
             """
 assert page._splitter.orientation() == Qt.Orientation.Horizontal
 assert page._splitter.count() == 2
-left_width, right_width = page._splitter.sizes()
-assert 175 <= left_width <= 205, (left_width, right_width)
-assert right_width > left_width
-assert page._references.viewMode() == QListWidget.ViewMode.ListMode
+main_width, sidebar_width = page._splitter.sizes()
+assert main_width > sidebar_width
+assert page._prompt.placeholderText() == "描述画面、角色、风格与构图……"
+assert page._generation_panel.title() == "本次生成"
+for section in (page._reference_section, page._negative_section, page._count_section):
+    assert isinstance(section.toggle, QToolButton)
+    assert section.toggle.isCheckable()
+    assert section.toggle.styleSheet() == "QToolButton { border: none; }"
+    assert section.toggle.arrowType() == Qt.ArrowType.RightArrow
+    assert section.content.isHidden()
 """
         )
 
     def test_negative_prompt_is_collapsed_and_capability_aware(self) -> None:
         self.run_qt_case(
             """
-assert not page._negative_prompt_check.isChecked()
-assert page._negative_prompt.isHidden()
+assert not page._negative_section.toggle.isChecked()
+assert page._negative_section.content.isHidden()
 
-page._negative_prompt_check.setChecked(True)
-assert not page._negative_prompt.isHidden()
+page._negative_section.toggle.setChecked(True)
+assert not page._negative_section.content.isHidden()
 
 page.set_models(("qwen-image-3.0-pro",))
-assert not page._negative_prompt_check.isHidden()
-assert not page._negative_prompt.isHidden()
+assert not page._negative_section.isHidden()
+assert not page._negative_section.content.isHidden()
 
 page.set_models(("unknown-model",))
-assert page._negative_prompt_check.isHidden()
-assert page._negative_prompt.isHidden()
+assert page._negative_section.isHidden()
 """
         )
 
@@ -274,11 +279,11 @@ captured = {}
 page._application.submit_generate = lambda draft: captured.update(draft=draft)
 page._negative_prompt.setPlainText("模糊，低清晰度")
 
-page._negative_prompt_check.setChecked(True)
+page._negative_section.toggle.setChecked(True)
 page._submit_generate()
 assert captured["draft"].negative_prompt == "模糊，低清晰度"
 
-page._negative_prompt_check.setChecked(False)
+page._negative_section.toggle.setChecked(False)
 page._submit_generate()
 assert captured["draft"].negative_prompt is None
 assert page._negative_prompt.toPlainText() == "模糊，低清晰度"
@@ -288,16 +293,16 @@ assert page._negative_prompt.toPlainText() == "模糊，低清晰度"
     def test_negative_prompt_checked_state_is_restored_on_new_page(self) -> None:
         self.run_qt_case(
             """
-page._negative_prompt_check.setChecked(True)
+page._negative_section.toggle.setChecked(True)
 assert services.settings.generation_negative_prompt_enabled()
 
 second = GeneratePage(services)
-assert second._negative_prompt_check.isChecked()
+assert second._negative_section.toggle.isChecked()
 second.close()
 
 services.settings.save_generation_negative_prompt_enabled(False)
 third = GeneratePage(services)
-assert not third._negative_prompt_check.isChecked()
+assert not third._negative_section.toggle.isChecked()
 third.close()
 """
         )
@@ -310,16 +315,59 @@ assert page._submit.styleSheet() == SUBMIT_BUTTON_STYLE
 """
         )
 
+    def test_custom_size_inputs_only_appear_for_custom_mode(self) -> None:
+        self.run_qt_case(
+            """
+assert page._custom_size.isHidden()
+page.set_models(("qwen-image-3.0-pro",))
+assert page._custom_size.isHidden()
+
+custom_index = page._size_combo.findText("自定义…")
+assert custom_index >= 0
+page._size_combo.setCurrentIndex(custom_index)
+assert not page._custom_size.isHidden()
+
+page._size_combo.setCurrentIndex(0)
+assert page._custom_size.isHidden()
+"""
+        )
+
+    def test_image_count_disclosure_state_is_restored(self) -> None:
+        self.run_qt_case(
+            """
+assert not page._count_section.toggle.isChecked()
+page._count_section.toggle.setChecked(True)
+assert services.settings.generation_image_count_expanded()
+
+second = GeneratePage(services)
+assert second._count_section.toggle.isChecked()
+assert not second._count_section.content.isHidden()
+second.close()
+"""
+        )
+
+    def test_opening_advanced_input_dismisses_hint_permanently(self) -> None:
+        self.run_qt_case(
+            """
+assert not page._disclosure_hint.isHidden()
+page._reference_section.toggle.setChecked(True)
+assert page._disclosure_hint.isHidden()
+assert services.settings.generation_disclosure_hint_seen()
+
+second = GeneratePage(services)
+assert second._disclosure_hint.isHidden()
+second.close()
+"""
+        )
+
     def test_apply_preset_fills_shared_prompt_state(self) -> None:
         """验收口径 #3：应用预设后正向/负向提示词被填充，带参考图（编辑任务）同样生效。"""
         self.run_qt_case(
             """
 page.set_models(("qwen-image-3.0-pro",))
-page._select_preset("builtin-test")
-page._apply_selected_preset()
 assert page._prompt.toPlainText() == "测试提示词"
 assert page._negative_prompt.toPlainText() == "测试负向"
-page._negative_prompt_check.setChecked(True)
+page._negative_section.toggle.setChecked(True)
 
 ref = Path(root) / "ref.png"
 ref.write_bytes(PNG_1X1)
@@ -361,10 +409,10 @@ builtin = next(
     if preset.read_only
 )
 page._select_preset(builtin.preset_id)
-assert not page._apply_preset.isHidden()
-assert not page._copy_preset.isHidden()
-assert page._edit_preset.isHidden()
-assert page._delete_preset.isHidden()
+assert page._apply_preset.isVisible()
+assert page._copy_preset.isVisible()
+assert not page._edit_preset.isVisible()
+assert not page._delete_preset.isVisible()
 
 personal = services.presets.copy_builtin_as_personal(
     builtin.preset_id,
@@ -372,10 +420,49 @@ personal = services.presets.copy_builtin_as_personal(
 )
 page._populate_presets()
 page._select_preset(personal.preset_id)
-assert not page._apply_preset.isHidden()
-assert page._copy_preset.isHidden()
-assert not page._edit_preset.isHidden()
-assert not page._delete_preset.isHidden()
+assert page._apply_preset.isVisible()
+assert not page._copy_preset.isVisible()
+assert page._edit_preset.isVisible()
+assert page._delete_preset.isVisible()
+"""
+        )
+
+    def test_first_builtin_is_selected_applied_and_exposed_through_one_menu(self) -> None:
+        self.run_qt_case(
+            """
+assert page._preset_combo.currentData() == "builtin-test"
+assert services.settings.generation_selected_preset_id() == "builtin-test"
+assert page._prompt.toPlainText() == "测试提示词"
+assert page._negative_prompt.toPlainText() == "测试负向"
+assert page._preset_actions.text() == "预设操作…"
+assert "应用" in page._preset_actions.toolTip()
+assert page._preset_actions.menu() is page._preset_menu
+assert [action.text() for action in page._preset_menu.actions() if action.isVisible()] == [
+    "应用项目预设",
+    "复制为个人预设",
+    "新建个人预设",
+]
+"""
+        )
+
+    def test_no_builtin_presets_keeps_selection_empty(self) -> None:
+        self.run_qt_case(
+            """
+empty_store = PresetStore(root / "empty-user", builtins=())
+empty_services = ApplicationServices(
+    user_data_dir=root / "empty-user",
+    output_root=root / "empty-output",
+    gateway=Gateway(),
+    credentials=MemoryCredentialService(),
+    preset_store=empty_store,
+)
+empty_page = GeneratePage(empty_services)
+assert empty_page._preset_combo.currentIndex() == -1
+assert empty_page._preset_combo.placeholderText() == "选择项目预设"
+assert empty_page._prompt.toPlainText() == ""
+assert empty_services.settings.generation_selected_preset_id() is None
+empty_page.close()
+empty_services.close()
 """
         )
 
@@ -465,11 +552,13 @@ assert page._current_model_id() == "econ-model"
 page.set_models(("flag-model", "econ-model"))
 page._tier_switch._buttons[ModelTier.ECONOMY].click()
 assert page._current_model_id() == "econ-model"
+page._negative_prompt.setPlainText("不应发送")
 
 assert not page._references.isEnabled()
 assert not page._add_reference.isEnabled()
 assert not page._reference_disabled.isHidden()
 assert "不支持图片编辑" in page._reference_disabled.text()
+assert page._read_draft().negative_prompt is None
 
 page._tier_switch._buttons[ModelTier.FLAGSHIP].click()
 assert page._references.isEnabled()
@@ -487,6 +576,33 @@ for button in page._tier_switch._buttons.values():
 assert page._current_model_id() is None
 assert not page._submit.isEnabled()
 assert page._validation.text(), "无可用档位时必须给出原因"
+"""
+        )
+
+    def test_submit_uses_selected_model_size_count_and_prompt_values(self) -> None:
+        self.run_qt_case(
+            """
+page.set_models(("flag-model", "econ-model"))
+page._prompt.setPlainText("漂浮岛屿，暖色逆光")
+page._negative_section.toggle.setChecked(True)
+page._negative_prompt.setPlainText("模糊，文字")
+custom_index = page._size_combo.findText("自定义…")
+page._size_combo.setCurrentIndex(custom_index)
+page._width_box.setValue(1024)
+page._height_box.setValue(1024)
+page._count_box.setValue(2)
+captured = {}
+page._application.submit_generate = lambda draft: captured.update(draft=draft)
+
+page._submit_generate()
+
+draft = captured["draft"]
+assert draft.prompt == "漂浮岛屿，暖色逆光"
+assert draft.negative_prompt == "模糊，文字"
+assert draft.model_id == "flag-model"
+assert draft.size_mode.value == "custom"
+assert (draft.size_width, draft.size_height) == (1024, 1024)
+assert draft.image_count == 2
 """
         )
 
