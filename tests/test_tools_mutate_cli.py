@@ -372,6 +372,16 @@ def test_run_env_isolates_tmp_and_pythonpath(tmp_path):
     assert "mutate4py" not in env["TMPDIR"] or str(tmp_path) in env["TMPDIR"]
 
 
+def test_run_env_isolates_user_data_dirs(tmp_path, monkeypatch):
+    # 变异体会把“注入的用户数据目录”改写成默认目录；若默认目录指向真实 HOME，
+    # 被杀死的变异体仍会把测试值写进真实 settings.json（2026-08-31 实测事故）。
+    monkeypatch.setenv("XDG_DATA_HOME", "/real/home/.local/share")
+    monkeypatch.setenv("LOCALAPPDATA", "C:\\real\\AppData\\Local")
+    env = cli._run_env(str(tmp_path))
+    assert str(tmp_path) in env["XDG_DATA_HOME"]
+    assert str(tmp_path) in env["LOCALAPPDATA"]
+
+
 # --- worker 副本租约:同一副本同一时刻只能跑一个位点 --------------------------
 
 

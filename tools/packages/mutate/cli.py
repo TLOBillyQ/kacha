@@ -469,6 +469,10 @@ def _run_env(ws_root: str) -> dict:
     并发 pytest 的 tmp_path 编号在同一条系统临时目录上会串台:一个 worker 写的
     临时文件被另一个 worker 读走,mutant 的行为被顶替,位点被误判为存活。
     所以每个 worker 必须有私有 TMPDIR(POSIX 与 Windows 变量都设)。
+
+    用户数据目录变量同样必须私有化:变异体会把"注入的目录"改写成默认目录,
+    若默认目录仍指向真实 HOME,被杀死的变异体也会把测试值写进真实用户设置
+    (2026-08-31 实测:真实 settings.json 被覆写,网关地址指向不存在的主机)。
     """
     env = dict(os.environ)
     env["PYTHONPATH"] = (os.path.join(ws_root, "src") + os.pathsep
@@ -478,6 +482,8 @@ def _run_env(ws_root: str) -> dict:
     env["TMPDIR"] = tmp
     env["TEMP"] = tmp
     env["TMP"] = tmp
+    env["XDG_DATA_HOME"] = os.path.join(tmp, "xdg-data")
+    env["LOCALAPPDATA"] = os.path.join(tmp, "local-appdata")
     return env
 
 
