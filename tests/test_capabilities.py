@@ -27,6 +27,29 @@ class BuiltinCapabilityTableTests(unittest.TestCase):
             capability.workflows,
         )
 
+    def test_qwen_image_3_0_registers_as_economy(self) -> None:
+        capability = BUILTIN_CAPABILITIES["qwen-image-3.0"]
+
+        self.assertEqual("Qwen Image 3.0 经济版", capability.display_name)
+        self.assertEqual(ModelTier.ECONOMY, capability.tier)
+        self.assertEqual(
+            frozenset({Workflow.TEXT_TO_IMAGE, Workflow.IMAGE_EDIT}),
+            capability.workflows,
+        )
+
+    def test_qwen_image_3_0_shares_same_constraints_as_pro(self) -> None:
+        pro = BUILTIN_CAPABILITIES["qwen-image-3.0-pro"]
+        economy = BUILTIN_CAPABILITIES["qwen-image-3.0"]
+
+        self.assertEqual(
+            pro.for_workflow(Workflow.TEXT_TO_IMAGE),
+            economy.for_workflow(Workflow.TEXT_TO_IMAGE),
+        )
+        self.assertEqual(
+            pro.for_workflow(Workflow.IMAGE_EDIT),
+            economy.for_workflow(Workflow.IMAGE_EDIT),
+        )
+
     def test_qwen_text_to_image_capability_matches_verified_contract(self) -> None:
         text = BUILTIN_CAPABILITIES["qwen-image-3.0-pro"].for_workflow(
             Workflow.TEXT_TO_IMAGE
@@ -114,6 +137,12 @@ class ModelTierShelfTests(unittest.TestCase):
             BUILTIN_CAPABILITIES["qwen-image-3.0-pro"].tier,
         )
 
+    def test_qwen_image_3_0_is_shelved_as_economy(self) -> None:
+        self.assertEqual(
+            ModelTier.ECONOMY,
+            BUILTIN_CAPABILITIES["qwen-image-3.0"].tier,
+        )
+
     def test_builtin_table_has_at_most_one_model_per_tier_and_workflow(self) -> None:
         seen: set[tuple[ModelTier, Workflow]] = set()
         for capability in BUILTIN_CAPABILITIES.values():
@@ -132,22 +161,21 @@ class ModelTierShelfTests(unittest.TestCase):
         registry = CapabilityRegistry()
 
         flagship = registry.resolve_tier(Workflow.TEXT_TO_IMAGE, ModelTier.FLAGSHIP)
+        economy = registry.resolve_tier(Workflow.TEXT_TO_IMAGE, ModelTier.ECONOMY)
 
         self.assertIsNotNone(flagship)
         assert flagship is not None
         self.assertEqual("qwen-image-3.0-pro", flagship.model_id)
-
-    def test_resolve_tier_returns_none_when_tier_not_shelved(self) -> None:
-        registry = CapabilityRegistry()
-
-        self.assertIsNone(registry.resolve_tier(Workflow.TEXT_TO_IMAGE, ModelTier.ECONOMY))
+        self.assertIsNotNone(economy)
+        assert economy is not None
+        self.assertEqual("qwen-image-3.0", economy.model_id)
 
     def test_shelved_tiers_lists_only_tiers_available_for_workflow(self) -> None:
         registry = CapabilityRegistry()
 
         tiers = registry.shelved_tiers(Workflow.TEXT_TO_IMAGE)
 
-        self.assertEqual((ModelTier.FLAGSHIP,), tiers)
+        self.assertEqual((ModelTier.FLAGSHIP, ModelTier.ECONOMY), tiers)
 
 
 class SizeRuleCustomFlagTests(unittest.TestCase):
@@ -189,8 +217,14 @@ class CapabilityRegistryMergeTests(unittest.TestCase):
         text_to_image = CapabilityRegistry().for_workflow(Workflow.TEXT_TO_IMAGE)
         image_edit = CapabilityRegistry().for_workflow(Workflow.IMAGE_EDIT)
 
-        self.assertEqual(["qwen-image-3.0-pro"], [m.model_id for m in text_to_image])
-        self.assertEqual(["qwen-image-3.0-pro"], [m.model_id for m in image_edit])
+        self.assertEqual(
+            ["qwen-image-3.0-pro", "qwen-image-3.0"],
+            [m.model_id for m in text_to_image],
+        )
+        self.assertEqual(
+            ["qwen-image-3.0-pro", "qwen-image-3.0"],
+            [m.model_id for m in image_edit],
+        )
 
     def test_workflow_capability_lookup_resolves_per_workflow(self) -> None:
         registry = CapabilityRegistry()

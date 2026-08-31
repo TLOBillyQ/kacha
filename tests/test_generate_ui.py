@@ -175,13 +175,19 @@ ECON_MODEL = {
 def make_services(data_dir, output_dir, models):
     override_path = data_dir / "override.json"
     data_dir.mkdir(parents=True, exist_ok=True)
-    # 内置旗舰档占用 qwen-image-3.0-pro；测试条目接管档位前必须下架它
+    # 内置旗舰档占用 qwen-image-3.0-pro、经济档占用 qwen-image-3.0；
+    # 测试条目接管档位前必须下架它们。
     unshelf_pro = {
         "model_id": "qwen-image-3.0-pro",
         "display_name": "Qwen Image 3.0",
         "workflows": [tier_workflow("text_to_image")],
     }
-    write_override(override_path, [unshelf_pro, *models])
+    unshelf_economy = {
+        "model_id": "qwen-image-3.0",
+        "display_name": "Qwen Image 3.0 经济版",
+        "workflows": [tier_workflow("text_to_image")],
+    }
+    write_override(override_path, [unshelf_pro, unshelf_economy, *models])
     return ApplicationServices(
         user_data_dir=data_dir,
         output_root=output_dir,

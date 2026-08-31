@@ -176,6 +176,12 @@ BUILTIN_CAPABILITIES: dict[str, ModelCapability] = {
         workflow_capabilities=(QWEN_TEXT_WORKFLOW, QWEN_EDIT_WORKFLOW),
         tier=ModelTier.FLAGSHIP,
     ),
+    "qwen-image-3.0": ModelCapability(
+        model_id="qwen-image-3.0",
+        display_name="Qwen Image 3.0 经济版",
+        workflow_capabilities=(QWEN_TEXT_WORKFLOW, QWEN_EDIT_WORKFLOW),
+        tier=ModelTier.ECONOMY,
+    ),
 }
 
 

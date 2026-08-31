@@ -68,6 +68,12 @@ QWEN_ENTRY = {
     ],
 }
 
+QWEN_ECONOMY_UNSHELF = {
+    "model_id": "qwen-image-3.0",
+    "display_name": "Qwen Image 3.0 经济版",
+    "workflows": [workflow_entry("text_to_image")],
+}
+
 Z_IMAGE_TURBO_ENTRY = {
     "model_id": "z-image-turbo",
     "display_name": "快速写实文生图",
@@ -290,7 +296,9 @@ class OverrideTierTests(unittest.TestCase):
     def test_entry_with_tier_is_shelved(self) -> None:
         entry = {**Z_IMAGE_TURBO_ENTRY, "tier": "economy"}
         with TemporaryDirectory() as directory:
-            registry = CapabilityRegistry(write_override(directory, [entry]))
+            registry = CapabilityRegistry(
+                write_override(directory, [QWEN_ECONOMY_UNSHELF, entry])
+            )
 
         shelved = registry.resolve_tier(Workflow.TEXT_TO_IMAGE, ModelTier.ECONOMY)
         self.assertIsNotNone(shelved)
@@ -336,7 +344,9 @@ class OverrideTierTests(unittest.TestCase):
             "workflows": [workflow_entry("image_edit")],
         }
         with TemporaryDirectory() as directory:
-            registry = CapabilityRegistry(write_override(directory, [text_only, edit_only]))
+            registry = CapabilityRegistry(
+                write_override(directory, [QWEN_ECONOMY_UNSHELF, text_only, edit_only])
+            )
 
         self.assertEqual(
             "text-model",
@@ -348,8 +358,17 @@ class OverrideTierTests(unittest.TestCase):
         )
 
     def test_override_can_unshelf_builtin_model_by_omitting_tier(self) -> None:
+        unshelf_economy = {
+            **QWEN_ECONOMY_UNSHELF,
+            "workflows": [
+                workflow_entry("text_to_image"),
+                workflow_entry("image_edit"),
+            ],
+        }
         with TemporaryDirectory() as directory:
-            registry = CapabilityRegistry(write_override(directory, [QWEN_ENTRY]))
+            registry = CapabilityRegistry(
+                write_override(directory, [QWEN_ENTRY, unshelf_economy])
+            )
 
         self.assertIsNone(registry.resolve_tier(Workflow.TEXT_TO_IMAGE, ModelTier.FLAGSHIP))
         self.assertEqual((), registry.shelved_tiers(Workflow.IMAGE_EDIT))
@@ -365,7 +384,7 @@ class OverrideTierTests(unittest.TestCase):
         unshelf_pro = {**QWEN_ENTRY}  # 不带 tier，下架内置旗舰避免冲突
         with TemporaryDirectory() as directory:
             registry = CapabilityRegistry(
-                write_override(directory, [unshelf_pro, flagship, economy])
+                write_override(directory, [unshelf_pro, QWEN_ECONOMY_UNSHELF, flagship, economy])
             )
 
         self.assertEqual(

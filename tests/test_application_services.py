@@ -237,13 +237,29 @@ class CapabilityOverrideWiringTests(unittest.TestCase):
         entry.update(extra)
         return entry
 
+    def _qwen_economy_unshelf_entry(self) -> dict:
+        return {
+            "model_id": "qwen-image-3.0",
+            "display_name": "Qwen Image 3.0 经济版",
+            "workflows": [
+                {
+                    "workflow": "text_to_image",
+                    "supports_negative_prompt": False,
+                    "min_images": 1,
+                    "max_images": 1,
+                    "size": {"auto_allowed": True, "presets": [[1024, 1024]]},
+                }
+            ],
+        }
+
     def test_override_file_in_user_data_dir_is_applied_at_startup(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
             user_data = root / "user-data"
             user_data.mkdir()
             self._write_override(
-                user_data, [self._z_image_turbo_entry(tier="economy")]
+                user_data,
+                [self._qwen_economy_unshelf_entry(), self._z_image_turbo_entry(tier="economy")],
             )
 
             services = ApplicationServices(
