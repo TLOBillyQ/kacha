@@ -1,5 +1,6 @@
 .swarmforge/
 .worktrees/
+.claude/worktrees/
 
 # SwarmForge helper scripts are injected by the forge host at project open
 swarmforge/scripts/
