@@ -22,19 +22,31 @@
 """
 
 import os
+import sys
 from pathlib import Path
 
 
 SPEC_DIR = Path(SPECPATH).resolve()  # packaging/
 ROOT = SPEC_DIR.parent  # 仓库根
 
+# keyring 通过 entry points 动态加载后端，PyInstaller 静态分析抓不到，
+# 必须复制包元数据并显式收集后端子模块，否则 macOS 构建运行时找不到钥匙串后端。
+if sys.platform == "darwin":
+    from PyInstaller.utils.hooks import collect_submodules, copy_metadata
+
+    extra_datas = copy_metadata("keyring")
+    extra_hiddenimports = collect_submodules("keyring.backends")
+else:
+    extra_datas = []
+    extra_hiddenimports = []
+
 
 a = Analysis(
     [str(SPEC_DIR / "launcher.py")],
     pathex=[str(ROOT / "src")],
     binaries=[],
-    datas=[],
-    hiddenimports=[],
+    datas=extra_datas,
+    hiddenimports=extra_hiddenimports,
     hookspath=[],
     runtime_hooks=[],
     excludes=[],
@@ -73,3 +85,12 @@ coll = COLLECT(
     upx_exclude=[],
     name="ugc-image-tool",
 )
+
+if sys.platform == "darwin":
+    app = BUNDLE(
+        coll,
+        name="ugc-image-tool.app",
+        icon=None,
+        bundle_identifier="com.swarmforge.ugc-image-tool",
+        version=os.environ.get("UGC_IMAGE_TOOL_VERSION", "0.1.0"),
+    )

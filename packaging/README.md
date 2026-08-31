@@ -7,8 +7,9 @@
 
 | 文件 | 作用 |
 | --- | --- |
-| `ugc-image-tool.spec` | PyInstaller 目录模式规格；版本号驱动构建与压缩包命名 |
-| `build_release.py` | 一键构建/签名/压缩/校验值/发布检查 |
+| `ugc-image-tool.spec` | PyInstaller 目录模式规格；版本号驱动构建与压缩包命名；macOS 上额外产出 `.app`（BUNDLE） |
+| `build_release.py` | 一键构建/签名/压缩/校验值/发布检查（Windows） |
+| `build_macos.py` | macOS 开发版构建：`.app` + ad-hoc 签名 + ditto 压缩 + 发布检查 |
 | `verify_release.py` | 无密钥扫描 + SHA256SUMS 核对（CLI） |
 | `security_scan.py` | 扫描规则与校验工具（纯标准库，可被测试复用） |
 | `sign.ps1` | Authenticode 签名（优先 signtool，退回 PowerShell） |
@@ -44,6 +45,19 @@
 - 完整验收运行手册：`docs/release/release-checklist.md`。
 - 发布说明：`docs/release/release-notes-0.1.0.md`。
 - 无密钥检查自动化测试：`tests/test_release_security.py`。
+
+## macOS 开发版
+
+仅供开发/测试，不做 Apple 公证，不对团队分发：
+
+    # 安装构建依赖（keyring 由 pyproject 平台标记自动带上）
+    .venv/bin/pip install -e .[test] pyinstaller
+
+    .venv/bin/python packaging/build_macos.py
+
+产物：`release/ugc-image-tool.app` 与 `ugc-image-tool-<v>-macos-<arch>.zip`。
+ad-hoc 签名只固定代码哈希、不代表开发者身份；macOS 上 API 密钥存当前用户
+钥匙串（`KeychainCredentialService`），Windows 端仍走凭据库，两者互不影响。
 
 ## 说明
 

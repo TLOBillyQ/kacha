@@ -303,6 +303,34 @@ class MemoryCredentialService:
         self._key = None
 
 
+class KeychainCredentialService:
+    """macOS 钥匙串凭据服务；keyring 只在 darwin 安装（pyproject 平台标记），
+    导入延迟到构造时，避免其他平台 import 失败。"""
+
+    _USERNAME = "api-key"
+
+    def __init__(self) -> None:
+        import keyring
+        import keyring.errors
+
+        self._keyring = keyring
+        self._delete_error = keyring.errors.PasswordDeleteError
+
+    def save_api_key(self, key: str) -> None:
+        if not isinstance(key, str):
+            raise TypeError("API 密钥必须是字符串")
+        self._keyring.set_password(CREDENTIAL_SERVICE_NAME, self._USERNAME, key)
+
+    def api_key(self) -> str | None:
+        return self._keyring.get_password(CREDENTIAL_SERVICE_NAME, self._USERNAME)
+
+    def clear_api_key(self) -> None:
+        try:
+            self._keyring.delete_password(CREDENTIAL_SERVICE_NAME, self._USERNAME)
+        except self._delete_error:
+            pass
+
+
 _CRED_TYPE_GENERIC = 1
 _CRED_PERSIST_LOCAL_MACHINE = 2
 _ERROR_NOT_FOUND = 1168
