@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import sys
 from pathlib import Path
@@ -8,7 +9,7 @@ import unittest
 from unittest import mock
 
 from ugc_image_tool.application import GenerationApplication
-from ugc_image_tool.capabilities import ModelTier, Workflow
+from ugc_image_tool.capabilities import ModelTier
 from ugc_image_tool.generation import GatewayGenerationResult, GeneratedImage, ImageEditDraft, TextToImageDraft
 from ugc_image_tool.settings import (
     DEFAULT_BASE_URL,
@@ -42,6 +43,14 @@ class SettingsDefaultsTests(unittest.TestCase):
             Path.home() / "Pictures" / "UGC AI 生图工具",
             default_output_root(),
         )
+
+    def test_user_data_directory_creates_missing_parents(self) -> None:
+        with TemporaryDirectory() as directory:
+            user_data_dir = Path(directory) / "nested" / "user-data"
+
+            SettingsStore(user_data_dir)
+
+            self.assertTrue(user_data_dir.is_dir())
 
     def test_default_user_data_dir_uses_localappdata(self) -> None:
         # 模拟 sys.platform 而不是 os.name：后者在运行时反转会让 pathlib
@@ -114,6 +123,17 @@ class SettingsPersistenceTests(unittest.TestCase):
             store.save_base_url("http://lzxsvn.com:3001/")
             self.assertEqual("http://lzxsvn.com:3001", store.settings.base_url)
 
+    def test_sparse_settings_file_keeps_general_defaults(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.json"
+            path.write_text('{"schema_version": 1}', encoding="utf-8")
+
+            settings = SettingsStore(Path(directory)).settings
+
+            self.assertEqual(default_output_root(), settings.output_root)
+            self.assertEqual(DEFAULT_BASE_URL, settings.base_url)
+            self.assertEqual(DEFAULT_CONCURRENCY_LIMIT, settings.concurrency_limit)
+
 
 class SettingsValidationTests(unittest.TestCase):
     def test_concurrency_limit_rejects_out_of_range_values(self) -> None:
@@ -156,26 +176,34 @@ class SettingsValidationTests(unittest.TestCase):
             with self.assertRaises(SettingsStoreError):
                 SettingsStore(Path(directory))
 
+    def test_empty_output_root_rejects_whole_settings_file(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.json"
+            path.write_text(
+                '{"schema_version": 1, "output_root": ""}',
+                encoding="utf-8",
+            )
+            with self.assertRaises(SettingsStoreError):
+                SettingsStore(Path(directory))
+
 
 class SelectedTierPersistenceTests(unittest.TestCase):
-    """已选档位按工作流持久化；只存档位不存模型 ID。"""
+    """生成页只持久化一份已选档位；只存档位不存模型 ID。"""
 
     def test_selected_tier_defaults_to_flagship_without_settings_file(self) -> None:
         with TemporaryDirectory() as directory:
             store = SettingsStore(Path(directory))
 
-            self.assertEqual(ModelTier.FLAGSHIP, store.selected_tier(Workflow.TEXT_TO_IMAGE))
-            self.assertEqual(ModelTier.FLAGSHIP, store.selected_tier(Workflow.IMAGE_EDIT))
+            self.assertEqual(ModelTier.FLAGSHIP, store.selected_tier())
 
-    def test_selected_tier_persists_per_workflow_round_trip(self) -> None:
+    def test_selected_tier_persists_round_trip(self) -> None:
         with TemporaryDirectory() as directory:
             store = SettingsStore(Path(directory))
-            store.save_selected_tier(Workflow.TEXT_TO_IMAGE, ModelTier.ECONOMY)
+            store.save_selected_tier(ModelTier.ECONOMY)
 
             reloaded = SettingsStore(Path(directory))
 
-            self.assertEqual(ModelTier.ECONOMY, reloaded.selected_tier(Workflow.TEXT_TO_IMAGE))
-            self.assertEqual(ModelTier.FLAGSHIP, reloaded.selected_tier(Workflow.IMAGE_EDIT))
+            self.assertEqual(ModelTier.ECONOMY, reloaded.selected_tier())
             persisted = (Path(directory) / "settings.json").read_text(encoding="utf-8")
             self.assertNotIn("qwen-image", persisted)
 
@@ -189,7 +217,17 @@ class SelectedTierPersistenceTests(unittest.TestCase):
 
             store = SettingsStore(Path(directory))
 
-            self.assertEqual(ModelTier.FLAGSHIP, store.selected_tier(Workflow.TEXT_TO_IMAGE))
+            self.assertEqual(ModelTier.FLAGSHIP, store.selected_tier())
+
+    def test_invalid_selected_tier_rejects_whole_settings_file(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.json"
+            path.write_text(
+                '{"schema_version": 1, "selected_tier": "premium"}',
+                encoding="utf-8",
+            )
+            with self.assertRaises(SettingsStoreError):
+                SettingsStore(Path(directory))
 
     def test_invalid_tier_value_rejects_whole_settings_file(self) -> None:
         with TemporaryDirectory() as directory:
@@ -223,24 +261,22 @@ class SelectedTierPersistenceTests(unittest.TestCase):
 
 
 class NegativePromptEnabledPersistenceTests(unittest.TestCase):
-    """负向提示词面板勾选状态按工作流持久化；只存状态不存文本。"""
+    """生成页只持久化一份负向提示词勾选状态。"""
 
     def test_defaults_to_unchecked_without_settings_file(self) -> None:
         with TemporaryDirectory() as directory:
             store = SettingsStore(Path(directory))
 
-            self.assertFalse(store.negative_prompt_enabled(Workflow.TEXT_TO_IMAGE))
-            self.assertFalse(store.negative_prompt_enabled(Workflow.IMAGE_EDIT))
+            self.assertFalse(store.negative_prompt_enabled())
 
-    def test_persists_per_workflow_round_trip(self) -> None:
+    def test_persists_round_trip(self) -> None:
         with TemporaryDirectory() as directory:
             store = SettingsStore(Path(directory))
-            store.save_negative_prompt_enabled(Workflow.TEXT_TO_IMAGE, True)
+            store.save_negative_prompt_enabled(True)
 
             reloaded = SettingsStore(Path(directory))
 
-            self.assertTrue(reloaded.negative_prompt_enabled(Workflow.TEXT_TO_IMAGE))
-            self.assertFalse(reloaded.negative_prompt_enabled(Workflow.IMAGE_EDIT))
+            self.assertTrue(reloaded.negative_prompt_enabled())
 
     def test_old_settings_file_without_field_stays_compatible(self) -> None:
         with TemporaryDirectory() as directory:
@@ -252,7 +288,20 @@ class NegativePromptEnabledPersistenceTests(unittest.TestCase):
 
             store = SettingsStore(Path(directory))
 
-            self.assertFalse(store.negative_prompt_enabled(Workflow.TEXT_TO_IMAGE))
+            self.assertFalse(store.negative_prompt_enabled())
+
+    def test_legacy_text_only_state_is_ignored(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.json"
+            path.write_text(
+                '{"schema_version": 1, '
+                '"negative_prompt_enabled": {"text_to_image": true}}',
+                encoding="utf-8",
+            )
+
+            store = SettingsStore(Path(directory))
+
+            self.assertFalse(store.negative_prompt_enabled())
 
     def test_non_bool_value_rejects_whole_settings_file(self) -> None:
         with TemporaryDirectory() as directory:
@@ -274,11 +323,23 @@ class NegativePromptEnabledPersistenceTests(unittest.TestCase):
             with self.assertRaises(SettingsStoreError):
                 SettingsStore(Path(directory))
 
-    def test_non_object_field_rejects_whole_settings_file(self) -> None:
+    def test_bool_field_is_accepted(self) -> None:
         with TemporaryDirectory() as directory:
             path = Path(directory) / "settings.json"
             path.write_text(
                 '{"schema_version": 1, "negative_prompt_enabled": true}',
+                encoding="utf-8",
+            )
+
+            store = SettingsStore(Path(directory))
+
+            self.assertTrue(store.negative_prompt_enabled())
+
+    def test_non_bool_non_object_field_rejects_whole_settings_file(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.json"
+            path.write_text(
+                '{"schema_version": 1, "negative_prompt_enabled": "yes"}',
                 encoding="utf-8",
             )
             with self.assertRaises(SettingsStoreError):
@@ -376,6 +437,22 @@ class SettingsApplicationTests(unittest.TestCase):
             application.set_output_root(Path(directory) / "out")
             self.assertIsNone(application.output_directory_error())
 
+    def test_output_directory_error_reports_failed_write_probe(self) -> None:
+        with TemporaryDirectory() as directory:
+            output = Path(directory) / "out"
+            output.mkdir()
+            application = SettingsApplication(
+                SettingsStore(Path(directory) / "user-data"),
+                MemoryCredentialService(),
+            )
+            application.set_output_root(output)
+
+            with mock.patch.object(Path, "write_bytes", side_effect=OSError):
+                error = application.output_directory_error()
+
+            self.assertIsNotNone(error)
+            self.assertIn("不可写", error or "")
+
 
 class SubmissionGuardTests(unittest.TestCase):
     def test_guard_blocks_submit_text_with_actionable_message(self) -> None:
@@ -452,17 +529,18 @@ class GenerationStateConvergenceTests(unittest.TestCase):
     def test_generation_tier_reads_image_edit_value_ignoring_text_to_image(self) -> None:
         with TemporaryDirectory() as directory:
             path = Path(directory) / "settings.json"
-            path.write_text(
+            legacy = (
                 '{"schema_version": 1, '
-                '"selected_tiers": {"text_to_image": "flagship", "image_edit": "economy"}}',
-                encoding="utf-8",
+                '"selected_tiers": {"text_to_image": "flagship", "image_edit": "economy"}}'
             )
+            path.write_text(legacy, encoding="utf-8")
             application = SettingsApplication(
                 SettingsStore(Path(directory)),
                 MemoryCredentialService(),
             )
 
             self.assertEqual(ModelTier.ECONOMY, application.generation_tier())
+            self.assertEqual(legacy, path.read_text(encoding="utf-8"))
 
     def test_generation_negative_reads_image_edit_value_ignoring_text_to_image(self) -> None:
         with TemporaryDirectory() as directory:
@@ -487,6 +565,13 @@ class GenerationStateConvergenceTests(unittest.TestCase):
             )
             application.save_generation_tier(ModelTier.ECONOMY)
             application.save_generation_negative_prompt_enabled(True)
+
+            persisted = json.loads(
+                (Path(directory) / "settings.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual("economy", persisted["selected_tier"])
+            self.assertIs(True, persisted["negative_prompt_enabled"])
+            self.assertNotIn("selected_tiers", persisted)
 
             reloaded = SettingsApplication(
                 SettingsStore(Path(directory)),
