@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 
 from ugc_image_tool.capabilities import (
     BUILTIN_CAPABILITIES,
@@ -12,11 +13,14 @@ from ugc_image_tool.capabilities import (
     WorkflowCapability,
 )
 from ugc_image_tool.generation import (
+    ImageEditDraft,
     SizeMode,
     SizeSpec,
     TextToImageDraft,
     build_request,
     draft_errors,
+    generate_draft_errors,
+    image_edit_draft_errors,
 )
 
 QWEN = BUILTIN_CAPABILITIES["qwen-image-3.0-pro"]
@@ -116,10 +120,28 @@ class DraftValidationTests(unittest.TestCase):
         self.assertTrue(any("宽高比" in error for error in errors))
 
     def test_custom_size_requires_positive_integers(self) -> None:
-        errors = draft_errors(
-            qwen_draft(size_mode=SizeMode.CUSTOM, size_width=0, size_height=-1), QWEN
-        )
-        self.assertTrue(any("宽高" in error for error in errors))
+        for width, height in ((0, 512), (512, 0)):
+            errors = draft_errors(
+                qwen_draft(
+                    size_mode=SizeMode.CUSTOM,
+                    size_width=width,
+                    size_height=height,
+                ),
+                QWEN,
+            )
+            self.assertIn("请输入有效的自定义宽高", errors)
+
+    def test_positive_unit_dimensions_reach_capability_validation(self) -> None:
+        for width, height in ((1, 512), (512, 1)):
+            errors = draft_errors(
+                qwen_draft(
+                    size_mode=SizeMode.CUSTOM,
+                    size_width=width,
+                    size_height=height,
+                ),
+                QWEN,
+            )
+            self.assertNotIn("请输入有效的自定义宽高", errors)
 
     def test_preset_outside_capability_is_rejected(self) -> None:
         errors = draft_errors(
@@ -136,6 +158,67 @@ class DraftValidationTests(unittest.TestCase):
         )
         errors = draft_errors(qwen_draft(model_id="no-auto"), no_auto)
         self.assertTrue(any("自动决定" in error for error in errors))
+
+    def test_generate_draft_without_references_reuses_text_validation(self) -> None:
+        errors = generate_draft_errors(
+            ImageEditDraft(
+                prompt="  ",
+                model_id="qwen-image-3.0-pro",
+                image_count=3,
+            ),
+            QWEN,
+        )
+
+        self.assertEqual(
+            ["请输入正向提示词", "出图数量需在 1～2 之间"],
+            errors,
+        )
+
+    def test_generate_draft_with_references_reuses_edit_validation(self) -> None:
+        errors = generate_draft_errors(
+            ImageEditDraft(
+                prompt="保留构图",
+                model_id="qwen-image-3.0-pro",
+                image_count=6,
+                reference_paths=(Path("reference.png"),),
+            ),
+            QWEN,
+        )
+
+        self.assertEqual(["出图数量需在 1～5 之间"], errors)
+
+    def test_image_edit_validation_requires_at_least_one_reference(self) -> None:
+        errors = image_edit_draft_errors(
+            ImageEditDraft(prompt="保留构图", model_id="qwen-image-3.0-pro"),
+            QWEN,
+        )
+
+        self.assertEqual(["参考图数量需在 1～3 之间"], errors)
+
+    def test_image_edit_validation_describes_an_exact_reference_limit(self) -> None:
+        exact_reference_capability = ModelCapability(
+            model_id="exact-edit",
+            display_name="固定一张参考图",
+            workflow_capabilities=(
+                WorkflowCapability(
+                    workflow=Workflow.IMAGE_EDIT,
+                    supports_negative_prompt=False,
+                    min_images=1,
+                    max_images=1,
+                    size=SizeRule(auto_allowed=True, presets=()),
+                    reference_limits=ReferenceLimits(
+                        min_references=1,
+                        max_references=1,
+                    ),
+                ),
+            ),
+        )
+        errors = image_edit_draft_errors(
+            ImageEditDraft(prompt="保留构图", model_id="exact-edit"),
+            exact_reference_capability,
+        )
+
+        self.assertEqual(["参考图数量需为 1 张"], errors)
 
 
 class DraftSnapshotFilteringTests(unittest.TestCase):

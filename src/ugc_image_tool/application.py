@@ -22,12 +22,13 @@ from .generation import (
     TextToImageRequest,
     build_request,
     draft_errors,
+    image_edit_draft_errors,
     ImageEditDraft,
     ImageEditRequest,
+    text_draft_from_generate,
     _snapshot_size,
-    _size_errors,
 )
-from .references import inspect_reference_image
+from .references import ReferenceImage, inspect_reference_image
 from .settings import (
     DEFAULT_CONCURRENCY_LIMIT,
     MAX_CONCURRENCY_LIMIT,
@@ -134,17 +135,7 @@ class GenerationApplication:
         """
         if draft.reference_paths:
             return self.submit_edit(draft)
-        return self.submit_text(
-            TextToImageDraft(
-                prompt=draft.prompt,
-                model_id=draft.model_id,
-                negative_prompt=draft.negative_prompt,
-                size_mode=draft.size_mode,
-                size_width=draft.size_width,
-                size_height=draft.size_height,
-                image_count=draft.image_count,
-            )
-        )
+        return self.submit_text(text_draft_from_generate(draft))
 
     def submit_text(self, draft: TextToImageDraft) -> str:
         """Validate and freeze a draft, then place one task in the FIFO queue."""
@@ -162,64 +153,30 @@ class GenerationApplication:
             request=request,
             submitted_at=datetime.now(UTC),
         )
-        with self._lock:
-            self._ensure_open()
-            self._tasks[task.task_id] = task
-            self._completion_futures[task.task_id] = Future()
-            self._stop_events[task.task_id] = Event()
-            self._queue.append(task.task_id)
-            self._notify(task)
-            self._schedule_locked()
-        self._log_transition(task, from_status=None)
-        return task.task_id
+        return self._enqueue_task(task)
 
     def submit_edit(self, draft: ImageEditDraft) -> str:
         self._ensure_submission_allowed()
         if not draft.model_id:
             raise ValueError("请选择模型")
-        edit_capability = self._capabilities.workflow_capability(
-            draft.model_id, Workflow.IMAGE_EDIT
-        )
-        if edit_capability is None:
-            raise ValueError("该模型不支持图片编辑")
-        if not draft.prompt.strip():
-            raise ValueError("请输入正向提示词")
-        if (draft.negative_prompt or "").strip() and not edit_capability.supports_negative_prompt:
-            raise ValueError("该模型的图片编辑不支持负向提示词")
-        if not edit_capability.min_images <= draft.image_count <= edit_capability.max_images:
-            raise ValueError(
-                f"出图数量需在 {edit_capability.min_images}～{edit_capability.max_images} 之间"
-            )
-        reference_limits = edit_capability.reference_limits
-        if not (
-            reference_limits.min_references
-            <= len(draft.reference_paths)
-            <= reference_limits.max_references
-        ):
-            if reference_limits.min_references == reference_limits.max_references:
-                raise ValueError(
-                    f"参考图数量需为 {reference_limits.min_references} 张"
-                )
-            raise ValueError(
-                f"参考图数量需在 {reference_limits.min_references}～"
-                f"{reference_limits.max_references} 之间"
-            )
-        errors = _size_errors(draft, edit_capability)
+        capability = self._capabilities.capability(draft.model_id)
+        errors = image_edit_draft_errors(draft, capability)
         if errors:
             raise ValueError("；".join(errors))
-        references = tuple(inspect_reference_image(path) for path in draft.reference_paths)
+        assert capability is not None
         task_id = uuid4().hex
         submitted_at = datetime.now(UTC)
-        references = tuple(
-            self._results.save_reference_snapshot(task_id, submitted_at, reference, index)
-            for index, reference in enumerate(references, 1)
+        references = self._snapshot_references(
+            draft.reference_paths,
+            task_id,
+            submitted_at,
         )
         request = ImageEditRequest(
             prompt=draft.prompt.strip(),
             model_id=draft.model_id,
             capability_version=self._capabilities.version,
             references=references,
-            negative_prompt=(draft.negative_prompt or "").strip() or None,
+            negative_prompt=_optional_text(draft.negative_prompt),
             size=_snapshot_size(draft),
             image_count=draft.image_count,
         )
@@ -229,6 +186,26 @@ class GenerationApplication:
             submitted_at=submitted_at,
             workflow=Workflow.IMAGE_EDIT,
         )
+        return self._enqueue_task(task)
+
+    def _snapshot_references(
+        self,
+        reference_paths: tuple[Path, ...],
+        task_id: str,
+        submitted_at: datetime,
+    ) -> tuple[ReferenceImage, ...]:
+        references = tuple(inspect_reference_image(path) for path in reference_paths)
+        return tuple(
+            self._results.save_reference_snapshot(
+                task_id,
+                submitted_at,
+                reference,
+                index,
+            )
+            for index, reference in enumerate(references, 1)
+        )
+
+    def _enqueue_task(self, task: GenerationTask) -> str:
         with self._lock:
             self._ensure_open()
             self._tasks[task.task_id] = task
@@ -651,6 +628,10 @@ class GenerationApplication:
         message = self._submission_guard()
         if message:
             raise ValueError(message)
+
+
+def _optional_text(value: str | None) -> str | None:
+    return (value or "").strip() or None
 
 
 def _gateway_error_outcome(

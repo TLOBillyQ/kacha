@@ -446,10 +446,10 @@ class _StubResults:
         pass
 
 
-class PageStateConvergenceTests(unittest.TestCase):
+class GenerationStateConvergenceTests(unittest.TestCase):
     """合并页收敛为一份状态：新键缺省回退 image_edit 旧值、弃用 text_to_image。"""
 
-    def test_page_tier_reads_image_edit_value_ignoring_text_to_image(self) -> None:
+    def test_generation_tier_reads_image_edit_value_ignoring_text_to_image(self) -> None:
         with TemporaryDirectory() as directory:
             path = Path(directory) / "settings.json"
             path.write_text(
@@ -462,9 +462,9 @@ class PageStateConvergenceTests(unittest.TestCase):
                 MemoryCredentialService(),
             )
 
-            self.assertEqual(ModelTier.ECONOMY, application.page_tier())
+            self.assertEqual(ModelTier.ECONOMY, application.generation_tier())
 
-    def test_page_negative_reads_image_edit_value_ignoring_text_to_image(self) -> None:
+    def test_generation_negative_reads_image_edit_value_ignoring_text_to_image(self) -> None:
         with TemporaryDirectory() as directory:
             path = Path(directory) / "settings.json"
             path.write_text(
@@ -477,24 +477,24 @@ class PageStateConvergenceTests(unittest.TestCase):
                 MemoryCredentialService(),
             )
 
-            self.assertTrue(application.page_negative_prompt_enabled())
+            self.assertTrue(application.generation_negative_prompt_enabled())
 
-    def test_page_save_persists_round_trip(self) -> None:
+    def test_generation_state_persists_round_trip(self) -> None:
         with TemporaryDirectory() as directory:
             application = SettingsApplication(
                 SettingsStore(Path(directory)),
                 MemoryCredentialService(),
             )
-            application.save_page_tier(ModelTier.ECONOMY)
-            application.save_page_negative_prompt_enabled(True)
+            application.save_generation_tier(ModelTier.ECONOMY)
+            application.save_generation_negative_prompt_enabled(True)
 
             reloaded = SettingsApplication(
                 SettingsStore(Path(directory)),
                 MemoryCredentialService(),
             )
 
-            self.assertEqual(ModelTier.ECONOMY, reloaded.page_tier())
-            self.assertTrue(reloaded.page_negative_prompt_enabled())
+            self.assertEqual(ModelTier.ECONOMY, reloaded.generation_tier())
+            self.assertTrue(reloaded.generation_negative_prompt_enabled())
 
 
 if __name__ == "__main__":

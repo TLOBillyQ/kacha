@@ -26,6 +26,7 @@ DEFAULT_CONCURRENCY_LIMIT = 3
 MIN_CONCURRENCY_LIMIT = 1
 MAX_CONCURRENCY_LIMIT = 6
 CREDENTIAL_SERVICE_NAME = "ugc-image-tool"
+_GENERATION_STATE_WORKFLOW = Workflow.IMAGE_EDIT
 
 
 def default_user_data_dir() -> Path:
@@ -461,33 +462,21 @@ class SettingsApplication:
     def set_concurrency_limit(self, value: int) -> None:
         self._store.save_concurrency_limit(value)
 
-    def selected_tier(self, workflow: Workflow) -> ModelTier:
-        return self._store.selected_tier(workflow)
-
-    def save_selected_tier(self, workflow: Workflow, tier: ModelTier) -> None:
-        self._store.save_selected_tier(workflow, tier)
-
-    def negative_prompt_enabled(self, workflow: Workflow) -> bool:
-        return self._store.negative_prompt_enabled(workflow)
-
-    def save_negative_prompt_enabled(self, workflow: Workflow, enabled: bool) -> None:
-        self._store.save_negative_prompt_enabled(workflow, enabled)
-
     # 合并后的单一「生成」页只有一套状态（档位 + 负向勾选）。持久化复用
     # image_edit 工作流键作为单一来源：旧版本设置文件里 image_edit 的值优先，
     # text_to_image 那份弃用（不写迁移代码）。Workflow 枚举仍保留两值仅供任务
     # 内部类型与工作流校验复用。
-    def page_tier(self) -> ModelTier:
-        return self._store.selected_tier(Workflow.IMAGE_EDIT)
+    def generation_tier(self) -> ModelTier:
+        return self._store.selected_tier(_GENERATION_STATE_WORKFLOW)
 
-    def save_page_tier(self, tier: ModelTier) -> None:
-        self._store.save_selected_tier(Workflow.IMAGE_EDIT, tier)
+    def save_generation_tier(self, tier: ModelTier) -> None:
+        self._store.save_selected_tier(_GENERATION_STATE_WORKFLOW, tier)
 
-    def page_negative_prompt_enabled(self) -> bool:
-        return self._store.negative_prompt_enabled(Workflow.IMAGE_EDIT)
+    def generation_negative_prompt_enabled(self) -> bool:
+        return self._store.negative_prompt_enabled(_GENERATION_STATE_WORKFLOW)
 
-    def save_page_negative_prompt_enabled(self, enabled: bool) -> None:
-        self._store.save_negative_prompt_enabled(Workflow.IMAGE_EDIT, enabled)
+    def save_generation_negative_prompt_enabled(self, enabled: bool) -> None:
+        self._store.save_negative_prompt_enabled(_GENERATION_STATE_WORKFLOW, enabled)
 
     def output_directory_error(self) -> str | None:
         """返回阻止提交的可操作错误；输出目录可写时返回 None。"""
