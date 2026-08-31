@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import cast
+from typing import Callable, cast
 
 from PySide6.QtCore import QSize, Qt, Signal, Slot
 from PySide6.QtGui import QIcon, QStandardItemModel
@@ -32,7 +32,7 @@ from PySide6.QtWidgets import (
 )
 
 from ...capabilities import ModelTier, Workflow
-from ...generation import ImageEditDraft, SizeMode
+from ...generation import ImageEditDraft, SizeMode, generate_draft_errors
 from ...presets import PresetProject, PresetStoreError, ProjectPreset
 from ...references import inspect_reference_image
 from ...services import ApplicationServices
@@ -119,7 +119,7 @@ class GeneratePage(QWidget):
         self._negative_prompt_check.toggled.connect(self._toggle_negative_prompt)
         self._negative_prompt.setVisible(False)
         self._negative_prompt_check.setChecked(
-            self._settings.page_negative_prompt_enabled()
+            self._settings.generation_negative_prompt_enabled()
         )
 
         self._preset_combo = QComboBox()
@@ -305,7 +305,7 @@ class GeneratePage(QWidget):
 
     def _restore_tier_selection(self) -> None:
         """优先持久化档位（用户的真实选择），其次当前选择，最后回退旗舰档。"""
-        persisted = self._settings.page_tier()
+        persisted = self._settings.generation_tier()
         candidates = (persisted, self._selected_tier, *ModelTier)
         for candidate in candidates:
             if candidate is not None and candidate in self._tier_models:
@@ -324,7 +324,7 @@ class GeneratePage(QWidget):
     @Slot(ModelTier)
     def _on_tier_changed(self, tier: ModelTier) -> None:
         self._selected_tier = tier
-        self._settings.save_page_tier(tier)
+        self._settings.save_generation_tier(tier)
         self._apply_current_tier()
 
     def _current_workflow_capability(self):
@@ -424,7 +424,7 @@ class GeneratePage(QWidget):
     @Slot(bool)
     def _toggle_negative_prompt(self, expanded: bool) -> None:
         self._negative_prompt.setVisible(expanded)
-        self._settings.save_page_negative_prompt_enabled(expanded)
+        self._settings.save_generation_negative_prompt_enabled(expanded)
 
     @Slot(int)
     def _on_count_changed(self, value: int) -> None:
@@ -609,44 +609,58 @@ class GeneratePage(QWidget):
         source = self._selected_preset()
         if source is None:
             return
-        name, accepted = QInputDialog.getText(
-            self,
-            "复制为个人预设",
-            "显示名称",
-            text=source.display_name,
+        self._modify_personal_preset(
+            source,
+            title="复制为个人预设",
+            failure="复制个人预设失败",
+            success="个人预设已创建",
+            operation=lambda name: self._presets.copy_builtin_as_personal(
+                source.preset_id,
+                name,
+            ),
         )
-        if not accepted:
-            return
-        try:
-            preset = self._presets.copy_builtin_as_personal(source.preset_id, name)
-        except (ValueError, PresetStoreError, KeyError) as error:
-            self.status_message.emit(f"复制个人预设失败：{error}")
-            return
-        self._populate_presets()
-        self._select_preset(preset.preset_id)
-        self.status_message.emit(f"个人预设已创建：{preset.display_name}")
 
     @Slot()
     def _edit_selected_preset(self) -> None:
         source = self._selected_preset()
         if source is None or source.read_only:
             return
+        self._modify_personal_preset(
+            source,
+            title="编辑个人预设",
+            failure="编辑个人预设失败",
+            success="个人预设已更新",
+            operation=lambda name: self._presets.update_personal_preset(
+                source.preset_id,
+                name,
+            ),
+        )
+
+    def _modify_personal_preset(
+        self,
+        source: ProjectPreset,
+        *,
+        title: str,
+        failure: str,
+        success: str,
+        operation: Callable[[str], ProjectPreset],
+    ) -> None:
         name, accepted = QInputDialog.getText(
             self,
-            "编辑个人预设",
+            title,
             "显示名称",
             text=source.display_name,
         )
         if not accepted:
             return
         try:
-            preset = self._presets.update_personal_preset(source.preset_id, name)
+            preset = operation(name)
         except (ValueError, PresetStoreError, KeyError) as error:
-            self.status_message.emit(f"编辑个人预设失败：{error}")
+            self.status_message.emit(f"{failure}：{error}")
             return
         self._populate_presets()
         self._select_preset(preset.preset_id)
-        self.status_message.emit(f"个人预设已更新：{preset.display_name}")
+        self.status_message.emit(f"{success}：{preset.display_name}")
 
     @Slot()
     def _delete_selected_preset(self) -> None:
@@ -738,15 +752,7 @@ class GeneratePage(QWidget):
             self._submit.setEnabled(False)
             return
         capability = self._capabilities.capability(draft.model_id)
-        workflow = self._current_workflow()
-        workflow_capability = (
-            capability.for_workflow(workflow) if capability is not None else None
-        )
-        if workflow_capability is None:
-            self._validation.setText("该模型不支持当前任务类型")
-            self._submit.setEnabled(False)
-            return
-        errors = _draft_errors(draft, capability, workflow)
+        errors = generate_draft_errors(draft, capability)
         if errors:
             self._validation.setText("；".join(errors))
             self._submit.setEnabled(False)
@@ -765,63 +771,3 @@ class GeneratePage(QWidget):
             self.status_message.emit(str(error))
         else:
             self._presets.mark_prompt_submitted()
-
-
-def _draft_errors(draft: ImageEditDraft, capability, workflow: Workflow) -> list[str]:
-    """按当前任务类型的工作流能力校验草稿，返回全部具体错误。"""
-    workflow_capability = capability.for_workflow(workflow)
-    if workflow_capability is None:
-        return ["该模型不支持当前任务类型"]
-    errors: list[str] = []
-    if not draft.prompt.strip():
-        errors.append("请输入正向提示词")
-    if (
-        draft.negative_prompt
-        and not workflow_capability.supports_negative_prompt
-    ):
-        errors.append("该模型不支持负向提示词")
-    if not (
-        workflow_capability.min_images
-        <= draft.image_count
-        <= workflow_capability.max_images
-    ):
-        errors.append(
-            f"出图数量需在 {workflow_capability.min_images}～"
-            f"{workflow_capability.max_images} 之间"
-        )
-    if workflow is Workflow.IMAGE_EDIT:
-        limits = workflow_capability.reference_limits
-        if not (limits.min_references <= len(draft.reference_paths) <= limits.max_references):
-            if limits.min_references == limits.max_references:
-                errors.append(f"参考图数量需为 {limits.min_references} 张")
-            else:
-                errors.append(
-                    f"参考图数量需在 {limits.min_references}～{limits.max_references} 之间"
-                )
-    errors.extend(_size_errors(draft, workflow_capability))
-    return errors
-
-
-def _size_errors(draft: ImageEditDraft, capability) -> list[str]:
-    errors: list[str] = []
-    if draft.size_mode is SizeMode.AUTO:
-        if not capability.size.auto_allowed:
-            errors.append("该模型不支持模型自动决定尺寸")
-        return errors
-    if draft.size_mode is SizeMode.PRESET:
-        if (draft.size_width, draft.size_height) not in capability.size.presets:
-            errors.append("所选常用尺寸不在模型允许的预设中")
-        return errors
-    width, height = draft.size_width, draft.size_height
-    if (
-        not isinstance(width, int)
-        or not isinstance(height, int)
-        or width <= 0
-        or height <= 0
-    ):
-        errors.append("请输入有效的自定义宽高")
-        return errors
-    if not capability.size.custom_size_allowed:
-        errors.append("该模型不支持自定义尺寸")
-        return errors
-    return capability.size.custom_size_errors(width, height)

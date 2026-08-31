@@ -283,13 +283,13 @@ assert page._negative_prompt.toPlainText() == "模糊，低清晰度"
         self.run_qt_case(
             """
 page._negative_prompt_check.setChecked(True)
-assert services.settings.page_negative_prompt_enabled()
+assert services.settings.generation_negative_prompt_enabled()
 
 second = GeneratePage(services)
 assert second._negative_prompt_check.isChecked()
 second.close()
 
-services.settings.save_page_negative_prompt_enabled(False)
+services.settings.save_generation_negative_prompt_enabled(False)
 third = GeneratePage(services)
 assert not third._negative_prompt_check.isChecked()
 third.close()
@@ -446,7 +446,7 @@ assert not econ.isEnabled()
 assert econ.toolTip(), "禁用分段必须给出原因"
 assert page._current_model_id() == "flag-model"
 # 记住的档位不被覆盖，经济档恢复后仍应回到经济档
-assert services.settings.page_tier() == ModelTier.ECONOMY
+assert services.settings.generation_tier() == ModelTier.ECONOMY
 page.set_models(("flag-model", "econ-model"))
 assert page._current_model_id() == "econ-model"
 """
