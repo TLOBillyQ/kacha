@@ -59,6 +59,15 @@ def validate_base_url(value: str) -> str:
     parsed = urlparse(stripped)
     if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
         raise ValueError("网关基础地址必须以 http:// 或 https:// 开头并包含主机名")
+    # urlparse 接受 Unicode 主机名，但 httpx 发请求时按 ASCII 编码会直接抛
+    # UnicodeEncodeError（实测：地址里混入“→”时连接检查报看不懂的编解码错误）。
+    # 在保存时就拦下并指出具体字符。
+    for char in stripped:
+        if ord(char) > 127:
+            raise ValueError(
+                f"网关基础地址含有非法字符“{char}”，"
+                "请确认没有混入箭头、中文标点或多余文字"
+            )
     return stripped
 
 
@@ -487,6 +496,14 @@ class SettingsApplication:
     def save_api_key(self, key: str) -> None:
         if not isinstance(key, str) or not key.strip():
             raise ValueError("API 密钥不能为空")
+        # 实测事故：把整段中文说明文字粘进密钥框后，httpx 在编码认证头时抛
+        # UnicodeEncodeError，连接检查只报看不懂的编解码错误。保存时拦下。
+        for char in key:
+            if ord(char) > 127:
+                raise ValueError(
+                    f"API 密钥含有非法字符“{char}”，"
+                    "请确认粘贴的是密钥本身，没有混入其他文字"
+                )
         self._credentials.save_api_key(key)
 
     @property
