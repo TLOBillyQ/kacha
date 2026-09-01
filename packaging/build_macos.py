@@ -1,19 +1,23 @@
-"""构建 UGC AI 生图工具 macOS 开发版 .app（当前仅供开发/测试，不做公证）。
+"""构建 UGC AI 生图工具 macOS 版 .app（ADR 0007：ad-hoc 签名、不做公证）。
 
 流程：
 1. 以目录模式（onedir）运行 PyInstaller，规格中的 BUNDLE 段产出
    ugc-image-tool.app。
 2. ad-hoc 签名（codesign -s -）：仅为让 Gatekeeper 与钥匙串访问行为稳定，
-   不代表开发者身份；分发构建才需要 Developer ID + 公证。
+   不代表开发者身份（ADR 0007：不做公证，发布说明含右键打开绕过步骤）。
 3. 用 ditto 压缩为 ugc-image-tool-<版本>-macos-<架构>.zip（保留签名与权限）。
-4. 写出 SHA256SUMS 与 build-info.json。
+4. 写出 SHA256SUMS（仅压缩包）与 build-info.json。
 5. 运行 packaging/verify_release.py 做无密钥发布检查；发现泄漏即失败。
+
+产物布局：.app 与 PyInstaller 中间产物在 release/work/，release/ 顶层
+只留 zip、SHA256SUMS、build-info.json。
 
 示例：
     python packaging/build_macos.py
     python packaging/build_macos.py --skip-sign --skip-zip
 
-发布物不含 API 密钥；macOS 上密钥存于当前用户钥匙串（KeychainCredentialService）。
+版本号唯一来源是 pyproject.toml 的 version。发布物不含 API 密钥；macOS 上
+密钥存于当前用户钥匙串（KeychainCredentialService）。
 """
 
 from __future__ import annotations
@@ -27,7 +31,8 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from security_scan import sha256_of
+from release_meta import pyproject_version
+from security_scan import checksum_line
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PACKAGING_DIR = Path(__file__).resolve().parent
@@ -51,15 +56,6 @@ def _git_head() -> str:
     return result.stdout.strip()
 
 
-def _package_version(override: str | None) -> str:
-    if override:
-        return override.strip()
-    sys.path.insert(0, str(REPO_ROOT / "src"))
-    from ugc_image_tool import __version__  # type: ignore[import-not-found, import-untyped]
-
-    return __version__
-
-
 def _archive_base_name(version: str) -> str:
     arch = platform.machine() or "unknown"
     return f"{ARCHIVE_BASE}-{version}-macos-{arch}"
@@ -78,19 +74,6 @@ def _make_zip(app_path: Path, out_zip: Path) -> None:
         out_zip.unlink()
     _run(["ditto", "-c", "-k", "--keepParent", str(app_path), str(out_zip)])
     print(f"[ok] 压缩包：{out_zip.name}")
-
-
-def _write_sha256(release_dir: Path, zip_path: Path, app_path: Path) -> None:
-    lines = [f"{sha256_of(zip_path)}  {zip_path.name}"]
-    binary = app_path / "Contents" / "MacOS" / ARCHIVE_BASE
-    if binary.is_file():
-        lines.append(
-            f"{sha256_of(binary)}  {binary.relative_to(app_path.parent).as_posix()}"
-        )
-    (release_dir / "SHA256SUMS").write_text(
-        "\n".join(lines) + "\n", encoding="utf-8"
-    )
-    print("[ok] 已写出 SHA256SUMS。")
 
 
 def _build_info(version: str, signed: bool, zip_path: Path) -> dict[str, object]:
@@ -112,7 +95,7 @@ def _build_info(version: str, signed: bool, zip_path: Path) -> dict[str, object]
         "archive": zip_path.name,
         "signed": signed,
         "signature_status": "ad-hoc" if signed else "unsigned",
-        "distribution": "开发版：ad-hoc 签名、未公证，仅供开发/测试，不对团队分发",
+        "distribution": "ad-hoc 签名、未公证、仅 Apple Silicon；经 Gitea Release 分发（ADR 0007）",
         "http_warning": "默认网关地址为明文 HTTP，仅限隔离内网或可信 VPN；非可信网络必须先启用 HTTPS。",
     }
 
@@ -121,9 +104,8 @@ def main(argv: list[str] | None = None) -> int:
     if sys.platform != "darwin":
         raise SystemExit("build_macos.py 只能在 macOS 上运行；Windows 请用 build_release.py")
     parser = argparse.ArgumentParser(
-        description="构建 UGC AI 生图工具 macOS 开发版 .app"
+        description="构建 UGC AI 生图工具 macOS 版 .app（ad-hoc 签名、未公证）"
     )
-    parser.add_argument("--version", default=None, help="发布版本号；默认读取包内版本")
     parser.add_argument(
         "--release-dir",
         default=str((REPO_ROOT / "release").resolve()),
@@ -135,12 +117,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--skip-verify", action="store_true", help="跳过发布检查")
     args = parser.parse_args(argv)
 
-    version = _package_version(args.version)
+    version = pyproject_version(REPO_ROOT)
     release_dir = Path(args.release_dir)
-    work_path = release_dir / "work-macos"
+    work_root = release_dir / "work"
+    pyinstaller_workpath = work_root / "pyinstaller"
 
     if not args.skip_build:
-        release_dir.mkdir(parents=True, exist_ok=True)
+        work_root.mkdir(parents=True, exist_ok=True)
         env = dict(os.environ)
         env["UGC_IMAGE_TOOL_VERSION"] = version
         _run(
@@ -148,14 +131,14 @@ def main(argv: list[str] | None = None) -> int:
                 sys.executable,
                 "-m", "PyInstaller",
                 "--noconfirm", "--clean",
-                "--distpath", str(release_dir),
-                "--workpath", str(work_path),
+                "--distpath", str(work_root),
+                "--workpath", str(pyinstaller_workpath),
                 str(PACKAGING_DIR / "ugc-image-tool.spec"),
             ],
             env=env,
         )
 
-    app_path = release_dir / APP_NAME
+    app_path = work_root / APP_NAME
     if not app_path.is_dir():
         raise SystemExit(f"构建输出缺失：{app_path}")
 
@@ -167,7 +150,11 @@ def main(argv: list[str] | None = None) -> int:
     zip_path = release_dir / f"{_archive_base_name(version)}.zip"
     if not args.skip_zip:
         _make_zip(app_path, zip_path)
-        _write_sha256(release_dir, zip_path, app_path)
+        # 只记录压缩包的校验值：.app 位于 work/ 内，不随附件分发。
+        (release_dir / "SHA256SUMS").write_text(
+            checksum_line(zip_path) + "\n", encoding="utf-8"
+        )
+        print("[ok] 已写出 SHA256SUMS。")
 
     info_path = release_dir / "build-info.json"
     info_path.write_text(
@@ -184,12 +171,15 @@ def main(argv: list[str] | None = None) -> int:
         _run(verify_command)
 
     print()
-    print(f"发布目录：  {release_dir}")
-    print(f"App：       {app_path}")
+    print(f"发布目录：  {release_dir}（顶层只留 zip、SHA256SUMS、build-info.json）")
+    print(f"App：       {app_path.relative_to(release_dir).as_posix()}")
     if zip_path.is_file():
         print(f"压缩包：    {zip_path.name}")
-    print(f"签名：      {'ad-hoc（开发版，未公证）' if signed else '未签名'}")
-    print("注意：开发版未经 Apple 公证，仅供本机/开发使用；分发需 Developer ID + 公证。")
+    print(f"签名：      {'ad-hoc（未公证）' if signed else '未签名'}")
+    print(
+        "注意：本包 ad-hoc 签名、未经 Apple 公证、仅 Apple Silicon（ADR 0007）；"
+        "首次启动被 Gatekeeper 拦截时右键图标 → 打开。"
+    )
     return 0
 
 

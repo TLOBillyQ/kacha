@@ -161,12 +161,10 @@ def checksum_line(path: Path, root: Path | None = None) -> str:
     return f"{sha256_of(path)}  {relative.as_posix()}"
 
 
-def read_checksums(checksums_path: Path) -> dict[str, str]:
-    """解析 SHA256SUMS：统一路径分隔符后映射到哈希值。"""
+def parse_checksums_text(text: str) -> dict[str, str]:
+    """解析 SHA256SUMS 文本：统一路径分隔符后映射到哈希值。"""
     checksums: dict[str, str] = {}
-    if not checksums_path.is_file():
-        return checksums
-    for line in checksums_path.read_text(encoding="utf-8").splitlines():
+    for line in text.splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
             continue
@@ -178,6 +176,13 @@ def read_checksums(checksums_path: Path) -> dict[str, str]:
             continue
         checksums[Path(name).as_posix()] = digest.lower()
     return checksums
+
+
+def read_checksums(checksums_path: Path) -> dict[str, str]:
+    """解析 SHA256SUMS 文件；文件不存在时返回空映射。"""
+    if not checksums_path.is_file():
+        return {}
+    return parse_checksums_text(checksums_path.read_text(encoding="utf-8"))
 
 
 def verify_sha256(root: Path, checksums_path: Path) -> tuple[bool, list[str], list[str]]:

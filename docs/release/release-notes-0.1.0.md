@@ -1,6 +1,17 @@
 # UGC AI 生图工具 0.1.0 发布说明
 
-面向蛋仔派对与千星 UGC 美术团队的本地图片生成工作台 **Windows x64 便携版**。
+面向蛋仔派对与千星 UGC 美术团队的本地图片生成工作台。本版提供
+**Windows x64 便携版**与 **macOS 版（仅 Apple Silicon）**，均从本
+Gitea Release 的附件下载（决策见 ADR 0007：默认不签名、不做公证）。
+
+## 首次运行：绕过安全提示（必读）
+
+两平台包均无正式签名，首次启动会被系统拦截，按下面步骤放行一次即可：
+
+- **Windows（SmartScreen）**：双击 `ugc-image-tool.exe` 后出现"已保护
+  你的电脑/未知发布者"提示，点 **更多信息** → **仍要运行**。
+- **macOS（Gatekeeper）**：双击被拦截后，在访达里 **右键点应用图标 →
+  打开**，在弹窗中再点 **打开**；之后可正常双击启动。
 
 ## 安全声明（必读）
 
@@ -19,6 +30,8 @@
   `ugc-image-tool.exe` 即可运行，无需安装 Python 或管理员权限。
 - **首次使用**：解压 `ugc-image-tool-0.1.0-win-x64.zip`，建议解压到稳定
   目录；应用不在程序目录写入任何数据。
+- **macOS**：解压 `ugc-image-tool-0.1.0-macos-arm64.zip`，把
+  `ugc-image-tool.app` 拖入任意目录使用；仅支持 Apple Silicon。
 - **覆盖升级**：先关闭旧版本客户端，再用新版本压缩包**整体覆盖**程序
   目录（也可先删旧目录再解压新包）。设置、API 密钥、个人预设、生成结果与
   任务记录均位于用户目录或图片目录，不受覆盖升级影响。
@@ -34,7 +47,8 @@
 
 ## 校验值
 
-发布包附带 `SHA256SUMS`（SHA-256）。核对方法（Windows PowerShell）：
+本 Release 附件含 `SHA256SUMS`（SHA-256，覆盖两个平台的压缩包）。
+核对方法（Windows PowerShell）：
 
     Get-FileHash -Algorithm SHA256 -Path ugc-image-tool-0.1.0-win-x64.zip
 

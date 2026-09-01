@@ -34,8 +34,8 @@ macOS 包在 Apple Silicon Mac 上执行 `packaging/build_macos.py`。产物布�
 - 便携目录、`.app` 与 PyInstaller 中间产物位于 `release/work/`，不发布。
 
 发布：设好 `GITEA_TOKEN` 后运行 `python packaging/publish_release.py`，
-脚本重核 SHA256SUMS、创建或复用 tag `v<版本>` 的 Release 并上传两个平台
-产物（两端各构建后各跑一次，幂等合并）。
+脚本重核 SHA256SUMS、创建或复用 tag `v<版本>` 的 Release，并上传/替换
+三个附件（两端各构建后各跑一次，幂等合并；SHA256SUMS 跨端合并）。
 
 勾选项：
 
@@ -106,7 +106,7 @@ macOS 包在 Apple Silicon Mac 上执行 `packaging/build_macos.py`。产物布�
 
 构建完成后自动执行；也可手动运行：
 
-    .venv\Scripts\python.exe packaging/verify_release.py release\ugc-image-tool-<版本>-win-x64 release\ugc-image-tool-<版本>-win-x64.zip --checksums release\SHA256SUMS
+    .venv\Scripts\python.exe packaging/verify_release.py release\work\ugc-image-tool-<版本>-win-x64 release\ugc-image-tool-<版本>-win-x64.zip --checksums release\SHA256SUMS
 
 - [ ] 扫描便携目录与压缩包：不发现任何 API 密钥、认证头或轮转地址。
 - [ ] SHA256SUMS 所列文件全部命中且哈希一致。

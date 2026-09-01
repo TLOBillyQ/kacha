@@ -1,19 +1,24 @@
-"""构建并打包 UGC AI 生图工具 Windows x64 便携发布物（issue #13 交付）。
+"""构建并打包 UGC AI 生图工具 Windows x64 便携发布物（issue #53 布局）。
 
 流程：
 1. 以目录模式（onedir）运行 PyInstaller，产出无控制台的 GUI 便携目录。
-2. 可选：用团队代码签名证书对主程序签名（signtool 或 PowerShell Authenticode）。
-3. 把便携目录按版本号重命名并压缩为 <名称>-<版本>-win-x64.zip。
-4. 计算并写出 SHA256SUMS 校验值（zip 与主程序）。
-5. 写出 build-info.json（版本、提交、Python/PyInstaller 版本、签名状态与时间）。
-6. 运行 packaging/verify_release.py 做无密钥发布检查；发现泄漏即失败。
+2. 把便携目录按版本号重命名并压缩为 <名称>-<版本>-win-x64.zip。
+3. 计算并写出 SHA256SUMS 校验值（仅压缩包；供发布时随 Gitea Release 分发）。
+4. 写出 build-info.json（版本、提交、Python/PyInstaller 版本、签名状态与时间）。
+5. 运行 packaging/verify_release.py 做无密钥发布检查；发现泄漏即失败。
+
+产物布局（ADR 0007）：release/ 顶层只留 zip、SHA256SUMS、build-info.json；
+便携目录与 PyInstaller 中间产物统一在 release/work/。
 
 示例：
-    python packaging/build_release.py --skip-sign
-    python packaging/build_release.py --cert team-cert.pfx
+    python packaging/build_release.py
+    python packaging/build_release.py --cert team-cert.pfx   # 可选：购证后签名
 
-正式对外发布必须提供团队代码签名证书；未签名构建仅用于开发验证，Windows
-SmartScreen 会提示“未知发布者”。发布物内容不含 API 密钥，密钥只存在于当前
+默认不签名发布（决策见 docs/adr/0007-gitea-release-as-sole-distribution-channel.md）：
+Windows SmartScreen 首次会提示
+“未知发布者”，发布说明已含“仍要运行”绕过步骤；仅当提供 --cert 时才走签名
+路径（保留 sign.ps1），签名后状态必须为 Valid 否则构建失败。版本号唯一来源
+是 pyproject.toml 的 version。发布物内容不含 API 密钥，密钥只存在于当前
 Windows 用户凭据库。
 """
 
@@ -29,7 +34,8 @@ import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-from security_scan import sha256_of
+from release_meta import pyproject_version
+from security_scan import checksum_line
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PACKAGING_DIR = Path(__file__).resolve().parent
@@ -62,15 +68,6 @@ def _git_head() -> str:
     return result.stdout.strip()
 
 
-def _package_version(override: str | None) -> str:
-    if override:
-        return override.strip()
-    sys.path.insert(0, str(REPO_ROOT / "src"))
-    from ugc_image_tool import __version__  # type: ignore[import-not-found, import-untyped]
-
-    return __version__
-
-
 def _portable_name(version: str) -> str:
     return f"{ARCHIVE_BASE}-{version}-{WIN_X64}"
 
@@ -91,9 +88,10 @@ def _run_pyinstaller(version: str, work_path: Path, dist_path: Path) -> None:
     )
 
 
-def _finalize_portable_dir(release_dir: Path, version: str) -> Path:
-    built = release_dir / "ugc-image-tool"
-    portable = release_dir / _portable_name(version)
+def _finalize_portable_dir(work_root: Path, version: str) -> Path:
+    """把 PyInstaller 输出目录重命名为带版本号的便携目录（留在 work_root 内）。"""
+    built = work_root / "ugc-image-tool"
+    portable = work_root / _portable_name(version)
     if not built.is_dir():
         if portable.is_dir():
             return portable
@@ -184,17 +182,6 @@ def _make_zip(portable: Path, out_zip: Path) -> None:
     print(f"[ok] 压缩包：{out_zip.name}")
 
 
-def _write_sha256(release_dir: Path, zip_path: Path, portable: Path) -> None:
-    lines = [f"{sha256_of(zip_path)}  {zip_path.name}"]
-    exe = portable / "ugc-image-tool.exe"
-    if exe.is_file():
-        lines.append(f"{sha256_of(exe)}  {exe.relative_to(portable.parent).as_posix()}")
-    (release_dir / "SHA256SUMS").write_text(
-        "\n".join(lines) + "\n", encoding="utf-8"
-    )
-    print("[ok] 已写出 SHA256SUMS。")
-
-
 def _build_info(
     version: str,
     signed: bool,
@@ -246,17 +233,19 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="构建 UGC AI 生图工具 Windows x64 便携发布物"
     )
-    parser.add_argument("--version", default=None, help="发布版本号；默认读取包内版本")
     parser.add_argument(
         "--release-dir",
         default=str((REPO_ROOT / "release").resolve()),
         help="发布产物目录（会被 .gitignore 忽略）",
     )
     parser.add_argument("--skip-build", action="store_true", help="跳过 PyInstaller 构建")
-    parser.add_argument("--skip-sign", action="store_true", help="跳过签名")
     parser.add_argument("--skip-zip", action="store_true", help="跳过压缩")
     parser.add_argument("--skip-verify", action="store_true", help="跳过发布检查")
-    parser.add_argument("--cert", default=os.environ.get("UGC_IMAGE_TOOL_CERT"), help="签名证书 .pfx 路径")
+    parser.add_argument(
+        "--cert",
+        default=os.environ.get("UGC_IMAGE_TOOL_CERT"),
+        help="可选签名路径：签名证书 .pfx 路径；不提供则默认不签名发布（ADR 0007）",
+    )
     parser.add_argument(
         "--cert-password",
         default=os.environ.get("UGC_IMAGE_TOOL_CERT_PASSWORD", ""),
@@ -271,20 +260,21 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    version = _package_version(args.version)
+    version = pyproject_version(REPO_ROOT)
     release_dir = Path(args.release_dir)
-    work_path = release_dir / "work"
+    work_root = release_dir / "work"
+    pyinstaller_workpath = work_root / "pyinstaller"
 
     if not args.skip_build:
-        release_dir.mkdir(parents=True, exist_ok=True)
-        _run_pyinstaller(version, work_path, release_dir)
+        work_root.mkdir(parents=True, exist_ok=True)
+        _run_pyinstaller(version, pyinstaller_workpath, work_root)
 
-    portable_dir = _finalize_portable_dir(release_dir, version)
+    portable_dir = _finalize_portable_dir(work_root, version)
     exe_path = portable_dir / "ugc-image-tool.exe"
     signature_status = _signature_status(exe_path) if exe_path.is_file() else "Unknown"
 
     signed = False
-    if args.cert and not args.skip_sign:
+    if args.cert:
         _sign_exe(exe_path, args.cert, args.cert_password, args.timestamp, args.signtool)
         signature_status = _signature_status(exe_path)
         if signature_status != "Valid":
@@ -299,7 +289,12 @@ def main(argv: list[str] | None = None) -> int:
         _make_zip(portable_dir, zip_path)
 
     if not args.skip_zip:
-        _write_sha256(release_dir, zip_path, portable_dir)
+        # 只记录压缩包的校验值：SHA256SUMS 随 Gitea Release 发布，接收方核对
+        # zip 即覆盖包内全部内容；exe 位于 work/ 内，不随附件分发。
+        (release_dir / "SHA256SUMS").write_text(
+            checksum_line(zip_path) + "\n", encoding="utf-8"
+        )
+        print("[ok] 已写出 SHA256SUMS。")
 
     info = _build_info(version, signed, signature_status, zip_path)
     build_info_path = release_dir / "build-info.json"
@@ -324,8 +319,8 @@ def main(argv: list[str] | None = None) -> int:
         dev_copy = _deploy_dev_copy(portable_dir)
 
     print()
-    print(f"发布目录：  {release_dir}")
-    print(f"便携目录：  {portable_dir.name}")
+    print(f"发布目录：  {release_dir}（顶层只留 zip、SHA256SUMS、build-info.json）")
+    print(f"便携目录：  {portable_dir.relative_to(release_dir).as_posix()}")
     print(f"压缩包：    {zip_path.name}")
     print(f"校验值：    SHA256SUMS（SHA-256）")
     if dev_copy is not None:
@@ -333,9 +328,9 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Exe 签名：  {signature_status}（signed={signed}）")
     if not signed:
         print(
-            "注意：本构建未签名（signed=False），仅供开发验证，SmartScreen"
-            "会提示“未知发布者”。正式发布必须用团队证书构建（--cert），"
-            "并确认 build-info.json 的 signature_status=Valid。"
+            "注意：本构建未签名（signed=False），按 ADR 0007 属默认发布路径；"
+            "SmartScreen 首次会提示“未知发布者”，发布说明须包含"
+            "“更多信息 → 仍要运行”绕过步骤。购证后可用 --cert 启用签名。"
         )
     return 0
 

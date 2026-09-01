@@ -25,6 +25,7 @@ Gitea Release 只挂三个附件：
 | `publish_release.py` | 发布到 Gitea Release：创建或复用 tag `v<版本>`、校验后上传/替换三个附件、写入 release 正文 |
 | `verify_release.py` | 无密钥扫描 + SHA256SUMS 核对（CLI） |
 | `security_scan.py` | 扫描规则与校验工具（纯标准库，可被测试复用） |
+| `release_meta.py` | 发布元数据：版本号唯一来源（pyproject.toml，纯标准库） |
 | `sign.ps1` | Authenticode 签名（可选路径，需团队证书时才用） |
 
 ## 用法
