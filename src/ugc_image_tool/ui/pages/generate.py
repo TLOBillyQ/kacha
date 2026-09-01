@@ -99,6 +99,7 @@ class GeneratePage(QWidget):
         self._edit_max_references = 0
         self._draft_count = 1
         self._output_error: str | None = None
+        self._presets_initialized = False
         self._build_form()
         self._populate_presets()
         self.refresh_output_state()
@@ -121,9 +122,6 @@ class GeneratePage(QWidget):
 
         self._preset_combo = QComboBox()
         self._preset_combo.setPlaceholderText("选择项目预设")
-        self._preset_combo.currentIndexChanged.connect(
-            self._on_preset_selection_changed
-        )
         self._preset_combo.currentIndexChanged.connect(self._update_preset_actions)
         self._preset_menu = QMenu(self)
         self._apply_preset = QAction("应用项目预设", self)
@@ -548,7 +546,7 @@ class GeneratePage(QWidget):
 
     def _on_references_changed(self) -> None:
         """参考图数量变化即任务类型变化：重建档位并按新约束校验。"""
-        self._reference_section.toggle.setChecked(self._references.count() > 0)
+        self._reference_section.set_expanded(self._references.count() > 0)
         self._rebuild_tiers()
         data = self._size_combo.currentData()
         if self._references.count() > 1 and combo_size_mode(data) is SizeMode.AUTO:
@@ -563,9 +561,7 @@ class GeneratePage(QWidget):
         current_id = self._preset_combo.currentData()
         persisted_id = self._settings.generation_selected_preset_id()
         selected_id = current_id if isinstance(current_id, str) else persisted_id
-        default_preset = (
-            self._presets.first_builtin() if selected_id is None else None
-        )
+        default_preset = self._presets.first_builtin() if selected_id is None else None
         if default_preset is not None:
             selected_id = default_preset.preset_id
         self._preset_combo.blockSignals(True)
@@ -591,9 +587,11 @@ class GeneratePage(QWidget):
         self._preset_combo.setCurrentIndex(restored)
         self._preset_combo.blockSignals(False)
         self._update_preset_actions()
-        if default_preset is not None:
-            self._settings.save_generation_selected_preset_id(default_preset.preset_id)
-            self._presets.apply_preset(default_preset.preset_id)
+        initial_preset = self._selected_preset() if not self._presets_initialized else None
+        self._presets_initialized = True
+        if initial_preset is not None:
+            self._settings.save_generation_selected_preset_id(initial_preset.preset_id)
+            self._presets.apply_preset(initial_preset.preset_id)
             self._set_prompt_values()
 
     def _selected_preset(self) -> ProjectPreset | None:
@@ -601,12 +599,6 @@ class GeneratePage(QWidget):
         if not isinstance(preset_id, str):
             return None
         return self._presets.get(preset_id)
-
-    @Slot(int)
-    def _on_preset_selection_changed(self, _index: int) -> None:
-        preset = self._selected_preset()
-        if preset is not None:
-            self._settings.save_generation_selected_preset_id(preset.preset_id)
 
     @Slot(int)
     def _update_preset_actions(self, _index: int = -1) -> None:
@@ -665,6 +657,7 @@ class GeneratePage(QWidget):
         ):
             self.status_message.emit("已取消应用项目预设")
             return
+        self._settings.save_generation_selected_preset_id(preset.preset_id)
         self._set_prompt_values()
         self.status_message.emit(f"已应用项目预设：{preset.display_name}")
 
@@ -801,7 +794,7 @@ class GeneratePage(QWidget):
             negative_prompt=(
                 (self._negative_prompt.toPlainText() or None)
                 if self._negative_section.isVisible()
-                and self._negative_section.toggle.isChecked()
+                and self._negative_section.is_expanded()
                 else None
             ),
             size_mode=mode,

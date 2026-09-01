@@ -65,6 +65,13 @@ preset_store = PresetStore(
             negative_prompt="测试负向",
             read_only=True,
         ),
+        ProjectPreset(
+            preset_id="builtin-second",
+            display_name="第二个内置预设",
+            project=PresetProject.THOUSAND_STARS,
+            prompt="不应默认应用",
+            read_only=True,
+        ),
     ),
 )
 services = ApplicationServices(
@@ -372,7 +379,10 @@ page._negative_section.toggle.setChecked(True)
 ref = Path(root) / "ref.png"
 ref.write_bytes(PNG_1X1)
 page._add_reference_paths([str(ref)])
-draft = page._read_draft()
+captured = {}
+page._application.submit_generate = lambda draft: captured.update(draft=draft)
+page._submit_generate()
+draft = captured["draft"]
 assert len(draft.reference_paths) == 1
 assert draft.prompt == "测试提示词"
 assert draft.negative_prompt == "测试负向"
@@ -463,6 +473,39 @@ assert empty_page._prompt.toPlainText() == ""
 assert empty_services.settings.generation_selected_preset_id() is None
 empty_page.close()
 empty_services.close()
+"""
+        )
+
+    def test_recorded_applied_preset_is_applied_on_restart(self) -> None:
+        self.run_qt_case(
+            """
+page._prompt.setPlainText("临时修改")
+second_store = PresetStore(
+    root / "user-data",
+    builtins=(
+        ProjectPreset(
+            preset_id="builtin-test",
+            display_name="测试内置预设",
+            project=PresetProject.EGG_PARTY,
+            prompt="测试提示词",
+            negative_prompt="测试负向",
+            read_only=True,
+        ),
+    ),
+)
+second_services = ApplicationServices(
+    user_data_dir=root / "user-data",
+    output_root=root / "second-output",
+    gateway=Gateway(),
+    credentials=MemoryCredentialService(),
+    preset_store=second_store,
+)
+second_page = GeneratePage(second_services)
+assert second_page._preset_combo.currentData() == "builtin-test"
+assert second_page._prompt.toPlainText() == "测试提示词"
+assert second_page._negative_prompt.toPlainText() == "测试负向"
+second_page.close()
+second_services.close()
 """
         )
 
