@@ -11,15 +11,6 @@ tmp/
 .coverage
 .coverage.*
 
-# SwarmForge helper scripts are injected by the forge host at project open
-swarmforge/scripts/
-
-# Agent scratch and toolchain caches
-tmp/
-.toolcache/
-.coverage
-.coverage.*
-
 # Local gateway credentials
 config.json
 

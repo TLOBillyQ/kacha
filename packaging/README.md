@@ -64,6 +64,19 @@ release 标题为版本号，正文来自 `docs/release/release-notes-<版本>.m
 - 完整验收运行手册：`docs/release/release-checklist.md`。
 - 无密钥检查自动化测试：`tests/test_release_security.py`。
 
+## macOS 开发版
+
+仅供开发/测试，不做 Apple 公证，不对团队分发：
+
+    # 安装构建依赖（keyring 由 pyproject 平台标记自动带上）
+    .venv/bin/pip install -e .[test] pyinstaller
+
+    .venv/bin/python packaging/build_macos.py
+
+产物：`release/ugc-image-tool.app` 与 `ugc-image-tool-<v>-macos-<arch>.zip`。
+ad-hoc 签名只固定代码哈希、不代表开发者身份；macOS 上 API 密钥存当前用户
+钥匙串（`KeychainCredentialService`），Windows 端仍走凭据库，两者互不影响。
+
 ## 说明
 
 - 目录模式保证目标机器无需 Python；应用不写程序目录，用户数据位于
