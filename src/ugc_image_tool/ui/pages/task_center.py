@@ -6,24 +6,25 @@ import shutil
 from pathlib import Path
 
 from PySide6.QtCore import QSize, QUrl, Qt, Signal, Slot
-from PySide6.QtGui import QColor, QDesktopServices, QIcon, QPixmap, QResizeEvent
+from PySide6.QtGui import QAction, QColor, QDesktopServices, QIcon, QPixmap, QResizeEvent
 from PySide6.QtWidgets import (
     QAbstractScrollArea,
     QFileDialog,
-    QGridLayout,
     QHBoxLayout,
     QLabel,
     QListWidget,
     QListWidgetItem,
-    QPushButton,
+    QMenu,
     QSplitter,
+    QStyle,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
 from ...generation import GenerationStatus, GenerationTask
 from ...services import ApplicationServices
-from ..presentation import STATUS_LABELS, UI_CARD_MARGIN, UI_SPACING
+from ..presentation import STATUS_LABELS, UI_CARD_MARGIN, UI_SPACING, UI_TEXT_MUTED
 
 
 _STATUS_COLORS = {
@@ -59,7 +60,7 @@ class TaskCenterPage(QWidget):
         self._selected_task_id: str | None = None
         self._current_preview: QPixmap | None = None
         self._build_task_center()
-        self._update_result_actions()
+        self._update_actions()
 
     def _build_task_center(self) -> None:
         self._task_list = QListWidget()
@@ -73,26 +74,42 @@ class TaskCenterPage(QWidget):
         self._preview.setMinimumSize(200, 200)
         self._preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        self._cancel_task = QPushButton("取消选中任务")
-        self._cancel_task.clicked.connect(self._cancel_selected_task)
-        self._remove_task = QPushButton("从任务中心移除")
-        self._remove_task.clicked.connect(self._remove_selected_task)
-        self._save_copy = QPushButton("保存副本")
-        self._save_copy.clicked.connect(self._save_selected_copy)
-        self._copy_image = QPushButton("复制图片")
-        self._copy_image.clicked.connect(self._copy_selected_image)
-        self._open_directory = QPushButton("打开所在目录")
-        self._open_directory.clicked.connect(self._open_selected_directory)
-        # 窄面板（默认 340px）下横向一排按钮会撑宽停靠面板，改为两列网格：
-        # 左列为任务操作，右列为结果操作。
-        action_controls = QGridLayout()
-        action_controls.addWidget(self._cancel_task, 0, 0)
-        action_controls.addWidget(self._remove_task, 1, 0)
-        action_controls.addWidget(self._save_copy, 0, 1)
-        action_controls.addWidget(self._copy_image, 1, 1)
-        action_controls.addWidget(self._open_directory, 2, 1)
-        action_controls.setColumnStretch(0, 1)
-        action_controls.setColumnStretch(1, 1)
+        self._primary_action = QToolButton()
+        self._primary_action.setToolButtonStyle(
+            Qt.ToolButtonStyle.ToolButtonTextBesideIcon
+        )
+        self._primary_action.clicked.connect(self._run_primary_action)
+
+        self._more_menu = QMenu(self)
+        self._save_copy_action = QAction("保存副本", self)
+        self._save_copy_action.setToolTip("保存当前生成结果的副本")
+        self._save_copy_action.triggered.connect(self._save_selected_copy)
+        self._open_directory_action = QAction("打开所在目录", self)
+        self._open_directory_action.setToolTip("打开当前生成结果所在目录")
+        self._open_directory_action.triggered.connect(self._open_selected_directory)
+        self._remove_task_action = QAction("从任务中心移除", self)
+        self._remove_task_action.setToolTip("从任务中心移除当前生成任务")
+        self._remove_task_action.triggered.connect(self._remove_selected_task)
+        self._more_actions = QToolButton()
+        self._more_actions.setText("更多")
+        self._more_actions.setToolButtonStyle(
+            Qt.ToolButtonStyle.ToolButtonTextBesideIcon
+        )
+        self._more_actions.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self._more_actions.setMenu(self._more_menu)
+        self._more_actions.setIcon(
+            self.style().standardIcon(
+                QStyle.StandardPixmap.SP_ToolBarHorizontalExtensionButton
+            )
+        )
+
+        action_controls = QHBoxLayout()
+        action_controls.setContentsMargins(0, 0, 0, 0)
+        action_controls.addWidget(self._primary_action)
+        action_controls.addStretch(1)
+        action_controls.addWidget(self._more_actions)
+        self._action_bar = QWidget()
+        self._action_bar.setLayout(action_controls)
 
         # 变体 B（#30 决议）：预览优先竖排——预览占大头居顶，任务队列与结果列表依次在其下。
         self._content_splitter = QSplitter(Qt.Orientation.Vertical)
@@ -104,6 +121,12 @@ class TaskCenterPage(QWidget):
         self._content_splitter.setStretchFactor(2, 0)
         self._content_splitter.splitterMoved.connect(self._refresh_preview)
 
+        self._empty_state = QLabel("生成结果会出现在这里")
+        self._empty_state.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._empty_state.setStyleSheet(f"color: {UI_TEXT_MUTED};")
+        self._content_splitter.hide()
+        self._action_bar.hide()
+
         layout = QVBoxLayout()
         layout.setContentsMargins(
             UI_CARD_MARGIN,
@@ -112,7 +135,8 @@ class TaskCenterPage(QWidget):
             UI_CARD_MARGIN,
         )
         layout.setSpacing(UI_SPACING)
-        layout.addLayout(action_controls)
+        layout.addWidget(self._action_bar)
+        layout.addWidget(self._empty_state, 1)
         layout.addWidget(self._content_splitter, 1)
         self.setLayout(layout)
 
@@ -155,12 +179,20 @@ class TaskCenterPage(QWidget):
             self._removed_task_ids.add(task_id)
             self._selected_task_id = None
             row = self._task_list.row(item)
+            self._task_list.blockSignals(True)
             self._task_list.takeItem(row)
+            self._task_list.setCurrentRow(-1)
+            self._task_list.blockSignals(False)
             self._result_list.clear()
             self._current_preview = None
             self._preview.setText("提交任务后显示生成结果")
             self._resize_task_list()
-            self._update_result_actions()
+            if self._task_list.count() == 0:
+                self._content_splitter.hide()
+                self._empty_state.show()
+                self._update_actions()
+            else:
+                self._task_list.setCurrentRow(min(row, self._task_list.count() - 1))
             self.status_message.emit("任务已从任务中心移除，磁盘结果未删除")
 
     @Slot(object)
@@ -170,6 +202,8 @@ class TaskCenterPage(QWidget):
         is_new = task.task_id not in self._tasks
         self._tasks[task.task_id] = task
         if is_new:
+            self._empty_state.hide()
+            self._content_splitter.show()
             item = QListWidgetItem()
             item.setData(Qt.ItemDataRole.UserRole, task.task_id)
             self._update_task_item(item, task)
@@ -193,24 +227,24 @@ class TaskCenterPage(QWidget):
             self.status_message.emit(task.error or "生成失败")
         elif task.status is GenerationStatus.SUCCEEDED:
             self.status_message.emit(task.error or "生成结果已保存")
-            if task.task_id == self._selected_task_id:
-                self._show_result(task)
         elif task.status is GenerationStatus.PARTIALLY_SUCCEEDED:
             self.status_message.emit(task.error or "部分生成结果已保存")
-            if task.task_id == self._selected_task_id:
-                self._show_result(task)
         elif task.status is GenerationStatus.CANCELLED:
             self.status_message.emit(task.error or "任务已取消，网关侧计算可能仍在继续")
+        if task.task_id == self._selected_task_id:
+            self._show_result(task)
 
     @Slot(int)
     def _show_selected_result(self, row: int) -> None:
         if row < 0:
             self._selected_task_id = None
+            self._action_bar.hide()
             return
         item = self._task_list.item(row)
         task_id = item.data(Qt.ItemDataRole.UserRole)
         if task_id in self._tasks:
             self._selected_task_id = task_id
+            self._action_bar.show()
             self._show_result(self._tasks[task_id])
 
     def _show_result(self, task: GenerationTask) -> None:
@@ -227,7 +261,7 @@ class TaskCenterPage(QWidget):
         if self._result_list.count() == 0:
             self._current_preview = None
             self._preview.setText("当前任务没有可预览的结果")
-            self._update_result_actions()
+            self._update_actions()
             return
         selected_row = 0
         if current_path is not None:
@@ -244,7 +278,7 @@ class TaskCenterPage(QWidget):
         if row < 0 or path is None or not path.is_file():
             self._current_preview = None
             self._preview.setText("当前任务没有可预览的结果")
-            self._update_result_actions()
+            self._update_actions()
             return
         pixmap = QPixmap(str(path))
         if pixmap.isNull():
@@ -253,7 +287,7 @@ class TaskCenterPage(QWidget):
         else:
             self._current_preview = pixmap
             self._refresh_preview()
-        self._update_result_actions()
+        self._update_actions()
 
     @Slot()
     def _refresh_preview(self) -> None:
@@ -278,11 +312,84 @@ class TaskCenterPage(QWidget):
         value = item.data(Qt.ItemDataRole.UserRole)
         return Path(value) if isinstance(value, str) else None
 
-    def _update_result_actions(self) -> None:
-        enabled = self._selected_result_path() is not None
-        self._save_copy.setEnabled(enabled)
-        self._copy_image.setEnabled(enabled)
-        self._open_directory.setEnabled(enabled)
+    def _selected_task(self) -> GenerationTask | None:
+        if self._selected_task_id is None:
+            return None
+        return self._tasks.get(self._selected_task_id)
+
+    def _selected_usable_result_path(self) -> Path | None:
+        path = self._selected_result_path()
+        return path if path is not None and path.is_file() else None
+
+    def _set_primary_action(
+        self,
+        text: str,
+        accessible_name: str,
+        icon: QStyle.StandardPixmap,
+    ) -> None:
+        self._primary_action.setText(text)
+        self._primary_action.setToolTip(accessible_name)
+        self._primary_action.setAccessibleName(accessible_name)
+        self._primary_action.setIcon(self.style().standardIcon(icon))
+
+    def _update_actions(self) -> None:
+        task = self._selected_task()
+        if task is None:
+            self._action_bar.hide()
+            return
+        has_result = self._selected_usable_result_path() is not None
+        is_terminal = task.status not in {
+            GenerationStatus.QUEUED,
+            GenerationStatus.RUNNING,
+        }
+        if task.status in {GenerationStatus.QUEUED, GenerationStatus.RUNNING}:
+            self._set_primary_action(
+                "取消任务",
+                "取消当前生成任务",
+                QStyle.StandardPixmap.SP_DialogCancelButton,
+            )
+        elif has_result:
+            self._set_primary_action(
+                "复制图片",
+                "复制当前生成结果",
+                QStyle.StandardPixmap.SP_FileIcon,
+            )
+        else:
+            self._set_primary_action(
+                "移除",
+                "从任务中心移除当前生成任务",
+                QStyle.StandardPixmap.SP_TrashIcon,
+            )
+        self._more_menu.clear()
+        if has_result:
+            self._more_menu.addAction(self._save_copy_action)
+            self._more_menu.addAction(self._open_directory_action)
+        if is_terminal:
+            if has_result:
+                self._more_menu.addSeparator()
+            self._more_menu.addAction(self._remove_task_action)
+        if has_result and is_terminal:
+            more_name = "更多当前生成结果和任务操作"
+        elif has_result:
+            more_name = "更多当前生成结果操作"
+        else:
+            more_name = "更多当前生成任务操作"
+        self._more_actions.setToolTip(more_name)
+        self._more_actions.setAccessibleName(more_name)
+        self._more_actions.setVisible(bool(self._more_menu.actions()))
+        self._action_bar.show()
+
+    @Slot()
+    def _run_primary_action(self) -> None:
+        task = self._selected_task()
+        if task is None:
+            return
+        if task.status in {GenerationStatus.QUEUED, GenerationStatus.RUNNING}:
+            self._cancel_selected_task()
+        elif self._selected_usable_result_path() is not None:
+            self._copy_selected_image()
+        else:
+            self._remove_selected_task()
 
     @Slot()
     def _save_selected_copy(self) -> None:

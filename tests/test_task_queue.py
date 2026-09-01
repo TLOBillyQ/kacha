@@ -186,6 +186,32 @@ class GenerationQueueTests(unittest.TestCase):
 
 
 class GenerationCancellationTests(unittest.TestCase):
+    def test_only_terminal_tasks_can_be_removed(self) -> None:
+        gateway = BlockingGateway()
+        application = GenerationApplication(
+            gateway=gateway,
+            results=InMemoryResults(),
+            max_concurrency=1,
+        )
+        try:
+            running = application.submit_text(
+                TextToImageDraft(prompt="running", model_id="qwen-image-3.0-pro")
+            )
+            self.assertTrue(gateway.wait_for_calls(1))
+            queued = application.submit_text(
+                TextToImageDraft(prompt="queued", model_id="qwen-image-3.0-pro")
+            )
+
+            self.assertFalse(application.remove_task(running))
+            self.assertFalse(application.remove_task(queued))
+            self.assertTrue(application.cancel(queued))
+            self.assertTrue(application.remove_task(queued))
+            self.assertTrue(application.cancel(running))
+            self.assertTrue(application.remove_task(running))
+        finally:
+            gateway.release.set()
+            application.close()
+
     def test_queued_task_can_be_cancelled_without_calling_gateway(self) -> None:
         gateway = BlockingGateway()
         results = InMemoryResults()
