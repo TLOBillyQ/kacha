@@ -16,7 +16,6 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QPushButton,
-    QSpinBox,
     QSplitter,
     QVBoxLayout,
     QWidget,
@@ -24,7 +23,6 @@ from PySide6.QtWidgets import (
 
 from ...generation import GenerationStatus, GenerationTask
 from ...services import ApplicationServices
-from ...settings import MAX_CONCURRENCY_LIMIT, MIN_CONCURRENCY_LIMIT
 from ..presentation import STATUS_LABELS, UI_CARD_MARGIN, UI_SPACING
 
 
@@ -44,7 +42,6 @@ class TaskCenterPage(QWidget):
     """任务中心与结果操作；只通过应用服务驱动任务生命周期。"""
 
     status_message = Signal(str)
-    concurrency_changed = Signal(int)
 
     _TASK_ITEM_HEIGHT = 44
     _MAX_VISIBLE_TASKS = 4
@@ -76,10 +73,6 @@ class TaskCenterPage(QWidget):
         self._preview.setMinimumSize(200, 200)
         self._preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        self._concurrency_box = QSpinBox()
-        self._concurrency_box.setRange(MIN_CONCURRENCY_LIMIT, MAX_CONCURRENCY_LIMIT)
-        self._concurrency_box.setValue(self._application.max_concurrency)
-        self._concurrency_box.valueChanged.connect(self._on_concurrency_changed)
         self._cancel_task = QPushButton("取消选中任务")
         self._cancel_task.clicked.connect(self._cancel_selected_task)
         self._remove_task = QPushButton("从任务中心移除")
@@ -90,11 +83,6 @@ class TaskCenterPage(QWidget):
         self._copy_image.clicked.connect(self._copy_selected_image)
         self._open_directory = QPushButton("打开所在目录")
         self._open_directory.clicked.connect(self._open_selected_directory)
-        concurrency_controls = QHBoxLayout()
-        concurrency_controls.addWidget(QLabel("并发上限"))
-        concurrency_controls.addWidget(self._concurrency_box)
-        concurrency_controls.addStretch(1)
-
         # 窄面板（默认 340px）下横向一排按钮会撑宽停靠面板，改为两列网格：
         # 左列为任务操作，右列为结果操作。
         action_controls = QGridLayout()
@@ -124,7 +112,6 @@ class TaskCenterPage(QWidget):
             UI_CARD_MARGIN,
         )
         layout.setSpacing(UI_SPACING)
-        layout.addLayout(concurrency_controls)
         layout.addLayout(action_controls)
         layout.addWidget(self._content_splitter, 1)
         self.setLayout(layout)
@@ -147,20 +134,6 @@ class TaskCenterPage(QWidget):
         )
         item.setForeground(QColor(_STATUS_COLORS[task.status]))
         item.setSizeHint(QSize(0, self._TASK_ITEM_HEIGHT))
-
-    def set_concurrency(self, value: int) -> None:
-        self._concurrency_box.blockSignals(True)
-        self._concurrency_box.setValue(value)
-        self._concurrency_box.blockSignals(False)
-
-    @Slot(int)
-    def _on_concurrency_changed(self, value: int) -> None:
-        try:
-            self._services.set_concurrency_limit(value)
-        except ValueError as error:
-            self.status_message.emit(str(error))
-            return
-        self.concurrency_changed.emit(value)
 
     @Slot()
     def _cancel_selected_task(self) -> None:

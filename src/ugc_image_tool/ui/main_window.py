@@ -133,12 +133,6 @@ class MainWindow(QMainWindow):
         self._settings_page.output_state_changed.connect(
             self._on_output_state_changed
         )
-        self._settings_page.concurrency_changed.connect(
-            self._task_center.set_concurrency
-        )
-        self._task_center.concurrency_changed.connect(
-            self._settings_page.set_concurrency
-        )
         self._settings_page.discovery_restart_requested.connect(
             self._restart_discovery
         )

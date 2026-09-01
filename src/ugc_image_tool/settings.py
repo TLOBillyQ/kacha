@@ -83,6 +83,7 @@ class AppSettings:
     image_count_expanded: bool = False
     disclosure_hint_seen: bool = False
     selected_preset_id: str | None = None
+    settings_advanced_expanded: bool = False
 
 
 class SettingsStoreError(ValueError):
@@ -178,6 +179,14 @@ class SettingsStore:
             raise ValueError("项目预设 ID 不能为空")
         return self._update(selected_preset_id=preset_id)
 
+    def settings_advanced_expanded(self) -> bool:
+        return self._settings.settings_advanced_expanded
+
+    def save_settings_advanced_expanded(self, expanded: bool) -> AppSettings:
+        if not isinstance(expanded, bool):
+            raise ValueError("高级设置展开状态必须是布尔值")
+        return self._update(settings_advanced_expanded=expanded)
+
     def _update(
         self,
         *,
@@ -190,6 +199,7 @@ class SettingsStore:
         image_count_expanded: bool | None = None,
         disclosure_hint_seen: bool | None = None,
         selected_preset_id: str | None = None,
+        settings_advanced_expanded: bool | None = None,
     ) -> AppSettings:
         current = self._settings
         updated = AppSettings(
@@ -227,6 +237,11 @@ class SettingsStore:
                 selected_preset_id
                 if selected_preset_id is not None
                 else current.selected_preset_id
+            ),
+            settings_advanced_expanded=(
+                settings_advanced_expanded
+                if settings_advanced_expanded is not None
+                else current.settings_advanced_expanded
             ),
         )
         self._persist(updated)
@@ -277,6 +292,9 @@ class SettingsStore:
             not isinstance(selected_preset_id, str) or not selected_preset_id.strip()
         ):
             raise SettingsStoreError("设置文件的 selected_preset_id 无效")
+        settings_advanced_expanded = self._parse_bool_setting(
+            raw, "settings_advanced_expanded"
+        )
         return AppSettings(
             output_root,
             base_url,
@@ -287,6 +305,7 @@ class SettingsStore:
             image_count_expanded,
             disclosure_hint_seen,
             selected_preset_id,
+            settings_advanced_expanded,
         )
 
     def _parse_bool_setting(self, raw: dict[str, object], key: str) -> bool:
@@ -362,6 +381,7 @@ class SettingsStore:
                 "image_count_expanded": settings.image_count_expanded,
                 "disclosure_hint_seen": settings.disclosure_hint_seen,
                 "selected_preset_id": settings.selected_preset_id,
+                "settings_advanced_expanded": settings.settings_advanced_expanded,
             },
             ensure_ascii=False,
             indent=2,
@@ -584,6 +604,12 @@ class SettingsApplication:
 
     def save_generation_selected_preset_id(self, preset_id: str) -> None:
         self._store.save_selected_preset_id(preset_id)
+
+    def settings_advanced_expanded(self) -> bool:
+        return self._store.settings_advanced_expanded()
+
+    def save_settings_advanced_expanded(self, expanded: bool) -> None:
+        self._store.save_settings_advanced_expanded(expanded)
 
     def output_directory_error(self) -> str | None:
         """返回阻止提交的可操作错误；输出目录可写时返回 None。"""
