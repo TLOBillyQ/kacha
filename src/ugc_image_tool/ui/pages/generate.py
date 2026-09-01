@@ -54,6 +54,7 @@ from ..tier_switch import TierSegment, TierSwitch
 
 class _ReferenceListWidget(QListWidget):
     files_dropped = Signal(list)
+    remove_requested = Signal()
 
     def __init__(self) -> None:
         super().__init__()
@@ -73,6 +74,13 @@ class _ReferenceListWidget(QListWidget):
             event.acceptProposedAction()
         else:
             super().dropEvent(event)
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() == Qt.Key.Key_Delete:
+            self.remove_requested.emit()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
 
 class GeneratePage(QWidget):
@@ -165,6 +173,7 @@ class GeneratePage(QWidget):
 
         self._references = _ReferenceListWidget()
         self._references.files_dropped.connect(self._add_reference_paths)
+        self._references.remove_requested.connect(self._remove_selected_reference)
         self._references.model().rowsMoved.connect(lambda *_: self._renumber_references())
         self._references.itemSelectionChanged.connect(
             self._update_remove_reference_state
@@ -184,6 +193,7 @@ class GeneratePage(QWidget):
         )
         self._reference_hint.setWordWrap(True)
         self._reference_hint.setVisible(False)
+        self._reference_overflow = False
         self._reference_disabled = QLabel(
             "当前模型不支持图片编辑，参考图区已停用，将按文生图提交"
         )
@@ -456,7 +466,7 @@ class GeneratePage(QWidget):
         self._add_reference.setEnabled(True)
         self._update_remove_reference_state()
         self._reference_disabled.setVisible(False)
-        self._reference_hint.setVisible(edit_capability.reference_limits.max_references == 1)
+        self._update_reference_hint()
 
     @Slot()
     def _on_size_changed(self) -> None:
@@ -527,8 +537,12 @@ class GeneratePage(QWidget):
             for i in range(self._references.count())
         }
         added = False
+        overflow = False
         for path in paths:
-            if path in existing or self._references.count() >= self._edit_max_references:
+            if path in existing:
+                continue
+            if self._references.count() >= self._edit_max_references:
+                overflow = True
                 continue
             try:
                 reference = inspect_reference_image(Path(path))
@@ -544,7 +558,11 @@ class GeneratePage(QWidget):
             existing.add(path)
             added = True
         if added:
+            self._reference_overflow = overflow
             self._renumber_references()
+        elif overflow:
+            self._reference_overflow = True
+            self._update_reference_hint()
 
     def _refresh_reference_warnings(self) -> None:
         warnings = [
@@ -560,6 +578,7 @@ class GeneratePage(QWidget):
         if row < 0:
             return
         self._references.takeItem(row)
+        self._reference_overflow = False
         self._renumber_references()
 
     @Slot()
@@ -585,6 +604,20 @@ class GeneratePage(QWidget):
                 "多张参考图使用模型自动决定尺寸时，最后一张参考图会影响默认输出宽高比"
             )
         self._revalidate()
+        self._update_reference_hint()
+
+    def _update_reference_hint(self) -> None:
+        if self._edit_max_references <= 0:
+            self._reference_hint.setVisible(False)
+            return
+        if self._reference_overflow:
+            self._reference_hint.setText(
+                f"最多 {self._edit_max_references} 张参考图，已保留前 {self._edit_max_references} 张"
+            )
+            self._reference_hint.setVisible(True)
+            return
+        self._reference_hint.setText("当前团队网关契约仅验证 1 张参考图，超出部分已禁用")
+        self._reference_hint.setVisible(self._edit_max_references == 1)
 
     # -- 项目预设 ------------------------------------------------------------
 

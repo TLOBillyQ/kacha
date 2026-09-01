@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import struct
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -39,6 +40,18 @@ class EditGateway:
 
 
 class ImageEditTests(unittest.TestCase):
+    def test_reference_warning_uses_2048px_advisory_upper_bound(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "reference.png"
+            content = bytearray(PNG_1X1)
+            content[16:24] = struct.pack(">II", 2049, 384)
+            path.write_bytes(content)
+
+            reference = inspect_reference_image(path)
+
+            self.assertEqual((2049, 384), (reference.width, reference.height))
+            self.assertIn("384～2048px", reference.warnings[0])
+
     def test_reference_metadata_and_size_limit(self) -> None:
         with TemporaryDirectory() as directory:
             path = Path(directory) / "reference.png"

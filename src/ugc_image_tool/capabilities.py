@@ -148,11 +148,10 @@ QWEN_TEXT_WORKFLOW = WorkflowCapability(
     extra_params=("watermark",),
 )
 
-# 图片编辑依据 contracts/fixtures/2026-08-29-team-gateway-edit-json 的 JSON 透传
-# 实测结果开放：1～3 张参考图、显式尺寸（parameters.size 星号格式，实测
-# 1024*1024；其余预设与自定义边界沿用文生图同一字段的实测规则）、n≤5（实测
-# n=2）。负向提示词维持开放试用现状：input.negative_prompt 未实测，客户端并入
-# 主提示词文本发送，首次真实提交后应补录夹具。
+# 图片编辑依据 contracts/fixtures/2026-08-29-team-gateway-edit-json 与
+# contracts/fixtures/2026-08-31-team-gateway-edit-boundaries 的 JSON 透传实测：
+# 参考图 1～3 张、显式尺寸、n≤5（n=3 与 n=5 均有边界夹具）；原生负向提示词已
+# 通过协议层验证，客户端仍将其并入主提示词文本，等待视觉效果验证后再切换。
 QWEN_EDIT_WORKFLOW = WorkflowCapability(
     workflow=Workflow.IMAGE_EDIT,
     supports_negative_prompt=True,

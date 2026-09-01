@@ -6,7 +6,7 @@ from pathlib import Path
 
 MAX_REFERENCE_BYTES = 10 * 1024 * 1024
 MIN_REFERENCE_DIMENSION = 384
-MAX_REFERENCE_DIMENSION = 3072
+MAX_REFERENCE_DIMENSION = 2048
 _MEDIA_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg"}
 
 

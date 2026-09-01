@@ -18,6 +18,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from PySide6.QtCore import QModelIndex, Qt
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QLabel, QToolButton
 
 PNG_1X1 = bytes.fromhex(
@@ -342,6 +343,44 @@ assert page._references.count() == 0
 assert not page._reference_section.is_expanded()
 assert not services.settings.generation_reference_expanded()
 assert page._warnings.text() == ""
+"""
+        )
+
+    def test_selected_reference_can_be_removed_with_delete_key(self) -> None:
+        self.run_qt_case(
+            """
+page.set_models(("qwen-image-3.0-pro",))
+paths = []
+for name in ("first.png", "second.png"):
+    path = Path(root) / name
+    path.write_bytes(PNG_1X1)
+    paths.append(str(path))
+
+page._add_reference_paths(paths)
+page._references.setCurrentRow(0)
+page._references.setFocus()
+QTest.keyClick(page._references, Qt.Key.Key_Delete)
+
+assert page._references.count() == 1
+assert page._references.item(0).text() == "1. second.png"
+"""
+        )
+
+    def test_reference_overflow_is_kept_with_clear_feedback(self) -> None:
+        self.run_qt_case(
+            """
+page.set_models(("qwen-image-3.0-pro",))
+paths = []
+for name in ("one.png", "two.png", "three.png", "four.png"):
+    path = Path(root) / name
+    path.write_bytes(PNG_1X1)
+    paths.append(str(path))
+
+page._add_reference_paths(paths)
+
+assert page._references.count() == 3
+assert "最多 3 张" in page._reference_hint.text()
+assert page._reference_hint.isVisible()
 """
         )
 
