@@ -134,6 +134,19 @@ class SettingsPersistenceTests(unittest.TestCase):
             self.assertEqual(DEFAULT_BASE_URL, settings.base_url)
             self.assertEqual(DEFAULT_CONCURRENCY_LIMIT, settings.concurrency_limit)
 
+    def test_sparse_settings_file_defaults_disclosure_state_to_off(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.json"
+            path.write_text('{"schema_version": 1}', encoding="utf-8")
+
+            settings = SettingsStore(Path(directory)).settings
+
+            self.assertFalse(settings.reference_expanded)
+            self.assertFalse(settings.image_count_expanded)
+            self.assertFalse(settings.disclosure_hint_seen)
+            self.assertFalse(settings.settings_advanced_expanded)
+            self.assertIsNone(settings.selected_preset_id)
+
 
 class SettingsValidationTests(unittest.TestCase):
     def test_concurrency_limit_rejects_out_of_range_values(self) -> None:
@@ -626,6 +639,28 @@ class GenerationStateConvergenceTests(unittest.TestCase):
                 MemoryCredentialService(),
             )
             self.assertTrue(reloaded.settings_advanced_expanded())
+
+
+class DisclosureValidationTests(unittest.TestCase):
+    def test_bool_state_setters_reject_non_bool_values(self) -> None:
+        with TemporaryDirectory() as directory:
+            store = SettingsStore(Path(directory))
+            setters = (
+                store.save_reference_expanded,
+                store.save_image_count_expanded,
+                store.save_disclosure_hint_seen,
+                store.save_settings_advanced_expanded,
+            )
+            for setter in setters:
+                with self.subTest(setter=setter.__name__), self.assertRaises(ValueError):
+                    setter("yes")  # type: ignore[arg-type]
+
+    def test_selected_preset_id_rejects_empty_and_non_string_values(self) -> None:
+        with TemporaryDirectory() as directory:
+            store = SettingsStore(Path(directory))
+            for invalid in ("", "   ", None, 7):
+                with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                    store.save_selected_preset_id(invalid)  # type: ignore[arg-type]
 
 
 if __name__ == "__main__":

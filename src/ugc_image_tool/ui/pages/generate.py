@@ -502,13 +502,18 @@ class GeneratePage(QWidget):
 
     @Slot(bool)
     def _toggle_negative_prompt(self, expanded: bool) -> None:
-        self._settings.save_generation_negative_prompt_enabled(expanded)
-        if expanded:
-            self._mark_disclosure_hint_seen()
+        self._on_disclosure_toggled(
+            expanded, self._settings.save_generation_negative_prompt_enabled
+        )
 
     @Slot(bool)
     def _on_reference_toggled(self, expanded: bool) -> None:
-        self._settings.save_generation_reference_expanded(expanded)
+        self._on_disclosure_toggled(
+            expanded, self._settings.save_generation_reference_expanded
+        )
+
+    def _on_disclosure_toggled(self, expanded: bool, save_expanded) -> None:
+        save_expanded(expanded)
         if expanded:
             self._mark_disclosure_hint_seen()
 

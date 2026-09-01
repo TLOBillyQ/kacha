@@ -25,6 +25,12 @@ PNG_1X1 = bytes.fromhex(
 )
 
 
+def _jpeg(width: int, height: int, *, prefix: bytes = b"") -> bytes:
+    """最小可解析 JPEG：SOI + 可选前缀段 + SOF0（尺寸字段）+ EOI。"""
+    sof = b"\xff\xc0\x00\x11\x08" + struct.pack(">HH", height, width)
+    return b"\xff\xd8" + prefix + sof + b"\xff\xd9"
+
+
 class EditGateway:
     def __init__(self) -> None:
         self.requests: list[ImageEditRequest] = []
@@ -62,6 +68,60 @@ class ImageEditTests(unittest.TestCase):
 
             with self.assertRaises(ValueError):
                 inspect_reference_image(path, max_bytes=1)
+
+    def test_reference_rejects_missing_file_and_unsupported_suffix(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            with self.assertRaises(ValueError):
+                inspect_reference_image(root / "missing.png")
+            gif = root / "reference.gif"
+            gif.write_bytes(b"GIF89a")
+            with self.assertRaises(ValueError):
+                inspect_reference_image(gif)
+
+    def test_reference_rejects_invalid_png_content(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "reference.png"
+            path.write_bytes(b"not-a-png")
+            with self.assertRaises(ValueError):
+                inspect_reference_image(path)
+
+    def test_jpeg_dimensions_from_sof_segment(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "reference.jpg"
+            path.write_bytes(_jpeg(1200, 800))
+
+            reference = inspect_reference_image(path)
+
+            self.assertEqual((1200, 800), (reference.width, reference.height))
+            self.assertEqual("image/jpeg", reference.media_type)
+            self.assertEqual((), reference.warnings)
+
+    def test_jpeg_dimensions_skip_junk_bytes_and_other_segments(self) -> None:
+        # 垃圾字节、EOI/D8 标记与 APPn 段都应被跳过，直到 SOF。
+        app0 = b"\xff\xe0\x00\x04AB"
+        for prefix in (b"\x00\x00", b"\xff\xd9", app0):
+            with self.subTest(prefix=prefix), TemporaryDirectory() as directory:
+                path = Path(directory) / "reference.jpeg"
+                path.write_bytes(_jpeg(640, 480, prefix=prefix))
+
+                reference = inspect_reference_image(path)
+
+                self.assertEqual((640, 480), (reference.width, reference.height))
+
+    def test_jpeg_without_sof_segment_is_rejected(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "reference.jpg"
+            path.write_bytes(b"\xff\xd8" + b"\x00" * 20)
+            with self.assertRaises(ValueError):
+                inspect_reference_image(path)
+
+    def test_jpeg_with_wrong_magic_is_rejected(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "reference.jpg"
+            path.write_bytes(PNG_1X1)
+            with self.assertRaises(ValueError):
+                inspect_reference_image(path)
 
     def test_edit_submission_copies_ordered_snapshots(self) -> None:
         with TemporaryDirectory() as directory:

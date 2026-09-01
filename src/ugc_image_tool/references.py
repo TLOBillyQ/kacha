@@ -59,12 +59,9 @@ def _jpeg_dimensions(content: bytes) -> tuple[int, int]:
         offset += 2
         if marker in {0xD8, 0xD9}:
             continue
-        if offset + 2 > len(content):
-            break
         segment_size = struct.unpack(">H", content[offset:offset + 2])[0]
         if marker in {0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF}:
-            if offset + 7 > len(content):
-                break
+            # 循环条件 offset + 9 < len 已保证长度字段与尺寸字段都在界内。
             height, width = struct.unpack(">HH", content[offset + 3:offset + 7])
             return width, height
         offset += segment_size
