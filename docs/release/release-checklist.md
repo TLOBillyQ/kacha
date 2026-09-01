@@ -4,6 +4,10 @@
 Gitea Issue #13 的一条验收标准，执行人逐条勾选并记录环境与结果。前两节
 （构建与签名）是发布流水线步骤，后几节是需要人工执行的验收场景。
 
+> **签名政策更新（ADR 0007）**：经决策，正式版默认**不签名**发布（不购买
+> 代码签名证书），分发渠道为 Gitea Release。下文第 2 节与涉及签名的条目
+> 已按该决策修订；`sign.ps1` 与 `--cert` 保留为将来购证后的可选路径。
+
 ## 0. 名词约定
 
 - **程序目录**：解压/覆盖后存放 `ugc-image-tool-<版本>-win-x64/` 的目录，
@@ -20,13 +24,18 @@ Gitea Issue #13 的一条验收标准，执行人逐条勾选并记录环境与�
 在工具机（Windows, Python 3.12 x64）执行：
 
     .venv\Scripts\python.exe -m pip install -e .[test] pyinstaller
-    .venv\Scripts\python.exe packaging/build_release.py --cert <团队证书.pfx>
+    .venv\Scripts\python.exe packaging/build_release.py --skip-dev-deploy
 
-产物位于 `release/\`：
+macOS 包在 Apple Silicon Mac 上执行 `packaging/build_macos.py`。产物布局：
 
-- `ugc-image-tool-<版本>-win-x64/\` 便携目录（目录模式，无控制台）。
-- `ugc-image-tool-<版本>-win-x64.zip\` 带版本号压缩包。
-- `SHA256SUMS\` 校验值、`build-info.json\` 构建信息。
+- `release/ugc-image-tool-<版本>-win-x64.zip` /
+  `release/ugc-image-tool-<版本>-macos-arm64.zip` 带版本号压缩包。
+- `release/SHA256SUMS` 校验值、`release/build-info.json` 构建信息。
+- 便携目录、`.app` 与 PyInstaller 中间产物位于 `release/work/`，不发布。
+
+发布：设好 `GITEA_TOKEN` 后运行 `python packaging/publish_release.py`，
+脚本重核 SHA256SUMS、创建或复用 tag `v<版本>` 的 Release 并上传两个平台
+产物（两端各构建后各跑一次，幂等合并）。
 
 勾选项：
 
@@ -35,15 +44,15 @@ Gitea Issue #13 的一条验收标准，执行人逐条勾选并记录环境与�
 - [ ] `build-info.json` 记录发布版本与构建提交，与压缩包名版本号一致。
       （版本号写入 build-info.json 与发布说明；exe 不额外注入文件版本资源。）
 
-## 2. 签名与校验值（标准 B）
+## 2. 签名与校验值（标准 B，已按 ADR 0007 修订）
 
-- [ ] 主程序已用**有效**的 Windows 代码签名证书签名；
-      工具机上验证：
-
-          powershell -NoProfile -Command "(Get-AuthenticodeSignature -FilePath 'ugc-image-tool.exe').Status"
-
-      输出必须为 `Valid`，并带 RFC3161 时间戳。
-- [ ] `SHA256SUMS` 与压缩包一同发布；接收方可用
+- [ ] 正式版默认**未签名**发布（决策记录：`docs/adr/0007-…`）；
+      `build-info.json` 的 `signed` 为 `false`、`signature_status` 如实记录。
+      发布说明必须包含首次运行的 SmartScreen 绕过提示（“未知发布者 →
+      仍要运行”）与 macOS Gatekeeper 右键打开提示。
+      将来若购证：`build_release.py --cert <团队证书.pfx>`，此时签名状态
+      必须为 `Valid` 且带 RFC3161 时间戳，否则构建失败（现有逻辑）。
+- [ ] `SHA256SUMS` 与压缩包一同发布（Gitea Release 附件）；接收方可用
 
       Get-FileHash -Algorithm SHA256 <压缩包>
 
@@ -76,8 +85,8 @@ Gitea Issue #13 的一条验收标准，执行人逐条勾选并记录环境与�
       `ugc-image-tool` 条目（类型“Windows 凭据”）；重启应用后密钥仍可读；
       清除后条目消失。
 - [ ] **杀毒软件**：常用杀毒软件（Windows Defender 及团队常见 EDR）扫描
-      官方签名发布包不报毒；若误报，登记误报并联系厂商申诉（签名程序
-      通常不再触发启发式报毒）。
+      官方发布包（未签名，ADR 0007）不报毒；未签名包更易触发启发式误报，
+      若误报，登记误报并向厂商申诉或提交白名单。
 
 ## 5. 覆盖升级保留（标准 E）
 
@@ -120,7 +129,8 @@ Gitea Issue #13 的一条验收标准，执行人逐条勾选并记录环境与�
 | 发布版本 |  |
 | 构建提交（git rev-parse HEAD） |  |
 | 构建日期 |  |
-| Exe 签名状态 | Valid / 其他 |
+| Exe 签名状态 | 未签名（默认）/ Valid（购证后） |
+| Gitea Release tag / 附件核对 | v<版本>，3 个附件齐全 |
 | Win10 验收机器 |  |
 | Win11 验收机器 |  |
 | 覆盖升级测试结果 | 通过 / 未通过 |
