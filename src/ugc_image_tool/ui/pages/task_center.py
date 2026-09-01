@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 from ...generation import GenerationStatus, GenerationTask
 from ...services import ApplicationServices
 from ..presentation import STATUS_LABELS, UI_CARD_MARGIN, UI_SPACING, UI_TEXT_MUTED
+from ..task_actions import PrimaryTaskAction, task_action_policy
 
 
 _STATUS_COLORS = {
@@ -58,6 +59,7 @@ class TaskCenterPage(QWidget):
         self._tasks: dict[str, GenerationTask] = {}
         self._removed_task_ids: set[str] = set()
         self._selected_task_id: str | None = None
+        self._current_primary_action: PrimaryTaskAction | None = None
         self._current_preview: QPixmap | None = None
         self._build_task_center()
         self._update_actions()
@@ -335,20 +337,19 @@ class TaskCenterPage(QWidget):
     def _update_actions(self) -> None:
         task = self._selected_task()
         if task is None:
+            self._current_primary_action = None
             self._action_bar.hide()
             return
         has_result = self._selected_usable_result_path() is not None
-        is_terminal = task.status not in {
-            GenerationStatus.QUEUED,
-            GenerationStatus.RUNNING,
-        }
-        if task.status in {GenerationStatus.QUEUED, GenerationStatus.RUNNING}:
+        policy = task_action_policy(task.status, has_usable_result=has_result)
+        self._current_primary_action = policy.primary
+        if policy.primary is PrimaryTaskAction.CANCEL:
             self._set_primary_action(
                 "取消任务",
                 "取消当前生成任务",
                 QStyle.StandardPixmap.SP_DialogCancelButton,
             )
-        elif has_result:
+        elif policy.primary is PrimaryTaskAction.COPY_RESULT:
             self._set_primary_action(
                 "复制图片",
                 "复制当前生成结果",
@@ -361,16 +362,16 @@ class TaskCenterPage(QWidget):
                 QStyle.StandardPixmap.SP_TrashIcon,
             )
         self._more_menu.clear()
-        if has_result:
+        if policy.show_result_actions:
             self._more_menu.addAction(self._save_copy_action)
             self._more_menu.addAction(self._open_directory_action)
-        if is_terminal:
-            if has_result:
+        if policy.allow_removal:
+            if policy.show_result_actions:
                 self._more_menu.addSeparator()
             self._more_menu.addAction(self._remove_task_action)
-        if has_result and is_terminal:
+        if policy.show_result_actions and policy.allow_removal:
             more_name = "更多当前生成结果和任务操作"
-        elif has_result:
+        elif policy.show_result_actions:
             more_name = "更多当前生成结果操作"
         else:
             more_name = "更多当前生成任务操作"
@@ -381,15 +382,14 @@ class TaskCenterPage(QWidget):
 
     @Slot()
     def _run_primary_action(self) -> None:
-        task = self._selected_task()
-        if task is None:
+        if self._selected_task() is None or self._current_primary_action is None:
             return
-        if task.status in {GenerationStatus.QUEUED, GenerationStatus.RUNNING}:
-            self._cancel_selected_task()
-        elif self._selected_usable_result_path() is not None:
-            self._copy_selected_image()
-        else:
-            self._remove_selected_task()
+        handlers = {
+            PrimaryTaskAction.CANCEL: self._cancel_selected_task,
+            PrimaryTaskAction.COPY_RESULT: self._copy_selected_image,
+            PrimaryTaskAction.REMOVE: self._remove_selected_task,
+        }
+        handlers[self._current_primary_action]()
 
     @Slot()
     def _save_selected_copy(self) -> None:

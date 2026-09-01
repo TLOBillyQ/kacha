@@ -216,16 +216,28 @@ app.processEvents()
 assert menu_entries() == []
 assert page._more_actions.isHidden()
 
+image_path = root / "result.png"
+source = QPixmap(20, 20)
+source.fill(QColor("#ff0000"))
+assert source.save(str(image_path))
+page.on_task_changed(
+    make_task(
+        "running",
+        status=GenerationStatus.RUNNING,
+        result_paths=(image_path,),
+    )
+)
+app.processEvents()
+assert page._primary_action.text() == "取消任务"
+assert menu_entries() == ["保存副本", "打开所在目录"]
+assert page._more_actions.toolTip() == "更多当前生成结果操作"
+
 page.on_task_changed(make_task("failed", status=GenerationStatus.FAILED))
 page._task_list.setCurrentRow(1)
 app.processEvents()
 assert menu_entries() == ["从任务中心移除"]
 assert page._more_actions.isVisible()
 
-image_path = root / "result.png"
-source = QPixmap(20, 20)
-source.fill(QColor("#ff0000"))
-assert source.save(str(image_path))
 page.on_task_changed(
     make_task(
         "completed",
