@@ -124,23 +124,19 @@ class _Handler(BaseHTTPRequestHandler):
             state.attachments[uuid] = data
             self._reply(201, self._asset_meta(asset))
             return
+        if parts[:1] == ["releases"] and parts[2:3] == ["assets"] and len(parts) == 4 and method == "DELETE":
+            release_id, asset_id = int(parts[1]), int(parts[3])
+            assets = state.assets.get(release_id, {})
+            if asset_id in assets:
+                state.attachments.pop(assets[asset_id]["uuid"], None)
+                del assets[asset_id]
+                self._reply(204)
+            else:
+                self._reply(404, {"message": "asset not found"})
+            return
         if parts[:1] == ["releases"] and parts[1:2] == ["assets"] and len(parts) == 3:
-            asset_id = int(parts[2])
-            if method == "GET":
-                # 本 Gitea 实例没有附件元数据 GET 端点（实测 404）；内容一律经
-                # 列表里的 browser_download_url 下载。
-                self._reply(404, b"404 page not found", content_type="text/plain")
-                return
-            for assets in state.assets.values():
-                if asset_id in assets:
-                    if method == "DELETE":
-                        state.attachments.pop(assets[asset_id]["uuid"], None)
-                        del assets[asset_id]
-                        self._reply(204)
-                    else:
-                        self._reply(405, {"message": "method not allowed"})
-                    return
-            self._reply(404, {"message": "asset not found"})
+            # 本实例的附件操作路由是嵌套的；扁平 /releases/assets/{id} 一律 404。
+            self._reply(404, b"404 page not found", content_type="text/plain")
             return
         self._reply(404, {"message": f"no fake route: {method} {parts}"})
 
@@ -300,7 +296,8 @@ def test_both_platforms_merge_into_one_release_idempotently() -> None:
             release = gitea.release_for_tag(f"v{version}")
             assert release is not None
             assert len(gitea.state.releases) == 1, "两端发布必须进同一个 release"
-            # 恰好三个附件；SHA256SUMS 合并后覆盖两个平台的压缩包。
+            # 恰好三个附件（计数防同名重复）；SHA256SUMS 合并后覆盖两个平台的压缩包。
+            assert len(gitea.state.assets[release["id"]]) == 3
             assert gitea.asset_names(release["id"]) == {win_zip, mac_zip, "SHA256SUMS"}
             checksums = gitea.asset_bytes(release["id"], "SHA256SUMS").decode("utf-8")
             assert win_zip in checksums and mac_zip in checksums
@@ -311,6 +308,7 @@ def test_both_platforms_merge_into_one_release_idempotently() -> None:
             assert f"### {mac_zip}" in release["body"]
             # Mac 端再跑一次：附件仍为三个（替换而非重复），内容不变。
             assert run_publish(mac_dir, gitea.base_url).returncode == 0
+            assert len(gitea.state.assets[release["id"]]) == 3
             assert gitea.asset_names(release["id"]) == {win_zip, mac_zip, "SHA256SUMS"}
             assert gitea.asset_bytes(release["id"], "SHA256SUMS").decode("utf-8") == checksums
         finally:

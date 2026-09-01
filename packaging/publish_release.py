@@ -173,6 +173,7 @@ class GiteaClient:
         payload: dict[str, object] | None = None,
         raw: bytes | None = None,
         headers: dict[str, str] | None = None,
+        allow_404: bool = False,
     ) -> tuple[int, bytes]:
         request_headers = {
             "Authorization": f"token {self._token}",
@@ -192,9 +193,9 @@ class GiteaClient:
             with urllib.request.urlopen(request, timeout=300) as response:
                 return response.status, response.read()
         except urllib.error.HTTPError as error:
-            if error.code == 404:
-                return 404, error.read()
             detail = error.read().decode("utf-8", "replace")
+            if error.code == 404 and allow_404:
+                return 404, detail.encode("utf-8")
             raise GiteaError(
                 f"Gitea 请求失败：{method} {path} → HTTP {error.code}：{detail}"
             ) from error
@@ -206,7 +207,7 @@ class GiteaClient:
         return status, json.loads(body) if body else {}
 
     def release_for_tag(self, tag: str) -> dict[str, object] | None:
-        status, body = self._json("GET", f"/releases/tags/{tag}")
+        status, body = self._json("GET", f"/releases/tags/{tag}", allow_404=True)
         return body if status == 200 else None  # type: ignore[return-value]
 
     def create_release(self, tag: str, name: str, body: str) -> dict[str, object]:
@@ -240,8 +241,10 @@ class GiteaClient:
         except urllib.error.URLError as error:
             raise GiteaError(f"无法下载 Gitea 附件（{url}）：{error.reason}") from error
 
-    def delete_asset(self, asset_id: int) -> None:
-        self._request("DELETE", f"/releases/assets/{asset_id}")
+    def delete_asset(self, release_id: int, asset_id: int) -> None:
+        """删除附件；注意本实例路由是嵌套的 /releases/{release}/assets/{asset}，
+        扁平的 /releases/assets/{asset} 会 404。"""
+        self._request("DELETE", f"/releases/{release_id}/assets/{asset_id}")
 
     def upload_asset(self, release_id: int, filename: str, data: bytes) -> None:
         boundary = uuid.uuid4().hex
@@ -259,7 +262,7 @@ class GiteaClient:
         """幂等上传：同名附件先删后传，保证重复执行只替换不重复。"""
         for asset in self.list_assets(release_id):
             if asset["name"] == filename:
-                self.delete_asset(int(asset["id"]))  # type: ignore[arg-type]
+                self.delete_asset(release_id, int(asset["id"]))  # type: ignore[arg-type]
         self.upload_asset(release_id, filename, data)
         print(f"[ok] 附件已上传/替换：{filename}")
 
