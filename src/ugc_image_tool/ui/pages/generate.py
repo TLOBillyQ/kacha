@@ -166,6 +166,9 @@ class GeneratePage(QWidget):
         self._references = _ReferenceListWidget()
         self._references.files_dropped.connect(self._add_reference_paths)
         self._references.model().rowsMoved.connect(lambda *_: self._renumber_references())
+        self._references.itemSelectionChanged.connect(
+            self._update_remove_reference_state
+        )
         self._references.setToolTip("拖动条目可调整参考图顺序")
         self._references.setViewMode(QListWidget.ViewMode.ListMode)
         self._references.setIconSize(QSize(48, 48))
@@ -173,6 +176,9 @@ class GeneratePage(QWidget):
         self._add_reference = QPushButton("＋ 添加参考图（可选，最多 3 张）")
         self._add_reference.setToolTip("支持 PNG 和 JPEG")
         self._add_reference.clicked.connect(self._choose_references)
+        self._remove_reference = QPushButton("移除所选参考图")
+        self._remove_reference.setEnabled(False)
+        self._remove_reference.clicked.connect(self._remove_selected_reference)
         self._reference_hint = QLabel(
             "当前团队网关契约仅验证 1 张参考图，超出部分已禁用"
         )
@@ -204,7 +210,10 @@ class GeneratePage(QWidget):
         reference_layout.addWidget(self._reference_hint)
         reference_layout.addWidget(self._reference_disabled)
         reference_layout.addWidget(self._warnings)
-        reference_layout.addWidget(self._add_reference)
+        reference_actions = QHBoxLayout()
+        reference_actions.addWidget(self._add_reference)
+        reference_actions.addWidget(self._remove_reference)
+        reference_layout.addLayout(reference_actions)
         reference_help = QLabel(
             "拖放 PNG / JPEG 到这里；添加的参考图将用于图片编辑生成"
         )
@@ -439,11 +448,13 @@ class GeneratePage(QWidget):
         if edit_capability is None:
             self._references.setEnabled(False)
             self._add_reference.setEnabled(False)
+            self._remove_reference.setEnabled(False)
             self._reference_disabled.setVisible(True)
             self._reference_hint.setVisible(False)
             return
         self._references.setEnabled(True)
         self._add_reference.setEnabled(True)
+        self._update_remove_reference_state()
         self._reference_disabled.setVisible(False)
         self._reference_hint.setVisible(edit_capability.reference_limits.max_references == 1)
 
@@ -511,10 +522,11 @@ class GeneratePage(QWidget):
         self._add_reference_paths(paths)
 
     def _add_reference_paths(self, paths: list[str]) -> None:
-        existing = [
+        existing = {
             self._references.item(i).data(Qt.ItemDataRole.UserRole)
             for i in range(self._references.count())
-        ]
+        }
+        added = False
         for path in paths:
             if path in existing or self._references.count() >= self._edit_max_references:
                 continue
@@ -529,19 +541,38 @@ class GeneratePage(QWidget):
             item.setData(Qt.ItemDataRole.UserRole, path)
             item.setToolTip("；".join(reference.warnings) or "尺寸正常")
             self._references.addItem(item)
-        self._renumber_references()
+            existing.add(path)
+            added = True
+        if added:
+            self._renumber_references()
+
+    def _refresh_reference_warnings(self) -> None:
         warnings = [
             self._references.item(index).toolTip()
             for index in range(self._references.count())
             if self._references.item(index).toolTip() != "尺寸正常"
         ]
         self._warnings.setText("；".join(warnings))
-        self._on_references_changed()
+
+    @Slot()
+    def _remove_selected_reference(self) -> None:
+        row = self._references.currentRow()
+        if row < 0:
+            return
+        self._references.takeItem(row)
+        self._renumber_references()
+
+    @Slot()
+    def _update_remove_reference_state(self) -> None:
+        self._remove_reference.setEnabled(
+            self._references.isEnabled() and self._references.currentRow() >= 0
+        )
 
     def _renumber_references(self) -> None:
         for index in range(self._references.count()):
             item = self._references.item(index)
             item.setText(f"{index + 1}. {Path(item.data(Qt.ItemDataRole.UserRole)).name}")
+        self._refresh_reference_warnings()
         self._on_references_changed()
 
     def _on_references_changed(self) -> None:

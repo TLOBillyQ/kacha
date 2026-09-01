@@ -17,8 +17,8 @@ QT_CASE_PREFIX = """
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QToolButton
+from PySide6.QtCore import QModelIndex, Qt
+from PySide6.QtWidgets import QApplication, QLabel, QToolButton
 
 PNG_1X1 = bytes.fromhex(
     "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c6360606060000000050001a5f645400000000049454e44ae426082"
@@ -314,6 +314,66 @@ third.close()
 """
         )
 
+    def test_references_can_be_reordered_removed_and_collapse_when_empty(self) -> None:
+        self.run_qt_case(
+            """
+page.set_models(("qwen-image-3.0-pro",))
+paths = []
+for name in ("first.png", "second.png", "third.png"):
+    path = Path(root) / name
+    path.write_bytes(PNG_1X1)
+    paths.append(str(path))
+
+page._add_reference_paths(paths)
+assert page._reference_section.is_expanded()
+assert page._references.count() == 3
+assert page._references.model().moveRow(QModelIndex(), 2, QModelIndex(), 0)
+assert [page._references.item(index).text() for index in range(3)] == [
+    "1. third.png",
+    "2. first.png",
+    "3. second.png",
+]
+
+for _ in range(3):
+    page._references.setCurrentRow(0)
+    page._remove_reference.click()
+
+assert page._references.count() == 0
+assert not page._reference_section.is_expanded()
+assert not services.settings.generation_reference_expanded()
+assert page._warnings.text() == ""
+"""
+        )
+
+    def test_empty_reference_panel_stays_open_when_add_is_cancelled(self) -> None:
+        self.run_qt_case(
+            """
+page._reference_section.toggle.setChecked(True)
+page._add_reference_paths([])
+
+assert page._reference_section.is_expanded()
+assert services.settings.generation_reference_expanded()
+assert page._add_reference.text() == "＋ 添加参考图（可选，最多 3 张）"
+assert any(
+    label.text() == "拖放 PNG / JPEG 到这里；添加的参考图将用于图片编辑生成"
+    for label in page._reference_section.content.findChildren(QLabel)
+)
+"""
+        )
+
+    def test_reference_expansion_is_restored_on_new_page(self) -> None:
+        self.run_qt_case(
+            """
+page._reference_section.toggle.setChecked(True)
+assert services.settings.generation_reference_expanded()
+
+second = GeneratePage(services)
+assert second._reference_section.is_expanded()
+assert not second._reference_section.content.isHidden()
+second.close()
+"""
+        )
+
     def test_submit_button_uses_shared_primary_style(self) -> None:
         self.run_qt_case(
             """
@@ -358,6 +418,20 @@ second.close()
             """
 assert not page._disclosure_hint.isHidden()
 page._reference_section.toggle.setChecked(True)
+assert page._disclosure_hint.isHidden()
+assert services.settings.generation_disclosure_hint_seen()
+
+second = GeneratePage(services)
+assert second._disclosure_hint.isHidden()
+second.close()
+"""
+        )
+
+    def test_closing_disclosure_hint_marks_it_seen(self) -> None:
+        self.run_qt_case(
+            """
+assert not page._disclosure_hint.isHidden()
+page._dismiss_disclosure_hint.click()
 assert page._disclosure_hint.isHidden()
 assert services.settings.generation_disclosure_hint_seen()
 
