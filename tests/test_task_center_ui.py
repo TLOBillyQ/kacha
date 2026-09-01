@@ -17,7 +17,7 @@ from tempfile import TemporaryDirectory
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QPixmap
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QLabel, QSpinBox
 
 from ugc_image_tool.generation import (
     GenerationStatus,
@@ -126,6 +126,19 @@ assert page._content_splitter.widget(1) is page._task_list
 assert page._content_splitter.widget(2) is page._result_list
 assert not hasattr(page, "_result_splitter")
 page._content_splitter.splitterMoved.emit(100, 1)
+"""
+        )
+
+    def test_concurrency_limit_is_not_exposed_in_task_center(self) -> None:
+        self.run_qt_case(
+            """
+assert not hasattr(page, "_concurrency_box")
+assert not hasattr(page, "concurrency_changed")
+assert all(
+    "并发上限" not in label.text()
+    for label in page.findChildren(QLabel)
+)
+assert not page.findChildren(QSpinBox)
 """
         )
 

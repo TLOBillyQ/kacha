@@ -610,6 +610,23 @@ class GenerationStateConvergenceTests(unittest.TestCase):
                 "builtin-test", reloaded.generation_selected_preset_id()
             )
 
+    def test_settings_advanced_disclosure_persists_round_trip(self) -> None:
+        with TemporaryDirectory() as directory:
+            application = SettingsApplication(
+                SettingsStore(Path(directory)),
+                MemoryCredentialService(),
+            )
+
+            self.assertFalse(application.settings_advanced_expanded())
+
+            application.save_settings_advanced_expanded(True)
+
+            reloaded = SettingsApplication(
+                SettingsStore(Path(directory)),
+                MemoryCredentialService(),
+            )
+            self.assertTrue(reloaded.settings_advanced_expanded())
+
 
 if __name__ == "__main__":
     unittest.main()

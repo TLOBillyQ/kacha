@@ -275,6 +275,16 @@ assert not hasattr(window, "_edit_page")
 """
         )
 
+    def test_window_has_no_concurrency_synchronization_wiring(self) -> None:
+        self.run_qt_case(
+            """
+assert not hasattr(window._settings_page, "concurrency_changed")
+assert not hasattr(window._task_center, "concurrency_changed")
+assert not hasattr(window._task_center, "set_concurrency")
+assert not hasattr(window._settings_page, "set_concurrency")
+"""
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

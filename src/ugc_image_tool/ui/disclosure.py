@@ -3,7 +3,17 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QLayout, QSizePolicy, QToolButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QHBoxLayout,
+    QLabel,
+    QLayout,
+    QSizePolicy,
+    QToolButton,
+    QVBoxLayout,
+    QWidget,
+)
+
+from .presentation import UI_TEXT_MUTED
 
 
 class CollapsibleSection(QWidget):
@@ -15,6 +25,7 @@ class CollapsibleSection(QWidget):
         self,
         title: str,
         *,
+        summary: str | None = None,
         expanded: bool = False,
         parent: QWidget | None = None,
     ) -> None:
@@ -27,12 +38,20 @@ class CollapsibleSection(QWidget):
         self.toggle.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum
         )
+        self.summary = QLabel(summary or "")
+        self.summary.setStyleSheet(f"color: {UI_TEXT_MUTED};")
+        self.summary.setVisible(summary is not None)
         self.content = QWidget()
+
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        header.addWidget(self.toggle)
+        header.addWidget(self.summary)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
-        layout.addWidget(self.toggle)
+        layout.addLayout(header)
         layout.addWidget(self.content)
 
         self.toggle.toggled.connect(self._set_expanded)

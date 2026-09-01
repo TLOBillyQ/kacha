@@ -28,9 +28,12 @@ from ...settings import (
     default_output_root,
 )
 from ..controllers.discovery_controller import DiscoveryController
+from ..disclosure import CollapsibleSection
 from ..presentation import (
     STAGE_LABELS,
+    UI_ERROR,
     UI_SUCCESS,
+    UI_SPACING,
     connection_check_mark,
     format_bytes,
 )
@@ -41,7 +44,6 @@ class SettingsPage(QWidget):
 
     status_message = Signal(str)
     output_state_changed = Signal()
-    concurrency_changed = Signal(int)
     discovery_restart_requested = Signal()
 
     def __init__(
@@ -72,6 +74,12 @@ class SettingsPage(QWidget):
         output_row.addWidget(self._output_root_edit, 1)
         output_row.addWidget(self._browse_output)
         output_row.addWidget(self._reset_output)
+        self._output_section = QWidget()
+        output_layout = QVBoxLayout(self._output_section)
+        output_layout.setContentsMargins(0, 0, 0, 0)
+        output_layout.setSpacing(UI_SPACING)
+        output_layout.addWidget(QLabel("输出根目录"))
+        output_layout.addLayout(output_row)
 
         self._base_url_edit = QLineEdit(self._settings.base_url)
         self._base_url_edit.editingFinished.connect(self._apply_base_url)
@@ -80,8 +88,12 @@ class SettingsPage(QWidget):
         base_row = QHBoxLayout()
         base_row.addWidget(self._base_url_edit, 1)
         base_row.addWidget(self._reset_base_url)
-        self._base_url_warning = QLabel()
-        self._base_url_warning.setWordWrap(True)
+        self._base_url_section = QWidget()
+        base_layout = QVBoxLayout(self._base_url_section)
+        base_layout.setContentsMargins(0, 0, 0, 0)
+        base_layout.setSpacing(UI_SPACING)
+        base_layout.addWidget(QLabel("团队网关基础地址"))
+        base_layout.addLayout(base_row)
 
         self._settings_concurrency = QSpinBox()
         self._settings_concurrency.setRange(MIN_CONCURRENCY_LIMIT, MAX_CONCURRENCY_LIMIT)
@@ -100,11 +112,32 @@ class SettingsPage(QWidget):
         key_row.addWidget(self._api_key_edit, 1)
         key_row.addWidget(self._save_api_key)
         key_row.addWidget(self._clear_api_key)
+        self._api_key_section = QWidget()
+        api_key_layout = QVBoxLayout(self._api_key_section)
+        api_key_layout.setContentsMargins(0, 0, 0, 0)
+        api_key_layout.setSpacing(UI_SPACING)
+        api_key_layout.addWidget(QLabel("API 密钥（保存到当前 Windows 用户凭据库）"))
+        api_key_layout.addLayout(key_row)
+        api_key_layout.addWidget(self._api_key_status)
 
         self._connection_test = QPushButton("测试网关连接")
         self._connection_test.clicked.connect(self._start_connection_check)
         self._connection_results = QLabel()
         self._connection_results.setWordWrap(True)
+        self._connection_test_section = QWidget()
+        connection_layout = QVBoxLayout(self._connection_test_section)
+        connection_layout.setContentsMargins(0, 0, 0, 0)
+        connection_layout.setSpacing(UI_SPACING)
+        connection_layout.addWidget(QLabel("网关连接测试"))
+        connection_layout.addWidget(self._connection_test)
+        connection_layout.addWidget(self._connection_results)
+
+        self._concurrency_section = QWidget()
+        concurrency_layout = QVBoxLayout(self._concurrency_section)
+        concurrency_layout.setContentsMargins(0, 0, 0, 0)
+        concurrency_layout.setSpacing(UI_SPACING)
+        concurrency_layout.addWidget(QLabel("并发上限（1～6，修改后立即生效）"))
+        concurrency_layout.addWidget(self._settings_concurrency)
 
         self._diagnostics_status = QLabel()
         self._diagnostics_status.setWordWrap(True)
@@ -112,28 +145,52 @@ class SettingsPage(QWidget):
         self._preview_diagnostics.clicked.connect(self._show_diagnostics_preview)
         self._export_diagnostics = QPushButton("导出诊断包")
         self._export_diagnostics.clicked.connect(self._export_diagnostics_package)
-
-        layout = QVBoxLayout()
-        layout.addWidget(QLabel("输出根目录"))
-        layout.addLayout(output_row)
-        layout.addWidget(QLabel("团队网关基础地址"))
-        layout.addLayout(base_row)
-        layout.addWidget(self._base_url_warning)
-        layout.addWidget(QLabel("并发上限（1～6，重启后保留）"))
-        layout.addWidget(self._settings_concurrency)
-        layout.addWidget(QLabel("API 密钥（保存到当前 Windows 用户凭据库）"))
-        layout.addLayout(key_row)
-        layout.addWidget(self._api_key_status)
-        layout.addWidget(QLabel("网关连接测试"))
-        layout.addWidget(self._connection_test)
-        layout.addWidget(self._connection_results)
-        layout.addWidget(QLabel("本地诊断（脱敏日志与诊断包）"))
-        layout.addWidget(self._diagnostics_status)
         diagnostics_row = QHBoxLayout()
         diagnostics_row.addWidget(self._preview_diagnostics)
         diagnostics_row.addWidget(self._export_diagnostics)
         diagnostics_row.addStretch(1)
-        layout.addLayout(diagnostics_row)
+        self._diagnostics_section = QWidget()
+        diagnostics_layout = QVBoxLayout(self._diagnostics_section)
+        diagnostics_layout.setContentsMargins(0, 0, 0, 0)
+        diagnostics_layout.setSpacing(UI_SPACING)
+        diagnostics_layout.addWidget(QLabel("本地诊断（脱敏日志与诊断包）"))
+        diagnostics_layout.addWidget(self._diagnostics_status)
+        diagnostics_layout.addLayout(diagnostics_row)
+
+        advanced_layout = QVBoxLayout()
+        advanced_layout.setContentsMargins(0, 0, 0, 0)
+        advanced_layout.setSpacing(UI_SPACING)
+        advanced_layout.addWidget(self._base_url_section)
+        advanced_layout.addWidget(self._api_key_section)
+        advanced_layout.addWidget(self._connection_test_section)
+        advanced_layout.addWidget(self._concurrency_section)
+        advanced_layout.addWidget(self._diagnostics_section)
+        self._advanced_section = CollapsibleSection(
+            "高级",
+            summary="网关地址、API 密钥、连接测试、并发上限、本地诊断",
+            expanded=self._settings.settings_advanced_expanded(),
+        )
+        self._advanced_section.set_content_layout(advanced_layout)
+        self._advanced_section.toggled.connect(
+            self._settings.save_settings_advanced_expanded
+        )
+
+        self._transport_status_text = QLabel()
+        self._transport_status_text.setWordWrap(True)
+        self._show_gateway_settings = QPushButton("查看网关设置")
+        self._show_gateway_settings.clicked.connect(self._reveal_gateway_settings)
+        self._transport_status = QWidget()
+        transport_layout = QHBoxLayout(self._transport_status)
+        transport_layout.setContentsMargins(0, 0, 0, 0)
+        transport_layout.setSpacing(UI_SPACING)
+        transport_layout.addWidget(self._transport_status_text, 1)
+        transport_layout.addWidget(self._show_gateway_settings)
+
+        layout = QVBoxLayout()
+        layout.setSpacing(UI_SPACING)
+        layout.addWidget(self._output_section)
+        layout.addWidget(self._transport_status)
+        layout.addWidget(self._advanced_section)
         layout.addStretch(1)
         self.setLayout(layout)
 
@@ -186,13 +243,20 @@ class SettingsPage(QWidget):
 
     def _update_base_url_warning(self) -> None:
         if self._settings.uses_plaintext_http:
-            self._base_url_warning.setText(
+            self._transport_status_text.setText(
                 "当前地址为明文 HTTP，仅限隔离内网或可信 VPN 使用；非可信网络必须启用 HTTPS。"
             )
-            self._base_url_warning.setStyleSheet("color: #c62828;")
+            self._transport_status_text.setStyleSheet(f"color: {UI_ERROR};")
+            self._show_gateway_settings.show()
         else:
-            self._base_url_warning.setText("已启用 HTTPS，可在非可信网络使用。")
-            self._base_url_warning.setStyleSheet(f"color: {UI_SUCCESS};")
+            self._transport_status_text.setText("网关传输安全：HTTPS")
+            self._transport_status_text.setStyleSheet(f"color: {UI_SUCCESS};")
+            self._show_gateway_settings.hide()
+
+    @Slot()
+    def _reveal_gateway_settings(self) -> None:
+        self._advanced_section.set_expanded(True)
+        self._base_url_edit.setFocus()
 
     @Slot()
     def _save_api_key_clicked(self) -> None:
@@ -235,13 +299,7 @@ class SettingsPage(QWidget):
         except ValueError as error:
             self.status_message.emit(str(error))
             return
-        self.concurrency_changed.emit(value)
         self.status_message.emit(f"并发上限已设置为 {value}")
-
-    def set_concurrency(self, value: int) -> None:
-        self._settings_concurrency.blockSignals(True)
-        self._settings_concurrency.setValue(value)
-        self._settings_concurrency.blockSignals(False)
 
     # -- 连接测试 ------------------------------------------------------------
 
