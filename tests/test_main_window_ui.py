@@ -285,6 +285,33 @@ assert not hasattr(window._settings_page, "set_concurrency")
 """
         )
 
+    def test_status_bar_shows_version_badge_at_far_right(self) -> None:
+        self.run_qt_case(
+            """
+from ugc_image_tool.version_info import build_label
+
+expected = build_label()
+assert window._version_badge.text() == expected, (window._version_badge.text(), expected)
+assert "点击复制" in window._version_badge.toolTip()
+assert window._version_badge.parent() is window.statusBar()
+"""
+        )
+
+    def test_clicking_version_badge_copies_text_to_clipboard(self) -> None:
+        self.run_qt_case(
+            """
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QApplication
+from ugc_image_tool.version_info import build_label
+
+expected = build_label()
+QApplication.clipboard().clear()
+QTest.mouseClick(window._version_badge, Qt.MouseButton.LeftButton)
+QTest.qWait(50)
+assert QApplication.clipboard().text() == expected, QApplication.clipboard().text()
+"""
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

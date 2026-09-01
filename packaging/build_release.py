@@ -209,6 +209,31 @@ def _build_info(
     }
 
 
+def _initial_build_info(version: str) -> dict[str, object]:
+    """PyInstaller 构建前写出，供打包进应用的数据文件使用。"""
+    info = _build_info(version, signed=False, signature_status="Unknown", zip_path=Path(""))
+    info["signed"] = False
+    info["signature_status"] = "Unknown"
+    return info
+
+
+def _finalize_build_info(
+    info: dict[str, object],
+    signed: bool,
+    signature_status: str,
+    zip_path: Path,
+) -> dict[str, object]:
+    """签名、压缩完成后更新发布物元数据。"""
+    info["archive"] = zip_path.name
+    info["signed"] = signed
+    info["signature_status"] = signature_status
+    return info
+
+
+def _write_build_info(path: Path, info: dict[str, object]) -> None:
+    path.write_text(json.dumps(info, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
 def _deploy_dev_copy(portable_dir: Path) -> Path:
     """把最新便携目录整体覆盖到桌面 dev/ 下的固定目录，供开发直接双击运行。
 
@@ -264,9 +289,11 @@ def main(argv: list[str] | None = None) -> int:
     release_dir = Path(args.release_dir)
     work_root = release_dir / "work"
     pyinstaller_workpath = work_root / "pyinstaller"
+    build_info_path = release_dir / "build-info.json"
 
     if not args.skip_build:
         work_root.mkdir(parents=True, exist_ok=True)
+        _write_build_info(build_info_path, _initial_build_info(version))
         _run_pyinstaller(version, pyinstaller_workpath, work_root)
 
     portable_dir = _finalize_portable_dir(work_root, version)
@@ -296,11 +323,12 @@ def main(argv: list[str] | None = None) -> int:
         )
         print("[ok] 已写出 SHA256SUMS。")
 
-    info = _build_info(version, signed, signature_status, zip_path)
-    build_info_path = release_dir / "build-info.json"
-    build_info_path.write_text(
-        json.dumps(info, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    info = (
+        _initial_build_info(version)
+        if not build_info_path.is_file()
+        else json.loads(build_info_path.read_text(encoding="utf-8"))
     )
+    _write_build_info(build_info_path, _finalize_build_info(info, signed, signature_status, zip_path))
     print(f"[ok] 已写出 {build_info_path.name}。")
 
     if not args.skip_verify:

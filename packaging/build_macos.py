@@ -100,6 +100,26 @@ def _build_info(version: str, signed: bool, zip_path: Path) -> dict[str, object]
     }
 
 
+def _initial_build_info(version: str) -> dict[str, object]:
+    """PyInstaller 构建前写出，供打包进应用的数据文件使用。"""
+    info = _build_info(version, signed=False, zip_path=Path(""))
+    info["signed"] = False
+    info["signature_status"] = "Unknown"
+    return info
+
+
+def _finalize_build_info(info: dict[str, object], signed: bool, zip_path: Path) -> dict[str, object]:
+    """构建、签名、压缩完成后更新发布物元数据。"""
+    info["archive"] = zip_path.name
+    info["signed"] = signed
+    info["signature_status"] = "ad-hoc" if signed else "unsigned"
+    return info
+
+
+def _write_build_info(path: Path, info: dict[str, object]) -> None:
+    path.write_text(json.dumps(info, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
 def main(argv: list[str] | None = None) -> int:
     if sys.platform != "darwin":
         raise SystemExit("build_macos.py 只能在 macOS 上运行；Windows 请用 build_release.py")
@@ -121,9 +141,11 @@ def main(argv: list[str] | None = None) -> int:
     release_dir = Path(args.release_dir)
     work_root = release_dir / "work"
     pyinstaller_workpath = work_root / "pyinstaller"
+    info_path = release_dir / "build-info.json"
 
     if not args.skip_build:
         work_root.mkdir(parents=True, exist_ok=True)
+        _write_build_info(info_path, _initial_build_info(version))
         env = dict(os.environ)
         env["UGC_IMAGE_TOOL_VERSION"] = version
         _run(
@@ -156,12 +178,8 @@ def main(argv: list[str] | None = None) -> int:
         )
         print("[ok] 已写出 SHA256SUMS。")
 
-    info_path = release_dir / "build-info.json"
-    info_path.write_text(
-        json.dumps(_build_info(version, signed, zip_path), ensure_ascii=False, indent=2)
-        + "\n",
-        encoding="utf-8",
-    )
+    info = _initial_build_info(version) if not info_path.is_file() else json.loads(info_path.read_text(encoding="utf-8"))
+    _write_build_info(info_path, _finalize_build_info(info, signed, zip_path))
     print(f"[ok] 已写出 {info_path.name}。")
 
     if not args.skip_verify:

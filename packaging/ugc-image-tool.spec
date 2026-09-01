@@ -29,6 +29,12 @@ from pathlib import Path
 SPEC_DIR = Path(SPECPATH).resolve()  # packaging/
 ROOT = SPEC_DIR.parent  # 仓库根
 
+# 让规格能引用同目录的 release_meta.py。
+sys.path.insert(0, str(SPEC_DIR))
+from release_meta import pyproject_version, require_injected_version  # noqa: E402
+
+VERSION = require_injected_version()
+
 # keyring 通过 entry points 动态加载后端，PyInstaller 静态分析抓不到，
 # 必须复制包元数据并显式收集后端子模块，否则 macOS 构建运行时找不到钥匙串后端。
 if sys.platform == "darwin":
@@ -53,6 +59,10 @@ a = Analysis(
     noarchive=False,
     optimize=0,
 )
+
+# 把 build-info.json 作为数据文件打进包，供运行时读取 commit hash。
+build_info_json = ROOT / "release" / "build-info.json"
+a.datas += [("release/build-info.json", str(build_info_json), "DATA")]
 
 pyz = PYZ(a.pure)
 
@@ -92,5 +102,5 @@ if sys.platform == "darwin":
         name="ugc-image-tool.app",
         icon=None,
         bundle_identifier="com.swarmforge.ugc-image-tool",
-        version=os.environ.get("UGC_IMAGE_TOOL_VERSION", "0.1.0"),
+        version=VERSION,
     )

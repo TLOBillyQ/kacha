@@ -28,6 +28,7 @@ from ..settings import (
     SettingsApplication,
     SettingsStoreError,
 )
+from ..version_info import build_label
 from .controllers.discovery_controller import DiscoveryController
 from .pages import GeneratePage, SettingsPage, TaskCenterPage
 from .presentation import (
@@ -52,6 +53,19 @@ QFrame#connectionBanner {{
 
 class _TaskEvents(QObject):
     changed = Signal(object)
+
+
+class _VersionBadge(QLabel):
+    """状态栏版本角标：点击把当前显示的版本串写入剪贴板。"""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setText(build_label())
+        self.setToolTip("点击复制版本信息")
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        QApplication.clipboard().setText(self.text())
 
 
 class MainWindow(QMainWindow):
@@ -173,6 +187,8 @@ class MainWindow(QMainWindow):
         self._recall_button.setToolTip("显示/隐藏任务中心面板")
         self._recall_button.clicked.connect(self._toggle_task_center_dock)
         self.statusBar().addPermanentWidget(self._recall_button)
+        self._version_badge = _VersionBadge()
+        self.statusBar().addPermanentWidget(self._version_badge)
         self._events.changed.connect(self._on_task_arrived)
 
         # 无持久化状态时应用默认尺寸；resizeDocks 需在窗口显示前调用才生效。
