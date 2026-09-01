@@ -264,8 +264,8 @@ def test_first_publish_creates_release_with_notes_body() -> None:
                 f"ugc-image-tool-{version}-win-x64.zip",
                 "SHA256SUMS",
             }
-            # 正文来自发布说明，且含首次运行的绕过提示（ADR 0007）。
-            assert "安全声明" in release["body"]
+            # 正文来自发布说明，且含首次运行的绕过提示。
+            assert "安全提示" in release["body"]
             assert "仍要运行" in release["body"]
             assert "右键" in release["body"]
             # 附件字节与本地一致。
@@ -283,12 +283,6 @@ def test_both_platforms_merge_into_one_release_idempotently() -> None:
     with tempfile.TemporaryDirectory() as temp:
         win_dir = make_release_dir(Path(temp) / "win", "win-x64")
         mac_dir = make_release_dir(Path(temp) / "mac", "macos-arm64")
-        for release_dir, platform in ((win_dir, "win-x64"), (mac_dir, "macos-arm64")):
-            (release_dir / "build-info.json").write_text(
-                json.dumps({"version": version, "archive": f"ugc-image-tool-{version}-{platform}.zip",
-                            "platform": platform}, ensure_ascii=False, indent=2) + "\n",
-                encoding="utf-8",
-            )
         gitea = FakeGitea()
         try:
             assert run_publish(win_dir, gitea.base_url).returncode == 0
@@ -303,9 +297,6 @@ def test_both_platforms_merge_into_one_release_idempotently() -> None:
             assert win_zip in checksums and mac_zip in checksums
             for name, data in ((win_zip, win_dir / win_zip), (mac_zip, mac_dir / mac_zip)):
                 assert hashlib.sha256(data.read_bytes()).hexdigest() in checksums, name
-            # 两端构建信息都在正文里：第二端发布不能丢掉第一端的摘要。
-            assert f"### {win_zip}" in release["body"]
-            assert f"### {mac_zip}" in release["body"]
             # Mac 端再跑一次：附件仍为三个（替换而非重复），内容不变。
             assert run_publish(mac_dir, gitea.base_url).returncode == 0
             assert len(gitea.state.assets[release["id"]]) == 3

@@ -19,8 +19,8 @@ SHA256SUMS 与远端已有内容合并（本机条目优先），两端都发布
 - 版本号唯一来源是 pyproject.toml 的 version；release/ 里出现与该版本
   不一致的压缩包（如旧版本残留）即拒绝。
 
-Release 标题为版本号，正文来自 docs/release/release-notes-<版本>.md，
-本地存在 build-info.json 时附在正文末尾作为构建信息摘要。
+Release 标题为版本号，正文直接使用 docs/release/release-notes-<版本>.md，
+不附加构建信息小节。
 
 示例：
 
@@ -97,61 +97,14 @@ def merge_checksums(local_text: str, remote_text: str | None) -> str:
     return "".join(f"{digest}  {name}\n" for name, digest in sorted(merged.items()))
 
 
-_BUILD_INFO_HEADER = "## 构建信息"
-
-
-def _local_build_info_section(release_dir: Path) -> dict[str, str]:
-    """本机 build-info.json 转成 '### <压缩包名>' 小节；无文件则无小节。"""
-    build_info_path = release_dir / "build-info.json"
-    if not build_info_path.is_file():
-        return {}
-    info_text = build_info_path.read_text(encoding="utf-8").strip()
-    try:
-        archive = str(json.loads(info_text).get("archive", "unknown"))
-    except json.JSONDecodeError:
-        archive = "unknown"
-    return {archive: f"### {archive}\n\n```json\n{info_text}\n```"}
-
-
-def _parse_build_info_sections(body: str) -> dict[str, str]:
-    """从已有正文的构建信息区解析各 '### <压缩包名>' 小节。"""
-    index = body.find(_BUILD_INFO_HEADER)
-    if index < 0:
-        return {}
-    sections: dict[str, str] = {}
-    current_name: str | None = None
-    current: list[str] = []
-    for line in body[index:].splitlines():
-        if line.startswith("### "):
-            if current_name is not None:
-                sections[current_name] = "\n".join(current).rstrip()
-            current_name = line[len("### "):].strip()
-            current = [line]
-        elif current_name is not None:
-            current.append(line)
-    if current_name is not None:
-        sections[current_name] = "\n".join(current).rstrip()
-    return sections
-
-
-def release_body(version: str, release_dir: Path, existing_body: str | None = None) -> str:
-    """Release 正文：发布说明全文 + 构建信息小节。
-
-    两端先后发布时，保留已有正文里其他平台（按压缩包名区分）的构建信息
-    小节，本机小节按压缩包名覆盖，避免第二端发布丢掉第一端摘要。
-    """
+def release_body(version: str, release_dir: Path) -> str:
+    """Release 正文只使用发布说明文件，不附加构建信息小节。"""
     notes_path = REPO_ROOT / "docs" / "release" / f"release-notes-{version}.md"
     if not notes_path.is_file():
         raise SystemExit(
             f"缺少发布说明：{notes_path.relative_to(REPO_ROOT)}；请先撰写再发布。"
         )
-    body = notes_path.read_text(encoding="utf-8").rstrip()
-    sections = _parse_build_info_sections(existing_body or "")
-    sections.update(_local_build_info_section(release_dir))
-    if sections:
-        rendered = "\n\n".join(sections[name] for name in sorted(sections))
-        body += f"\n\n---\n\n{_BUILD_INFO_HEADER}\n\n{rendered}\n"
-    return body
+    return notes_path.read_text(encoding="utf-8").rstrip()
 
 
 class GiteaError(RuntimeError):
@@ -293,14 +246,13 @@ def main(argv: list[str] | None = None) -> int:
     client = GiteaClient(args.base_url, token, args.repo)
     tag = f"v{version}"
     release = client.release_for_tag(tag)
-    existing_body = str(release.get("body") or "") if release else None
-    body = release_body(version, release_dir, existing_body)
+    body = release_body(version, release_dir)
     if release is None:
         release = client.create_release(tag, version, body)
         print(f"[ok] 已创建 Release：{tag}")
     else:
         client.update_release(int(release["id"]), version, body)  # type: ignore[arg-type]
-        print(f"[ok] 复用已有 Release：{tag}（正文已更新，保留各端构建信息）")
+        print(f"[ok] 复用已有 Release：{tag}（正文已更新）")
     release_id = int(release["id"])  # type: ignore[arg-type]
 
     try:
