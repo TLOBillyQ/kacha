@@ -112,7 +112,7 @@ class _Handler(BaseHTTPRequestHandler):
             return
         if method == "GET" and parts[:1] == ["releases"] and parts[2:3] == ["assets"] and len(parts) == 3:
             assets = state.assets.get(int(parts[1]), {})
-            self._reply(200, [{"id": asset["id"], "name": asset["name"]} for asset in assets.values()])
+            self._reply(200, [self._asset_meta(asset) for asset in assets.values()])
             return
         if method == "POST" and parts[:1] == ["releases"] and parts[2:3] == ["assets"] and len(parts) == 3:
             name, data = self._parse_attachment()
@@ -126,12 +126,14 @@ class _Handler(BaseHTTPRequestHandler):
             return
         if parts[:1] == ["releases"] and parts[1:2] == ["assets"] and len(parts) == 3:
             asset_id = int(parts[2])
+            if method == "GET":
+                # 本 Gitea 实例没有附件元数据 GET 端点（实测 404）；内容一律经
+                # 列表里的 browser_download_url 下载。
+                self._reply(404, b"404 page not found", content_type="text/plain")
+                return
             for assets in state.assets.values():
                 if asset_id in assets:
-                    if method == "GET":
-                        # 与真 Gitea 一致：返回元数据（含 browser_download_url），不是内容。
-                        self._reply(200, self._asset_meta(assets[asset_id]))
-                    elif method == "DELETE":
+                    if method == "DELETE":
                         state.attachments.pop(assets[asset_id]["uuid"], None)
                         del assets[asset_id]
                         self._reply(204)

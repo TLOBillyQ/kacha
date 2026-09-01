@@ -224,14 +224,11 @@ class GiteaClient:
         _, assets = self._json("GET", f"/releases/{release_id}/assets")
         return assets  # type: ignore[return-value]
 
-    def download_asset(self, asset_id: int) -> bytes:
-        """取附件内容：元数据端点返回 JSON，真正的内容在 browser_download_url。"""
-        _, meta = self._json("GET", f"/releases/assets/{asset_id}")
-        url = meta.get("browser_download_url") if isinstance(meta, dict) else None  # type: ignore[union-attr]
-        if not url:
-            raise GiteaError(f"Gitea 附件元数据缺少 browser_download_url：asset {asset_id}")
+    def download_url(self, url: str) -> bytes:
+        """按 browser_download_url 取附件内容（附件元数据 GET 端点在旧版
+        Gitea 上不存在，一律走列表里给出的下载地址）。"""
         request = urllib.request.Request(
-            str(url), headers={"Authorization": f"token {self._token}"}
+            url, headers={"Authorization": f"token {self._token}"}
         )
         try:
             with urllib.request.urlopen(request, timeout=300) as response:
@@ -312,9 +309,9 @@ def main(argv: list[str] | None = None) -> int:
         remote_text: str | None = None
         for asset in client.list_assets(release_id):
             if asset["name"] == CHECKSUMS_NAME:
-                remote_text = client.download_asset(int(asset["id"])).decode(  # type: ignore[arg-type]
-                    "utf-8", "replace"
-                )
+                url = str(asset.get("browser_download_url") or "")  # type: ignore[arg-type]
+                if url:
+                    remote_text = client.download_url(url).decode("utf-8", "replace")
         merged = merge_checksums(local_text, remote_text)
         client.upload_replace(release_id, CHECKSUMS_NAME, merged.encode("utf-8"))
     except GiteaError as error:
