@@ -65,6 +65,6 @@ def test_falls_back_to_current_interpreter(monkeypatch, tmp_path):
     calls = []
     run = fake_run(calls)
     monkeypatch.setattr(verify.cli, "run", run)
-    monkeypatch.setattr("tools.packages.common.sys.executable", "/usr/bin/python")
+    monkeypatch.setattr("tools.packages.verify.cli.sys.executable", "/usr/bin/python")
     assert verify.cli.main([], {"repo_root": str(tmp_path)}) == 0
     assert not calls[0][0][0].endswith(".venv/bin/python")
