@@ -5,7 +5,7 @@
 
 ## Language Tool Table (Python 3.12)
 - The language table in engineering.prompt does not cover Python; use this table instead.
-- Mutation: `python tools/cli.py mutate <file>`; CRAP: `python tools/cli.py crap`; DRY: `python tools/cli.py dry`; unit tests: `python tools/cli.py verify`. All ship in this repo under `tools/`; no separate install step. Project python is `.venv/bin/python` (create with `python3 -m venv .venv && .venv/bin/pip install -e '.[test]'`).
+- Mutation: `python tools/cli.py mutate <file>`; CRAP: `python tools/cli.py crap`; DRY: `python tools/cli.py dry`; unit tests: `python tools/cli.py verify`. `verify` ships in this repo under `tools/`; `crap`/`dry`/`mutate` come from the 4py series repos (qinyuanj/crap4py, dry4py, mutate4py on Gitea) and are installed by the `test` extra — no other install step. Project python is `.venv/bin/python` (create with `python3 -m venv .venv && .venv/bin/pip install -e '.[test]'`).
 - Coverage artifact comes only from the ecosystem-standard fixed output — coverage.py's `coverage json` (`crap` collects it; a missing artifact is a blocker, never invented numbers).
 - Clojure/Babashka paragraphs in engineering.prompt do not apply to this project.
 
