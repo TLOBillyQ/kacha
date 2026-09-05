@@ -5,7 +5,8 @@
   python tools/cli.py --help | -h
 
 调度机制:顶层静态路由表 COMMANDS(封闭命令集) -> 查表 ->
-import tools.packages.<pkg>.cli -> cli.main(args, env) -> 退出码透传。
+import <module> -> cli.main(args, env) -> 退出码透传。verify 在本仓 tools/packages/,
+crap/dry/mutate 来自 4py 系列独立仓(crap4py / dry4py / mutate4py,随 .[test] 安装)。
 
 退出码约定:0 = 成功 / 1 = 业务失败 / 2 = 用法错误(未知子命令、加载失败)。
 各子命令自己的退出码见其 cli.py usage()。
@@ -22,7 +23,7 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-from tools.packages.common import HELP_TOKENS, wants_help  # noqa: E402
+from tools.packages.verify.cli import HELP_TOKENS, wants_help  # noqa: E402
 
 COMMANDS = [
     ("verify", "质量门禁: 默认 slim(pytest 硬地板); --coverage"),
@@ -30,6 +31,14 @@ COMMANDS = [
     ("dry", "结构重复检测(AST 归一化 + Jaccard)"),
     ("mutate", "单文件变异测试(manifest 差分)"),
 ]
+
+#: 子命令 -> 实现模块。verify 本仓自带;其余三条是 4py 系列独立仓。
+MODULES = {
+    "verify": "tools.packages.verify.cli",
+    "crap": "crap4py.cli",
+    "dry": "dry4py.cli",
+    "mutate": "mutate4py.cli",
+}
 
 _COMMAND_NAMES = frozenset(name for name, _summary in COMMANDS)
 
@@ -44,10 +53,10 @@ def usage() -> str:
 
 
 def _load_package(name: str):
-    """按约定装载 tools.packages.<name>.cli;形状不合视为加载失败。"""
-    module = importlib.import_module(f"tools.packages.{name}.cli")
+    """按路由表装载实现模块;形状不合视为加载失败。"""
+    module = importlib.import_module(MODULES[name])
     if not all(callable(getattr(module, attr, None)) for attr in ("main", "usage")):
-        raise AttributeError(f"bad package shape: tools.packages.{name}.cli")
+        raise AttributeError(f"bad package shape: {MODULES[name]}")
     return module
 
 
@@ -90,7 +99,9 @@ def _dispatch(name: str, rest, env, packages) -> int:
 
 
 def _load_failure(name: str, detail: str) -> int:
-    sys.stderr.write(f"子命令加载失败: {name} (tools.packages.{name}.cli)\n")
+    sys.stderr.write(f"子命令加载失败: {name} ({MODULES[name]})\n")
+    if name != "verify":
+        sys.stderr.write("提示: 4py 工具随 .[test] 安装 —— .venv/bin/pip install -e '.[test]'\n")
     sys.stderr.write(f"{detail}\n{usage()}")
     return 2
 
@@ -107,39 +118,39 @@ if __name__ == "__main__":
 
 # mutate4py-manifest
 # version=4
-# projectHash=63353a3445f386d9
+# projectHash=ce5eecbbcd5773d1
 # scope.0.id=cli.usage
 # scope.0.kind=function
-# scope.0.startLine=37
-# scope.0.endLine=43
+# scope.0.startLine=46
+# scope.0.endLine=52
 # scope.0.semanticHash=c6c1a213b6b23ad9
 # scope.1.id=cli._load_package
 # scope.1.kind=function
-# scope.1.startLine=46
-# scope.1.endLine=51
-# scope.1.semanticHash=afe85b783cac33e8
+# scope.1.startLine=55
+# scope.1.endLine=60
+# scope.1.semanticHash=1ea8576f1690c7dc
 # scope.2.id=cli._package_for
 # scope.2.kind=function
-# scope.2.startLine=54
-# scope.2.endLine=64
+# scope.2.startLine=63
+# scope.2.endLine=73
 # scope.2.semanticHash=6863e93dca73ed97
 # scope.3.id=cli.main
 # scope.3.kind=function
-# scope.3.startLine=67
-# scope.3.endLine=79
+# scope.3.startLine=76
+# scope.3.endLine=88
 # scope.3.semanticHash=1ab186b8ca030025
 # scope.4.id=cli._dispatch
 # scope.4.kind=function
-# scope.4.startLine=82
-# scope.4.endLine=89
+# scope.4.startLine=91
+# scope.4.endLine=98
 # scope.4.semanticHash=73d17113edaf6e5a
 # scope.5.id=cli._load_failure
 # scope.5.kind=function
-# scope.5.startLine=92
-# scope.5.endLine=95
-# scope.5.semanticHash=d7d686502b04bd9a
+# scope.5.startLine=101
+# scope.5.endLine=106
+# scope.5.semanticHash=03d5771481013aa4
 # scope.6.id=cli._invoke
 # scope.6.kind=function
-# scope.6.startLine=98
-# scope.6.endLine=102
+# scope.6.startLine=109
+# scope.6.endLine=113
 # scope.6.semanticHash=65a9c6c3b98def86

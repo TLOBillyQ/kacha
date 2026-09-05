@@ -15,7 +15,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-test = ["pytest>=8,<10", "coverage>=7,<8"]
+test = [
+    "pytest>=8,<10",
+    "coverage>=7,<8",
+    # 4py 质量工具链（crap/dry/mutate）跟随各仓 main HEAD；同 monopoly tools.lock 的“工具跟主干”约定
+    "crap4py @ git+http://lzxsvn:3000/qinyuanj/crap4py.git",
+    "dry4py @ git+http://lzxsvn:3000/qinyuanj/dry4py.git",
+    "mutate4py @ git+http://lzxsvn:3000/qinyuanj/mutate4py.git",
+]
 
 [project.scripts]
 ugc-contracts = "ugc_image_tool.contracts.cli:main"
