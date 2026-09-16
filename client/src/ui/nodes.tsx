@@ -234,13 +234,13 @@ function StatusBadge({ status }: { status: TaskStatus }) {
       return <span className="status status-failed">失败 · {status.label}</span>;
     case "cancelled":
       return (
-        <span className="status status-queued" title={CANCELLED_HINT}>
+        <span className="status status-queued" title={status.gatewayMayContinue ? CANCELLED_HINT : undefined}>
           已取消
         </span>
       );
     case "interrupted":
       return (
-        <span className="status status-queued" title="上次程序退出时仍在排队或执行，可重新生成">
+        <span className="status status-queued" title="上次程序异常退出时仍在执行，可重新生成">
           已中断
         </span>
       );
@@ -474,7 +474,7 @@ export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskF
           ))}
         </ul>
       )}
-      {status?.kind === "cancelled" && <div className="muted small">{CANCELLED_HINT}</div>}
+      {status?.kind === "cancelled" && status.gatewayMayContinue && <div className="muted small">{CANCELLED_HINT}</div>}
       <div className="task-actions nodrag">
         {locked ? (
           <button onClick={() => cancelTask(node.id)} title={status?.kind === "running" ? CANCELLED_HINT : "移出队列"}>

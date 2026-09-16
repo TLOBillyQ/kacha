@@ -6,7 +6,7 @@ import type { CapabilityTable } from "../core/capabilities";
 import { GatewayError } from "../core/gateway";
 import * as Q from "../core/queue";
 import { CancelledError, executeJob, failureLabel, prepareJob, prepareRegenerate, writeJob, type PreparedJob, type RunDeps, type TaskStatus } from "../core/run";
-import { tableDigest } from "../core/taskDir";
+import { tableDigest, writeOutcome, type TaskOutcome } from "../core/taskDir";
 import { httpFetch, ipc } from "../shell/ipc";
 
 const deps: RunDeps = {
@@ -96,6 +96,17 @@ export function useRunner(boards: { getBoard: (key: string) => Board | null; upd
     }));
   }, []);
 
+  /** 任务目录已写的任务没有结果时记下结局，重开时据此区分失败 / 已取消 / 已中断；写不了就算了。 */
+  const recordOutcome = useCallback((entry: QueuedSubmission, outcome: TaskOutcome) => {
+    if (entry.written) void writeOutcome(deps, entry.target.outputRoot, entry.job.relDir, outcome).catch(() => undefined);
+  }, []);
+
+  const fail = (entry: QueuedSubmission, error: unknown) => {
+    const failed = { kind: "failed" as const, label: failureLabel(error) };
+    setStatus(entry.job.taskNodeId, failed);
+    recordOutcome(entry, failed);
+  };
+
   const execute = useCallback(
     async (taskId: string) => {
       const entry = entries.current.get(taskId)!;
@@ -107,6 +118,8 @@ export function useRunner(boards: { getBoard: (key: string) => Board | null; upd
           entry.job = await writeJob(deps, target.outputRoot, job);
           entry.written = true;
           setLastSubmitted(target.boardKey, job.taskNodeId, entry.lastSubmitted);
+          // 写目录期间被取消：取消时目录还没写，这里补记结局。
+          if (controller.signal.aborted) recordOutcome(entry, { kind: "cancelled", gatewayMayContinue: false });
         }
         if (controller.signal.aborted) return;
         const apply = await executeJob(deps, {
@@ -127,17 +140,18 @@ export function useRunner(boards: { getBoard: (key: string) => Board | null; upd
           const { queue: next, outcome } = Q.rateLimited(queue.current, taskId, Date.now());
           queue.current = next;
           retrying = outcome.kind === "retry";
-          setStatus(job.taskNodeId, outcome.kind === "retry" ? { kind: "backoff", retryAt: outcome.retryAt } : { kind: "failed", label: failureLabel(e) });
+          if (outcome.kind === "retry") setStatus(job.taskNodeId, { kind: "backoff", retryAt: outcome.retryAt });
+          else fail(entry, e);
         } else {
           queue.current = Q.complete(queue.current, taskId);
-          setStatus(job.taskNodeId, { kind: "failed", label: failureLabel(e) });
+          fail(entry, e);
         }
       } finally {
         if (!retrying && !controller.signal.aborted) entries.current.delete(taskId);
         pumpRef.current();
       }
     },
-    [setStatus, setLastSubmitted],
+    [setStatus, setLastSubmitted, recordOutcome],
   );
 
   const pump = useCallback(() => {
@@ -245,13 +259,16 @@ export function useRunner(boards: { getBoard: (key: string) => Board | null; upd
           // 从未派发：画板与任务目录都没动过，不留痕迹。
           setStatus(entry.job.taskNodeId, null);
         } else {
+          // 执行中：请求可能已发出；限流退避中：网关没接这次请求。
+          const cancelled = { kind: "cancelled" as const, gatewayMayContinue: was === "running" && entry.written };
           entry.controller.abort();
-          setStatus(entry.job.taskNodeId, { kind: "cancelled" });
+          setStatus(entry.job.taskNodeId, cancelled);
+          recordOutcome(entry, cancelled);
         }
       }
       pump();
     },
-    [pump, setStatus],
+    [pump, setStatus, recordOutcome],
   );
 
   /** 取消还在读参考图的提交。 */

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { BUILTIN_TABLE } from "./capabilities";
-import { newTaskId, saveResult, sha256Hex, sniffImage, tableDigest, taskDirOf, writeSubmission, type SubmissionPlan } from "./taskDir";
+import { newTaskId, parseOutcome, saveResult, sha256Hex, sniffImage, tableDigest, taskDirOf, taskDirOfTaskId, writeOutcome, writeSubmission, type SubmissionPlan } from "./taskDir";
 
 const PNG = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="), (c) => c.charCodeAt(0));
 const JPEG = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0, 0x10]);
@@ -28,6 +28,8 @@ describe("任务编号与目录", () => {
     // 本地已是次日也按 UTC 日期归档。
     expect(taskDirOf(new Date("2026-09-16T23:30:00Z"), "x")).toBe("2026-09-16/x");
     expect(newTaskId(now, () => 5)).toMatch(/-00000005$/);
+    expect(taskDirOfTaskId(id)).toBe("2026-09-16/20260916T091500Z-3f9c2a1b");
+    expect(taskDirOfTaskId("not-a-task")).toBeNull();
   });
 });
 
@@ -134,5 +136,23 @@ describe("保存结果图", () => {
     const fs = memoryFs();
     await expect(saveResult(fs, "/root", "d/t", new TextEncoder().encode("<html>"))).rejects.toThrow("结果不是可识别的图片");
     expect(fs.files.size).toBe(0);
+  });
+});
+
+describe("结局记录 outcome.json", () => {
+  it("失败记脱敏类别，取消记网关侧是否可能仍在计算；读回一致", async () => {
+    const fs = memoryFs();
+    await writeOutcome(fs, "/root", "2026-09-16/t1", { kind: "failed", label: "网关限流" });
+    await writeOutcome(fs, "/root", "2026-09-16/t2", { kind: "cancelled", gatewayMayContinue: false });
+    expect(JSON.parse(fs.text("/root/2026-09-16/t1/outcome.json"))).toEqual({ outcome: "failed", label: "网关限流" });
+    expect(parseOutcome(fs.files.get("/root/2026-09-16/t1/outcome.json")!)).toEqual({ kind: "failed", label: "网关限流" });
+    expect(parseOutcome(fs.files.get("/root/2026-09-16/t2/outcome.json")!)).toEqual({ kind: "cancelled", gatewayMayContinue: false });
+  });
+
+  it("读不懂的内容当作没有记录", () => {
+    const bytes = (text: string) => new TextEncoder().encode(text);
+    expect(parseOutcome(bytes("{"))).toBeNull();
+    expect(parseOutcome(bytes('{"outcome":"exploded"}'))).toBeNull();
+    expect(parseOutcome(bytes('{"outcome":"failed"}'))).toBeNull();
   });
 });

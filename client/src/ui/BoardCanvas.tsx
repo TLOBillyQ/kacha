@@ -38,9 +38,9 @@ import {
 } from "../core/graph";
 import { basename, resolveFromRoot, toRootRelative } from "../core/paths";
 import { defaultSizeSpec } from "../core/size";
-import { imageRefProblems, isInterrupted } from "../core/submission";
+import { imageRefProblems } from "../core/submission";
 import { ipc } from "../shell/ipc";
-import { BoardContext, primeImageInfo, type BoardActions } from "./context";
+import { BoardContext, primeImageInfo, useStoredStatuses, type BoardActions } from "./context";
 import { nodeTypes, type ImagePortInfo } from "./nodes";
 import { isActive } from "./useRunner";
 
@@ -55,7 +55,7 @@ interface Props {
   toast: (message: string) => void;
   discovery: Discovery;
   statuses: ReadonlyMap<string, TaskStatus>;
-  /** 本次程序运行期间队列经手过的提交，用于推导「已中断」。 */
+  /** 本次程序运行期间队列经手过的提交；其余无结果的提交按任务目录推导失败 / 已取消 / 已中断。 */
   handled: ReadonlySet<string>;
   /** 点「运行」：传当前选中的节点 id。 */
   onRun: (selectedIds: string[]) => void;
@@ -83,10 +83,8 @@ export function BoardCanvas({ board, table, outputRoot, update, openBoardPath, t
 
   const updateBoard = useCallback((fn: (b: Board) => Board) => update((b) => syncImagePorts(fn(b))), [update]);
 
-  const statusOf = useCallback(
-    (taskId: string): TaskStatus | null => statuses.get(taskId) ?? (isInterrupted(board, taskId, handled) ? { kind: "interrupted" } : null),
-    [statuses, board, handled],
-  );
+  const stored = useStoredStatuses(board, outputRoot, handled);
+  const statusOf = useCallback((taskId: string): TaskStatus | null => statuses.get(taskId) ?? stored.get(taskId) ?? null, [statuses, stored]);
   // 排队 / 执行中的任务节点：参数与连线锁定，上游提示词仍可编辑（经三选）。
   const locked = useMemo(() => new Set([...statuses].filter(([, st]) => isActive(st)).map(([id]) => id)), [statuses]);
   const lockedRef = useRef(locked);

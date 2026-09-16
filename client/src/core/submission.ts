@@ -100,8 +100,8 @@ function hasExecuted(board: Board, task: TaskNode): boolean {
 }
 
 /**
- * 已中断：提交过、画板上没有结果，且本次程序运行期间队列没经手过这次提交。
- * 重开画板时推导，不持久化；上次正常退出前失败的任务也会显示为已中断（失败原因不落盘）。
+ * 候选的已中断：提交过、画板上没有结果，且本次程序运行期间队列没经手过这次提交。
+ * 界面再读任务目录的结局记录：有失败 / 取消记录的按记录显示，没有才是已中断。不持久化到画板。
  */
 export function isInterrupted(board: Board, taskId: string, handled: ReadonlySet<string>): boolean {
   const task = findTask(board, taskId);

@@ -30,8 +30,8 @@ export type TaskStatus =
   /** 429 退避中，到 retryAt（毫秒）后回到派发。 */
   | { kind: "backoff"; retryAt: number }
   | { kind: "failed"; label: string }
-  /** 执行中被取消：只停了本地等待。 */
-  | { kind: "cancelled" }
+  /** 已取消；gatewayMayContinue = 请求已发出，网关侧可能仍在计算（限流退避中取消则不会）。 */
+  | { kind: "cancelled"; gatewayMayContinue: boolean }
   /** 上次程序非正常退出时仍在排队 / 执行；重开时推导，不持久化。 */
   | { kind: "interrupted" };
 

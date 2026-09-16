@@ -1,5 +1,5 @@
 // 任务目录：输出根目录/<UTC 日期>/<task_id>/（ADR 0010，任务目录是真源）。
-// 提交时一次写入参考图快照与 task.json，之后不可变；成功后再写结果图。文件系统由调用方注入。
+// 派发时一次写入参考图快照与 task.json，之后不可变；成功后再写结果图，失败 / 取消时写结局记录。文件系统由调用方注入。
 import type { CapabilityTable } from "./capabilities";
 import type { ReferenceImage } from "./gateway";
 import { joinPath } from "./paths";
@@ -117,4 +117,27 @@ export async function saveResult(fs: TaskFs, outputRoot: string, relDir: string,
   const file = `result.${kind.ext}`;
   await fs.writeNewFile(taskPath(outputRoot, relDir, file), bytes);
   return { file, path: `${relDir}/${file}` };
+}
+
+/** 没有结果图的任务的结局；没有记录 = 上次进行中时程序异常退出（已中断）。 */
+export type TaskOutcome = { kind: "failed"; label: string } | { kind: "cancelled"; gatewayMayContinue: boolean };
+
+export const OUTCOME_FILE = "outcome.json";
+
+/** 写结局记录 outcome.json：只含脱敏的错误类别，不含提示词、密钥与网关原文。 */
+export async function writeOutcome(fs: TaskFs, outputRoot: string, relDir: string, outcome: TaskOutcome): Promise<void> {
+  const record = outcome.kind === "failed" ? { outcome: "failed", label: outcome.label } : { outcome: "cancelled", gateway_may_continue: outcome.gatewayMayContinue };
+  await fs.writeNewFile(taskPath(outputRoot, relDir, OUTCOME_FILE), new TextEncoder().encode(`${JSON.stringify(record, null, 2)}\n`));
+}
+
+export function parseOutcome(bytes: Uint8Array): TaskOutcome | null {
+  let raw: { outcome?: unknown; label?: unknown; gateway_may_continue?: unknown };
+  try {
+    raw = JSON.parse(new TextDecoder().decode(bytes));
+  } catch {
+    return null;
+  }
+  if (raw?.outcome === "failed" && typeof raw.label === "string") return { kind: "failed", label: raw.label };
+  if (raw?.outcome === "cancelled") return { kind: "cancelled", gatewayMayContinue: raw.gateway_may_continue !== false };
+  return null;
 }
