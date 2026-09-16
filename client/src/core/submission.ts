@@ -2,7 +2,8 @@
 import type { Board, Region, TaskNode } from "./board";
 import { findModel, type CapabilityTable } from "./capabilities";
 import { composeSendText, isRequestShapeImplemented } from "./gateway";
-import { imageEdges, taskIssues } from "./graph";
+import { CHAIN_DEPTH_HINT, chainDepth, imageEdges, taskIssues } from "./graph";
+import { checkImageRefs, promptLanguage } from "./imageRefs";
 import { resolveFromRoot } from "./paths";
 import { modelAvailabilityIssue, type Discovery } from "./settings";
 import type { SizeSpec } from "./size";
@@ -98,6 +99,16 @@ function hasExecuted(board: Board, task: TaskNode): boolean {
   return typeof submitted === "string" && board.nodes.some((n) => n.type === "result" && n.task_id === submitted);
 }
 
+/**
+ * 候选的已中断：提交过、画板上没有结果，且本次程序运行期间队列没经手过这次提交。
+ * 界面再读任务目录的结局记录：有失败 / 取消记录的按记录显示，没有才是已中断。不持久化到画板。
+ */
+export function isInterrupted(board: Board, taskId: string, handled: ReadonlySet<string>): boolean {
+  const task = findTask(board, taskId);
+  const submitted = task?.last_submitted?.task_id;
+  return !!task && typeof submitted === "string" && !handled.has(submitted) && !hasExecuted(board, task);
+}
+
 /** 有选中时只跑选中子图（选中的任务 + 选中节点直接下游的任务），否则整个画板；跳过不脏的已执行任务与正在排队 / 执行的。 */
 export function runScope(board: Board, selectedIds: string[], busy: ReadonlySet<string> = new Set()): string[] {
   const selected = new Set(selectedIds);
@@ -135,6 +146,24 @@ export interface ConfirmItem {
   referenceCount: number;
   /** 非空 = 标红，不可勾选。 */
   issues: string[];
+  /** 仅提示，不阻断。 */
+  warnings: string[];
+}
+
+/** 「图N」实时角标：红 = 引用越界（不可运行），黄 = 有线未被引用。任务节点与二次确认共用。 */
+export function imageRefProblems(board: Board, taskId: string): { issues: string[]; warnings: string[]; unreferenced: number[] } {
+  const count = imageEdges(board, taskId).length;
+  const check = checkImageRefs(promptText(board, taskId, "positive"), count);
+  return {
+    issues: check.outOfRange.map((n) => `提示词引用了图${n}，但只接了 ${count} 张参考图`),
+    warnings: check.unreferenced.map((n) => `图${n} 已接线但提示词未引用`),
+    unreferenced: check.unreferenced,
+  };
+}
+
+export function chainDepthHint(board: Board, taskId: string): string | null {
+  const depth = chainDepth(board, taskId);
+  return depth >= CHAIN_DEPTH_HINT ? `已连续编辑 ${depth} 轮，建议回到原图重新编辑` : null;
 }
 
 export interface ConfirmContext {
@@ -157,6 +186,14 @@ export function buildConfirmItems(board: Board, table: CapabilityTable, taskIds:
     if (model && !isRequestShapeImplemented(model)) issues.push(`模型 ${model.display_name} 的请求形态尚未接入`);
     const unavailable = model && modelAvailabilityIssue(table, ctx.discovery, model.model_id);
     if (unavailable) issues.push(unavailable);
+    const refs = imageRefProblems(board, taskId);
+    issues.push(...refs.issues);
+    const warnings = [...refs.warnings];
+    if (model && images.length > 0 && promptLanguage(prompt) === "en" && model.reference_phrasing.en_verified === "untested") {
+      warnings.push("该模型英文序号未验证");
+    }
+    const deep = chainDepthHint(board, taskId);
+    if (deep) warnings.push(deep);
     images.forEach((img, i) => {
       if (ctx.missingNodes.has(img.nodeId)) issues.push(`图${i + 1} 图片缺失：${img.label}`);
     });
@@ -169,6 +206,7 @@ export function buildConfirmItems(board: Board, table: CapabilityTable, taskIds:
         sendText: composeSendText({ prompt, negativePrompt, referenceCount: images.length }),
         referenceCount: images.length,
         issues: [...new Set(issues)],
+        warnings,
       },
     ];
   });

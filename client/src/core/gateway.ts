@@ -2,6 +2,7 @@
 // 路径、载荷与出图解析全部来自 contracts/fixtures 实测夹具；生成请求只发一次，不重发、不用幂等键、不查任务。
 // HTTP 由调用方注入（壳里是 tauri-plugin-http 的 fetch，测试里是夹具回放）。
 import type { ModelCapability } from "./capabilities";
+import { promptLanguage, rewriteImageRefs, type PromptLanguage } from "./imageRefs";
 
 export const MODELS_PATH = "/v1/models";
 export const TEXT_TO_IMAGE_PATH = "/v1/images/generations";
@@ -71,7 +72,12 @@ export type GeneratedImage = { kind: "url"; url: string } | { kind: "bytes"; byt
 
 // ---- 请求构造 ----
 
-function referenceNote(count: number): string {
+function referenceNote(count: number, language: PromptLanguage): string {
+  if (language === "en") {
+    if (count === 1) return "This request provides 1 reference image.";
+    const ordered = Array.from({ length: count }, (_, i) => `Image ${i + 1}`).join(", ");
+    return `This request provides ${count} reference images, in order: ${ordered}.`;
+  }
   if (count <= 1) return `本次提供 ${count} 张参考图。`;
   const ordered = Array.from({ length: count }, (_, i) => `图${i + 1}`).join("、");
   return `本次提供 ${count} 张参考图，按顺序为${ordered}。`;
@@ -79,12 +85,16 @@ function referenceNote(count: number): string {
 
 /**
  * 完整发送文本：二次确认弹窗展示、任务记录保存的都是它。
- * 文生图即提示词本身（负向走独立字段）；图片编辑注入数量顺序前缀，负向并入文本（契约「开放试用」一节）。
+ * 提示词里的 @图N 按语言改写（只改发送文本）；文生图即改写后的提示词（负向走独立字段）；
+ * 图片编辑注入数量顺序前缀，负向并入文本（契约「开放试用」一节）。
  */
 export function composeSendText({ prompt, negativePrompt, referenceCount }: { prompt: string; negativePrompt: string; referenceCount: number }): string {
-  if (referenceCount === 0) return prompt;
-  const text = `${referenceNote(referenceCount)}\n${prompt}`;
-  return negativePrompt ? `${text}\n避免出现：${negativePrompt}` : text;
+  const text = rewriteImageRefs(prompt);
+  if (referenceCount === 0) return text;
+  const language = promptLanguage(prompt);
+  const withNote = `${referenceNote(referenceCount, language)}\n${text}`;
+  if (!negativePrompt) return withNote;
+  return `${withNote}\n${language === "en" ? "Avoid: " : "避免出现："}${negativePrompt}`;
 }
 
 function toBase64(bytes: Uint8Array): string {
@@ -100,7 +110,7 @@ type RequestShape = (input: GenerationInput) => { path: string; body: Record<str
 const qwenImagesEdits: RequestShape = (input) => {
   const { model, prompt, negativePrompt, size, references } = input;
   if (references.length === 0) {
-    const body: Record<string, unknown> = { model: model.model_id, prompt };
+    const body: Record<string, unknown> = { model: model.model_id, prompt: composeSendText({ prompt, negativePrompt, referenceCount: 0 }) };
     if (negativePrompt) body.negative_prompt = negativePrompt;
     Object.assign(body, { n: 1, size: `${size.width}x${size.height}` }, model.fixed_params);
     return { path: TEXT_TO_IMAGE_PATH, body };

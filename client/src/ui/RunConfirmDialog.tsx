@@ -1,4 +1,4 @@
-// 「运行」二次确认（规格第 3.3 节）：逐项列模型、提示词首行、可展开的完整发送文本；标红项列原因且不可勾选。
+// 「运行」二次确认（规格第 3.3 节）：逐项列模型、提示词首行、可展开的完整发送文本；标红项列原因且不可勾选；黄色提示不阻断。
 import { useState } from "react";
 import type { ConfirmItem } from "../core/submission";
 
@@ -52,6 +52,13 @@ export function RunConfirmDialog({ items, scope, onConfirm, onCancel }: Props) {
                     <ul className="error-list">
                       {item.issues.map((issue) => (
                         <li key={issue}>{issue}</li>
+                      ))}
+                    </ul>
+                  )}
+                  {item.warnings.length > 0 && (
+                    <ul className="warn-list">
+                      {item.warnings.map((warning) => (
+                        <li key={warning}>{warning}</li>
                       ))}
                     </ul>
                   )}

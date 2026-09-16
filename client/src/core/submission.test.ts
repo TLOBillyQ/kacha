@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Board, BoardEdge, BoardNode, TaskNode } from "./board";
 import { BUILTIN_TABLE } from "./capabilities";
-import { buildConfirmItems, imageSources, isDirty, runScope, snapshotOf, withSubmitted } from "./submission";
+import { buildConfirmItems, imageSources, isDirty, isInterrupted, runScope, snapshotOf, withSubmitted } from "./submission";
 
 function prompt(id: string, text: string): BoardNode {
   return { id, type: "prompt", pos: [0, 0], size: [100, 100], extra: {}, text };
@@ -186,11 +186,61 @@ describe("二次确认清单", () => {
   });
 });
 
+describe("二次确认：「图N」校验与提示", () => {
+  const ctx = { discovery: { source: "none" as const }, missingNodes: new Set<string>() };
+
+  it("引用越界为红（硬阻断），有线未被引用为黄（仅警告）", () => {
+    const b = editBoard();
+    (b.nodes[0] as { text: string }).text = "把@图3 的颜色用到@图1 上";
+    const [item] = buildConfirmItems(b, BUILTIN_TABLE, ["t"], ctx);
+    expect(item.issues).toEqual(["提示词引用了图3，但只接了 2 张参考图"]);
+    expect(item.warnings).toEqual(["图2 已接线但提示词未引用"]);
+    expect(item.sendText).toContain("把图3 的颜色用到图1 上");
+  });
+
+  it("英文序号未验证的模型：英文提示词带参考图时提示", () => {
+    const b = board(
+      [prompt("p", "Put @图1 on a beach"), reference("r1"), task("t", { model: "doubao-seedream-5-0-pro-260628" })],
+      [edge("p", "t", "positive"), edge("r1", "t", "image:0")],
+    );
+    const [item] = buildConfirmItems(b, BUILTIN_TABLE, ["t"], ctx);
+    expect(item.warnings).toContain("该模型英文序号未验证");
+    expect(item.sendText).toBe("This request provides 1 reference image.\nPut Image 1 on a beach");
+  });
+
+  it("链深 ≥ 3 附「已连续编辑 N 轮」提示，不阻断", () => {
+    const b = board(
+      [prompt("p", "@图1 改成蓝色"), reference("r"), task("t1"), result("x1"), task("t2"), result("x2"), task("t3")],
+      [
+        edge("p", "t1", "positive"), edge("p", "t2", "positive"), edge("p", "t3", "positive"),
+        edge("r", "t1", "image:0"), { ...edge("t1", "x1", "in"), system: true },
+        edge("x1", "t2", "image:0"), { ...edge("t2", "x2", "in"), system: true },
+        edge("x2", "t3", "image:0"),
+      ],
+    );
+    const [two, three] = buildConfirmItems(b, BUILTIN_TABLE, ["t2", "t3"], ctx);
+    expect(two.warnings).toEqual([]);
+    expect(three.issues).toEqual([]);
+    expect(three.warnings).toEqual(["已连续编辑 3 轮，建议回到原图重新编辑"]);
+  });
+});
+
 describe("图片来源", () => {
   it("按端口顺序给出绝对路径；结果回灌文件本身", () => {
     expect(imageSources(editBoard(), "t", "/root")).toEqual([
       { nodeId: "r1", label: "r1.png", absPath: "/root/refs/r1.png" },
       { nodeId: "x", label: "result.png", absPath: "/root/2026-09-16/task-x/result.png" },
     ]);
+  });
+});
+
+describe("已中断：重开时推导", () => {
+  it("已提交、画板上没有结果、本次运行期间没经手过的任务", () => {
+    const submitted = withSubmitted(board([prompt("p", "猫"), task("t")], [edge("p", "t", "positive")]), "t", "task-x");
+    expect(isInterrupted(submitted, "t", new Set())).toBe(true);
+    expect(isInterrupted(submitted, "t", new Set(["task-x"]))).toBe(false);
+    const withResult = { ...submitted, nodes: [...submitted.nodes, result("x")] };
+    expect(isInterrupted(withResult, "t", new Set())).toBe(false);
+    expect(isInterrupted(board([task("t")], []), "t", new Set())).toBe(false);
   });
 });

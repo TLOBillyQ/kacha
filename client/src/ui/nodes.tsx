@@ -13,13 +13,14 @@ import {
   type WorkflowName,
 } from "../core/capabilities";
 import type { TaskStatus } from "../core/run";
-import { IMAGE_PORT_PREFIX, imageRuleViolations, type TaskPorts } from "../core/graph";
+import { CHAIN_DEPTH_HINT, IMAGE_PORT_PREFIX, imageRuleViolations, type TaskPorts } from "../core/graph";
 import { resolveFromRoot } from "../core/paths";
 import { ratiosForSizeTier, sizeTiersOf } from "../core/size";
 import { fileUrl } from "../shell/ipc";
 import { useBoardActions, useImageInfo } from "./context";
 
-export type PromptFlowNode = Node<{ node: PromptModel }, "prompt">;
+/** recorded：直接下游有已提交过的任务，编辑时三选。 */
+export type PromptFlowNode = Node<{ node: PromptModel; recorded: boolean }, "prompt">;
 export type ReferenceFlowNode = Node<{ node: ReferenceModel; rules: InputImageRule[] }, "reference">;
 export type ResultFlowNode = Node<{ node: ResultModel }, "result">;
 export interface ImagePortInfo {
@@ -28,7 +29,22 @@ export interface ImagePortInfo {
   absPath: string | null;
 }
 export type TaskFlowNode = Node<
-  { node: TaskModel; ports: TaskPorts; issues: string[]; workflow: WorkflowName; images: ImagePortInfo[]; hasPositive: boolean; status: TaskStatus | null },
+  {
+    node: TaskModel;
+    ports: TaskPorts;
+    issues: string[];
+    /** 黄色提示，不阻断。 */
+    warnings: string[];
+    /** 已接线但提示词没引用的图序号（从 1 起）。 */
+    unreferenced: number[];
+    chainDepth: number;
+    /** 排队 / 执行中：参数与连线锁定。 */
+    locked: boolean;
+    workflow: WorkflowName;
+    images: ImagePortInfo[];
+    hasPositive: boolean;
+    status: TaskStatus | null;
+  },
   "task"
 >;
 
@@ -52,16 +68,54 @@ function Thumb({ absPath, alt }: { absPath: string; alt: string }) {
 }
 
 export const PromptNodeView = memo(function PromptNodeView({ data }: NodeProps<PromptFlowNode>) {
-  const { updateNode } = useBoardActions();
-  const { node } = data;
+  const { updateNode, forkPrompt } = useBoardActions();
+  const { node, recorded } = data;
+  // 下游有执行记录时，本次聚焦内第一次改动先三选；选「不断开」后到失焦前不再问。
+  const [pending, setPending] = useState<string | null>(null);
+  const [keep, setKeep] = useState(false);
+  const fork = () => {
+    if (pending !== null) forkPrompt(node.id, pending);
+    setPending(null);
+  };
+  const noFork = () => {
+    if (pending !== null) updateNode(node.id, { text: pending });
+    setPending(null);
+    setKeep(true);
+  };
+  const holdFocus = (e: React.MouseEvent) => e.preventDefault();
   return (
     <Shell kind="prompt" title="提示词">
       <textarea
         className="nodrag nowheel prompt-text"
-        value={node.text}
+        value={pending ?? node.text}
         placeholder="输入提示词…"
-        onChange={(e) => updateNode(node.id, { text: e.target.value })}
+        onBlur={() => setKeep(false)}
+        onKeyDown={(e) => {
+          if (pending === null) return;
+          if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            fork();
+          } else if (e.key === "Escape") setPending(null);
+        }}
+        onChange={(e) => {
+          if (pending !== null || (recorded && !keep)) setPending(e.target.value);
+          else updateNode(node.id, { text: e.target.value });
+        }}
       />
+      {pending !== null && (
+        <div className="popover nodrag fork-choice" onMouseDown={holdFocus}>
+          <div>下游任务已执行过，这次修改：</div>
+          <button className="primary" onClick={fork} title="旧文本留在新提示词节点并连着已执行的任务；新文本留在这里（Enter）">
+            断开并分叉
+          </button>
+          <button onClick={noFork} title="保持连线，下游任务全部变脏">
+            不断开
+          </button>
+          <button onClick={() => setPending(null)} title="放弃这次修改（Esc）">
+            取消编辑
+          </button>
+        </div>
+      )}
       <Handle type="source" position={Position.Right} id="out" />
     </Shell>
   );
@@ -164,28 +218,57 @@ function ModelInfo({ modelId, onClose }: { modelId: string; onClose: () => void 
   );
 }
 
+export const CANCELLED_HINT = "已取消本地等待，网关侧计算可能仍在继续";
+
 function StatusBadge({ status }: { status: TaskStatus }) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    if (status.kind !== "running") return;
+    if (status.kind !== "running" && status.kind !== "backoff") return;
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
   }, [status]);
-  if (status.kind === "queued") return <span className="status status-queued">排队中</span>;
-  if (status.kind === "failed") return <span className="status status-failed">失败 · {status.label}</span>;
-  const seconds = Math.max(0, Math.floor((now - status.startedAt) / 1000));
-  return (
-    <span className="status status-running">
-      <span className="spinner" />
-      执行中 {Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, "0")}
-    </span>
-  );
+  switch (status.kind) {
+    case "queued":
+      return <span className="status status-queued">排队中</span>;
+    case "failed":
+      return <span className="status status-failed">失败 · {status.label}</span>;
+    case "cancelled":
+      return (
+        <span className="status status-queued" title={status.gatewayMayContinue ? CANCELLED_HINT : undefined}>
+          已取消
+        </span>
+      );
+    case "interrupted":
+      return (
+        <span className="status status-queued" title="上次程序异常退出时仍在执行，可重新生成">
+          已中断
+        </span>
+      );
+    case "backoff":
+      return <span className="status status-backoff">网关限流，{Math.max(0, Math.ceil((status.retryAt - now) / 1000))} 秒后重试</span>;
+    case "running": {
+      const seconds = Math.max(0, Math.floor((now - status.startedAt) / 1000));
+      return (
+        <span className="status status-running">
+          <span className="spinner" />
+          执行中 {Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, "0")}
+        </span>
+      );
+    }
+  }
 }
 
-function PortRow({ id, label, children, className = "", ...drag }: { id: string; label: ReactNode; children?: ReactNode; className?: string } & React.HTMLAttributes<HTMLDivElement>) {
+function PortRow({
+  id,
+  label,
+  children,
+  className = "",
+  connectable = true,
+  ...drag
+}: { id: string; label: ReactNode; children?: ReactNode; className?: string; connectable?: boolean } & React.HTMLAttributes<HTMLDivElement>) {
   return (
     <div className={`port-row ${className}`} {...drag}>
-      <Handle type="target" position={Position.Left} id={id} />
+      <Handle type="target" position={Position.Left} id={id} isConnectable={connectable} />
       <span className="port-label">{label}</span>
       {children}
     </div>
@@ -193,8 +276,8 @@ function PortRow({ id, label, children, className = "", ...drag }: { id: string;
 }
 
 export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskFlowNode>) {
-  const { table, updateNode, moveImagePort, availableModels, setTaskModel } = useBoardActions();
-  const { node, ports, issues, workflow, images, hasPositive, status } = data;
+  const { table, updateNode, moveImagePort, availableModels, setTaskModel, cancelTask, regenerate } = useBoardActions();
+  const { node, ports, issues, warnings, unreferenced, chainDepth, locked, workflow, images, hasPositive, status } = data;
   const [infoOpen, setInfoOpen] = useState(false);
   const [dragFrom, setDragFrom] = useState<number | null>(null);
   const updateInternals = useUpdateNodeInternals();
@@ -267,12 +350,17 @@ export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskF
       title={
         <>
           生成任务<span className="muted">{workflow === "image_edit" ? " · 图片编辑" : " · 文生图"}</span>
+          {chainDepth >= CHAIN_DEPTH_HINT && (
+            <span className="badge badge-chain" title={`已连续编辑 ${chainDepth} 轮，建议回到原图重新编辑`}>
+              链深 {chainDepth}
+            </span>
+          )}
           {status && <StatusBadge status={status} />}
         </>
       }
     >
       <div className="field nodrag">
-        <select value={node.model} onChange={(e) => setTaskModel(node.id, e.target.value)}>
+        <select value={node.model} onChange={(e) => setTaskModel(node.id, e.target.value)} disabled={locked}>
           {!listed && (
             <option value={node.model}>
               {!model ? `${node.model}（未知模型）` : shelved ? `${model.display_name}（网关未提供）` : `${model.display_name}（未上架）`}
@@ -295,7 +383,7 @@ export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskF
       {infoOpen && <ModelInfo modelId={node.model} onClose={() => setInfoOpen(false)} />}
 
       <div className="field nodrag">
-        <select value={tier ?? ""} onChange={(e) => setTier(e.target.value)} title="尺寸档">
+        <select value={tier ?? ""} onChange={(e) => setTier(e.target.value)} title="尺寸档" disabled={locked}>
           {tier !== null && !tiers.includes(tier) && <option value={tier}>{tier}（不支持）</option>}
           {tier === null && <option value="">自定义</option>}
           {tiers.map((t) => (
@@ -306,7 +394,7 @@ export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskF
           value={node.size_spec.ratio ?? ""}
           onChange={(e) => updateNode(node.id, { size_spec: { ...node.size_spec, ratio: e.target.value } })}
           title="比例"
-          disabled={tier === null}
+          disabled={locked || tier === null}
         >
           {node.size_spec.ratio !== null && !ratios.includes(node.size_spec.ratio) && (
             <option value={node.size_spec.ratio}>{node.size_spec.ratio}（不支持）</option>
@@ -324,6 +412,7 @@ export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskF
               <input
                 type="checkbox"
                 checked={node.layer_decomposition}
+                disabled={locked}
                 onChange={(e) => updateNode(node.id, { layer_decomposition: e.target.checked })}
               />
               拆分图层
@@ -334,7 +423,7 @@ export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskF
               <input
                 type="checkbox"
                 checked={node.transparent_background}
-                disabled={!transparentReady && !node.transparent_background}
+                disabled={locked || (!transparentReady && !node.transparent_background)}
                 onChange={(e) => updateNode(node.id, { transparent_background: e.target.checked })}
               />
               透明背景{transparentHint && <span className="muted">（{transparentHint}）</span>}
@@ -344,24 +433,25 @@ export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskF
       )}
 
       <div className="ports">
-        <PortRow id="positive" label="正向提示词" className={hasPositive ? "" : "port-required"} />
-        {ports.negative && <PortRow id="negative" label="负向提示词" />}
+        <PortRow id="positive" label="正向提示词" className={hasPositive ? "" : "port-required"} connectable={!locked} />
+        {ports.negative && <PortRow id="negative" label="负向提示词" connectable={!locked} />}
         {Array.from({ length: ports.imageSlots }, (_, i) => {
           const image = images[i];
           return (
             <PortRow
               key={i}
               id={`${IMAGE_PORT_PREFIX}${i}`}
-              className={`nodrag ${image ? "port-filled" : "port-empty"} ${dragFrom === i ? "port-dragging" : ""} ${dropTo === i ? "port-drop" : ""}`}
+              connectable={!locked}
+              className={`nodrag ${image ? "port-filled" : "port-empty"} ${unreferenced.includes(i + 1) ? "port-unreferenced" : ""} ${dragFrom === i ? "port-dragging" : ""} ${dropTo === i ? "port-drop" : ""}`}
               label={image ? `图${i + 1} · ${image.label}` : `图${i + 1}（空）`}
               data-port-index={image ? i : undefined}
               onPointerDown={(e) => {
-                if (!image || e.button !== 0 || (e.target as HTMLElement).closest(".react-flow__handle")) return;
+                if (!image || locked || e.button !== 0 || (e.target as HTMLElement).closest(".react-flow__handle")) return;
                 e.preventDefault();
                 setDragFrom(i);
               }}
             >
-              {image && <span className="grip" title="拖动调整参考图顺序">⋮⋮</span>}
+              {image && !locked && <span className="grip" title="拖动调整参考图顺序">⋮⋮</span>}
             </PortRow>
           );
         })}
@@ -377,6 +467,29 @@ export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskF
           ))}
         </ul>
       )}
+      {warnings.length > 0 && (
+        <ul className="warn-list">
+          {warnings.map((w) => (
+            <li key={w}>{w}</li>
+          ))}
+        </ul>
+      )}
+      {status?.kind === "cancelled" && status.gatewayMayContinue && <div className="muted small">{CANCELLED_HINT}</div>}
+      <div className="task-actions nodrag">
+        {locked ? (
+          <button onClick={() => cancelTask(node.id)} title={status?.kind === "running" ? CANCELLED_HINT : "移出队列"}>
+            取消
+          </button>
+        ) : (
+          <button
+            onClick={() => regenerate(node.id)}
+            disabled={node.last_submitted === null}
+            title={node.last_submitted === null ? "还没有提交过" : "按上次提交的参数再生成一张（新任务、新结果节点）"}
+          >
+            重新生成
+          </button>
+        )}
+      </div>
       <Handle type="source" position={Position.Right} id="result" isConnectable={false} />
     </Shell>
   );
