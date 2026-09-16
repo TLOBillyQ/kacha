@@ -139,6 +139,30 @@ fn write_new_file(request: tauri::ipc::Request) -> Result<(), String> {
     store::write_new_file(Path::new(path.as_ref()), bytes).map_err(err)
 }
 
+#[derive(serde::Serialize)]
+struct DirEntry {
+    name: String,
+    is_dir: bool,
+}
+
+/// 重新定位在输出根目录内搜索时逐层列目录；不跟随符号链接进目录。
+#[tauri::command]
+fn list_dir(path: String) -> Result<Vec<DirEntry>, String> {
+    std::fs::read_dir(&path)
+        .map_err(err)?
+        .filter_map(|entry| entry.ok())
+        .map(|entry| {
+            let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+            Ok(DirEntry { name: entry.file_name().to_string_lossy().into_owned(), is_dir })
+        })
+        .collect()
+}
+
+#[tauri::command]
+fn path_exists(path: String) -> bool {
+    Path::new(&path).is_file()
+}
+
 #[tauri::command]
 fn inspect_image(path: String) -> Result<image_info::ImageInfo, String> {
     image_info::inspect(Path::new(&path)).map_err(err)
@@ -179,6 +203,8 @@ pub fn run() {
             secret_delete,
             read_file_bytes,
             write_new_file,
+            list_dir,
+            path_exists,
         ])
         .build(tauri::generate_context!())
         .expect("启动 Tauri 应用失败")

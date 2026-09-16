@@ -36,15 +36,28 @@ import {
   workflowOf,
   type Connection,
 } from "../core/graph";
+import { addAsReference, addAsReferenceTarget, continueEditing, copySelection, lineage, pasteClip, producerOf, type Clip } from "../core/iterate";
+import { PROMPT_NODE_SIZE, TASK_NODE_SIZE } from "../core/layout";
 import { basename, resolveFromRoot, toRootRelative } from "../core/paths";
+import { findReferenceFile, findResultFile, IMAGE_EXTENSIONS, type RelocateFs } from "../core/relocate";
 import { defaultSizeSpec } from "../core/size";
-import { imageRefProblems } from "../core/submission";
+import { imageRefProblems, imageSources } from "../core/submission";
 import { ipc } from "../shell/ipc";
-import { BoardContext, primeImageInfo, useStoredStatuses, type BoardActions } from "./context";
+import { BoardContext, primeImageInfo, useMissingImages, useStoredStatuses, type BoardActions } from "./context";
 import { nodeTypes, type ImagePortInfo } from "./nodes";
 import { isActive } from "./useRunner";
 
-const IMAGE_EXTENSIONS = ["png", "jpg", "jpeg", "webp", "bmp", "gif", "tif", "tiff", "heic", "heif"];
+const relocateFs: RelocateFs = {
+  listDir: ipc.listDir,
+  exists: ipc.pathExists,
+  sha256: async (path) => (await ipc.inspectImage(path)).sha256,
+};
+
+/** 复制粘贴的剪贴板：应用内共享，可粘到另一个画板（只带节点之间的连线，不跨画板连线）。 */
+let clipboard: Clip | null = null;
+
+const isTyping = (target: EventTarget | null) =>
+  target instanceof HTMLElement && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName));
 
 interface Props {
   board: Board;
@@ -60,7 +73,8 @@ interface Props {
   /** 点「运行」：传当前选中的节点 id。 */
   onRun: (selectedIds: string[]) => void;
   onCancelTask: (taskId: string) => void;
-  onRegenerate: (taskId: string) => void;
+  /** fromTaskId：生成变体时按该结果的任务目录重跑；缺省 = 按上次提交。 */
+  onRegenerate: (taskId: string, fromTaskId?: string) => void;
   /** 运行指示跳转：居中并选中该节点；nonce 变化即再跳一次。 */
   focus: { nodeId: string; nonce: number } | null;
 }
@@ -82,6 +96,13 @@ export function BoardCanvas({ board, table, outputRoot, update, openBoardPath, t
   const [measured, setMeasured] = useState<Record<string, { width?: number; height?: number }>>({});
 
   const updateBoard = useCallback((fn: (b: Board) => Board) => update((b) => syncImagePorts(fn(b))), [update]);
+
+  const boardRef = useRef(board);
+  boardRef.current = board;
+  const selectedRef = useRef(selectedNodes);
+  selectedRef.current = selectedNodes;
+  const [focusPrompt, setFocusPrompt] = useState<string | null>(null);
+  const missing = useMissingImages(board, outputRoot);
 
   const stored = useStoredStatuses(board, outputRoot, handled);
   const statusOf = useCallback((taskId: string): TaskStatus | null => statuses.get(taskId) ?? stored.get(taskId) ?? null, [statuses, stored]);
@@ -108,12 +129,79 @@ export function BoardCanvas({ board, table, outputRoot, update, openBoardPath, t
       forkPrompt: (promptId, text) => updateBoard((b) => forkPrompt(b, promptId, { newNodeId: crypto.randomUUID(), text })),
       cancelTask: onCancelTask,
       regenerate: onRegenerate,
+      continueEditing: (nodeId) => {
+        const selected = selectedRef.current;
+        const sources = selected.has(nodeId) ? [...selected] : [nodeId];
+        const ids = { taskId: crypto.randomUUID(), promptId: crypto.randomUUID() };
+        let problem: string | null = null;
+        updateBoard((b) => {
+          const r = continueEditing(b, table, discovery, sources, ids);
+          if (r.ok) return r.board;
+          problem = r.reason;
+          return b;
+        });
+        if (problem) return toast(problem);
+        setSelectedNodes(new Set([ids.promptId]));
+        setFocusPrompt(ids.promptId);
+      },
+      addAsReference: (resultId) => {
+        const target = addAsReferenceTarget(boardRef.current, [...selectedRef.current]);
+        if (!target.ok) return toast(target.reason);
+        if (lockedRef.current.has(target.taskId)) return toast(LOCKED_HINT);
+        let problem: string | null = null;
+        updateBoard((b) => {
+          const r = addAsReference(b, table, resultId, target.taskId);
+          if (r.ok) return r.board;
+          problem = r.reason;
+          return b;
+        });
+        if (problem) toast(problem);
+      },
+      generateVariant: (resultId) => {
+        const b = boardRef.current;
+        const result = b.nodes.find((n) => n.id === resultId);
+        const parent = producerOf(b, resultId);
+        if (result?.type !== "result" || !parent) return toast("父任务已删除，无法生成变体");
+        onRegenerate(parent.id, result.task_id);
+      },
+      relocate: (nodeId, mode) =>
+        void (async () => {
+          const node = boardRef.current.nodes.find((n) => n.id === nodeId);
+          if (node?.type !== "reference" && node?.type !== "result") return;
+          let abs: string | null;
+          if (mode === "pick") {
+            const picked = await open({ multiple: false, filters: [{ name: "图片", extensions: IMAGE_EXTENSIONS }] });
+            if (!picked) return;
+            abs = picked;
+          } else {
+            abs =
+              node.type === "result"
+                ? await findResultFile(relocateFs, outputRoot, { task_id: node.task_id, file: node.file })
+                : await findReferenceFile(relocateFs, outputRoot, { sha256: node.sha256, display_name: node.display_name });
+            if (!abs) return toast(`在输出根目录内没有找到 ${node.type === "result" ? node.file : node.display_name}，可改为手动选择文件`);
+          }
+          const found = abs;
+          try {
+            const info = await ipc.inspectImage(found);
+            primeImageInfo(found, info);
+            const path = toRootRelative(outputRoot, found);
+            // 参考图换了文件即换了身份（哈希变了，下游任务随之变脏）；结果的身份是 task_id + 文件名，只改路径。
+            const patch = node.type === "reference" ? { path, sha256: info.sha256, display_name: mode === "pick" ? basename(found) : node.display_name } : { path };
+            update((b) => ({ ...b, nodes: b.nodes.map((n) => (n.id === nodeId && n.type === node.type ? ({ ...n, ...patch } as KnownNode) : n)) }));
+          } catch (e) {
+            toast(`无法读取 ${basename(found)}：${e instanceof Error ? e.message : String(e)}`);
+          }
+        })(),
     }),
-    [table, outputRoot, discovery, updateBoard, onCancelTask, onRegenerate],
+    [table, outputRoot, discovery, update, updateBoard, onCancelTask, onRegenerate, toast],
   );
+
+  // 选中任一节点即高亮其谱系。
+  const highlighted = useMemo(() => lineage(board, [...selectedNodes]), [board, selectedNodes]);
 
   const nodes = useMemo<Node[]>(() => {
     const fallback = defaultModel(table);
+    const referenceTarget = addAsReferenceTarget(board, [...selectedNodes]);
     const labelOf = (id: string): ImagePortInfo => {
       const src = board.nodes.find((n) => n.id === id);
       if (src?.type === "reference") return { label: src.display_name, absPath: resolveFromRoot(outputRoot, src.path) };
@@ -122,12 +210,21 @@ export function BoardCanvas({ board, table, outputRoot, update, openBoardPath, t
     };
     return board.nodes.flatMap((n): Node[] => {
       if (n.type === "unknown") return [];
-      const base = { id: n.id, position: { x: n.pos[0], y: n.pos[1] }, selected: selectedNodes.has(n.id), measured: measured[n.id] };
+      const base = {
+        id: n.id,
+        position: { x: n.pos[0], y: n.pos[1] },
+        selected: selectedNodes.has(n.id),
+        measured: measured[n.id],
+        className: highlighted.nodes.has(n.id) ? "in-lineage" : undefined,
+      };
       switch (n.type) {
         case "prompt":
-          return [{ ...base, type: "prompt", data: { node: n, recorded: hasDownstreamRecords(board, n.id) } }];
-        case "result":
-          return [{ ...base, type: "result", data: { node: n } }];
+          return [{ ...base, type: "prompt", data: { node: n, recorded: hasDownstreamRecords(board, n.id), autoFocus: focusPrompt === n.id } }];
+        case "result": {
+          const parent = producerOf(board, n.id);
+          const variantBlocker = !parent ? "父任务已删除" : locked.has(parent.id) ? "父任务正在排队 / 执行" : null;
+          return [{ ...base, type: "result", data: { node: n, missing: missing.has(n.id), referenceTarget, variantBlocker } }];
+        }
         case "reference": {
           const downstream = board.edges.filter((e) => e.from[0] === n.id).map((e) => board.nodes.find((t) => t.id === e.to[0]));
           const modelIds = downstream.flatMap((t) => (t?.type === "task" ? [t.model] : []));
@@ -136,10 +233,11 @@ export function BoardCanvas({ board, table, outputRoot, update, openBoardPath, t
             const rule = findModel(table, id)?.input_image_rule;
             return rule ? [rule] : [];
           });
-          return [{ ...base, type: "reference", data: { node: n, rules } }];
+          return [{ ...base, type: "reference", data: { node: n, rules, missing: missing.has(n.id) } }];
         }
         case "task": {
           const refs = imageRefProblems(board, n.id);
+          const missingImages = imageSources(board, n.id, outputRoot).flatMap((src, i) => (missing.has(src.nodeId) ? [`图${i + 1} 图片缺失：${src.label}`] : []));
           return [
             {
               ...base,
@@ -147,7 +245,7 @@ export function BoardCanvas({ board, table, outputRoot, update, openBoardPath, t
               data: {
                 node: n,
                 ports: taskPorts(board, table, n.id),
-                issues: [...withAvailability(taskIssues(board, table, n.id), modelAvailabilityIssue(table, discovery, n.model)), ...refs.issues],
+                issues: [...withAvailability(taskIssues(board, table, n.id), modelAvailabilityIssue(table, discovery, n.model)), ...refs.issues, ...missingImages],
                 warnings: refs.warnings,
                 unreferenced: refs.unreferenced,
                 chainDepth: chainDepth(board, n.id),
@@ -162,7 +260,7 @@ export function BoardCanvas({ board, table, outputRoot, update, openBoardPath, t
         }
       }
     });
-  }, [board, table, outputRoot, selectedNodes, measured, statusOf, locked, discovery]);
+  }, [board, table, outputRoot, selectedNodes, measured, statusOf, locked, discovery, highlighted, missing, focusPrompt]);
 
   const edges = useMemo<Edge[]>(
     () =>
@@ -175,9 +273,9 @@ export function BoardCanvas({ board, table, outputRoot, update, openBoardPath, t
         selected: selectedEdges.has(edgeId(e)),
         deletable: !e.system,
         selectable: !e.system,
-        className: e.system ? "edge-system" : e.to[1] === "negative" ? "edge-negative" : undefined,
+        className: [e.system ? "edge-system" : e.to[1] === "negative" ? "edge-negative" : "", highlighted.edges.has(e) ? "edge-lineage" : ""].join(" ").trim() || undefined,
       })),
-    [board.edges, selectedEdges],
+    [board.edges, selectedEdges, highlighted],
   );
 
   const onNodesChange = useCallback(
@@ -345,7 +443,7 @@ export function BoardCanvas({ board, table, outputRoot, update, openBoardPath, t
   );
 
   const addPrompt = () =>
-    addNode({ type: "prompt", id: crypto.randomUUID(), pos: posOf(centerPosition()), size: [240, 140], text: "", extra: {} });
+    addNode({ type: "prompt", id: crypto.randomUUID(), pos: posOf(centerPosition()), size: PROMPT_NODE_SIZE, text: "", extra: {} });
 
   const addTask = () => {
     const modelId = defaultTaskModel(table, discovery, board.last_model);
@@ -355,7 +453,7 @@ export function BoardCanvas({ board, table, outputRoot, update, openBoardPath, t
       type: "task",
       id: crypto.randomUUID(),
       pos: posOf(centerPosition()),
-      size: [280, 260],
+      size: TASK_NODE_SIZE,
       model: model.model_id,
       size_spec: defaultSizeSpec(model.workflows.text_to_image.size_rule),
       image_ports: 0,
@@ -398,6 +496,31 @@ export function BoardCanvas({ board, table, outputRoot, update, openBoardPath, t
     const picked = await open({ multiple: true, filters: [{ name: "图片", extensions: IMAGE_EXTENSIONS }] });
     if (picked) await importReferences(Array.isArray(picked) ? picked : [picked], centerPosition());
   };
+
+  // 通用复制粘贴：Ctrl/⌘+C 复制选中节点，Ctrl/⌘+V 粘贴（新节点整体偏移、从未提交过）。
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey || isTyping(e.target) || !wrapper.current?.isConnected) return;
+      const key = e.key.toLowerCase();
+      if (key === "c" && selectedRef.current.size) {
+        clipboard = copySelection(boardRef.current, [...selectedRef.current]);
+      } else if (key === "v" && clipboard?.nodes.length) {
+        e.preventDefault();
+        const clip = clipboard;
+        let pasted: string[] = [];
+        updateBoard((b) => {
+          const r = pasteClip(b, clip, () => crypto.randomUUID());
+          pasted = r.ids;
+          return r.board;
+        });
+        // 连续粘贴逐次错开。
+        clipboard = { ...clip, nodes: clip.nodes.map((n) => ({ ...n, pos: [n.pos[0] + 40, n.pos[1] + 40] as [number, number] })) };
+        setSelectedNodes(new Set(pasted));
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [updateBoard]);
 
   // 从资源管理器拖入：画板文件打开为标签页，其余当参考图导入。
   useEffect(() => {

@@ -146,7 +146,7 @@ export function App() {
   );
 
   const regenerate = useCallback(
-    async (taskNodeId: string) => {
+    async (taskNodeId: string, fromTaskId?: string) => {
       if (!activeKey || !outputRoot) return;
       if (!settings.apiKey) {
         toast("请先在高级设置中填写 API 密钥");
@@ -154,8 +154,8 @@ export function App() {
         return;
       }
       const target: RunTarget = { boardKey: activeKey, table, outputRoot, baseUrl: settings.settings.base_url, apiKey: settings.apiKey };
-      const problem = await runnerRef.current.regenerate(target, taskNodeId);
-      if (problem) toast(`重新生成失败：${problem}`);
+      const problem = await runnerRef.current.regenerate(target, taskNodeId, fromTaskId);
+      if (problem) toast(`${fromTaskId ? "生成变体" : "重新生成"}失败：${problem}`);
     },
     [activeKey, outputRoot, settings.apiKey, settings.settings.base_url, table, toast],
   );

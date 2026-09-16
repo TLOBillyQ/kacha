@@ -174,6 +174,14 @@ describe("删除节点", () => {
     expect(deletionBlocker(g, ["res", "t"])).toBeNull();
     expect(deletionBlocker(g, ["t"])).toBeNull();
   });
+
+  it("未被引用的结果节点删除即丢弃：只去掉节点与系统连线，产出任务不受影响", () => {
+    const g = board([node("res", "result"), task("t", "qwen-image-3.0-pro", { last_submitted: { task_id: "t-res" } })], [edge("t", "result", "res", "in", true)]);
+    expect(deletionBlocker(g, ["res"])).toBeNull();
+    const after = removeNodes(g, ["res"]);
+    expect(after.nodes).toEqual([g.nodes[1]]);
+    expect(after.edges).toEqual([]);
+  });
 });
 
 describe("任务节点露出", () => {

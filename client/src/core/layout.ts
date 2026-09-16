@@ -1,13 +1,35 @@
-// 结果节点自动落位（规格第 3.4 节「布局」）：任务右侧结果列，自上而下累积；只找就近空位，不推开、不重排。
+// 自动落位（规格第 4 节「布局」）：任务右侧结果列自上而下累积；迭代动作新建的节点落在触发节点旁。
+// 只找就近空位，不推开、不重排，用户摆过的位置永远不动。
 import type { Board, ResultNode, ResultRecord } from "./board";
 
 export const RESULT_NODE_SIZE: [number, number] = [220, 300];
-const COLUMN_GAP = 60;
-const ROW_GAP = 24;
+export const TASK_NODE_SIZE: [number, number] = [280, 260];
+export const PROMPT_NODE_SIZE: [number, number] = [240, 140];
+export const COLUMN_GAP = 60;
+export const ROW_GAP = 24;
 
 type Rect = { x: number; y: number; w: number; h: number };
 
 const overlaps = (a: Rect, b: Rect) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+
+export interface Placed {
+  pos: [number, number];
+  size: [number, number];
+}
+
+/** 从期望位置起找空位：被占住就让到挡路节点下方；extra = 同一动作里刚放下、还没进画板的节点。 */
+export function placeNear(board: Board, desired: [number, number], size: [number, number], extra: Placed[] = []): [number, number] {
+  const others: Rect[] = [...board.nodes.flatMap((n) => (n.type === "unknown" ? [] : [n])), ...extra].map((n) => ({ x: n.pos[0], y: n.pos[1], w: n.size[0], h: n.size[1] }));
+  let [x, y] = desired;
+  // 每次让到挡路节点下方；节点数有限，最多让 others.length 次。
+  for (let i = 0; i <= others.length; i++) {
+    const candidate = { x, y, w: size[0], h: size[1] };
+    const blocker = others.find((o) => overlaps(candidate, o));
+    if (!blocker) break;
+    y = blocker.y + blocker.h + ROW_GAP;
+  }
+  return [Math.round(x), Math.round(y)];
+}
 
 /** 下一个结果节点的位置；任务节点不存在时为 null。 */
 export function placeResult(board: Board, taskId: string, size: [number, number] = RESULT_NODE_SIZE): [number, number] | null {
@@ -19,15 +41,7 @@ export function placeResult(board: Board, taskId: string, size: [number, number]
   for (const n of board.nodes) {
     if (n.type !== "unknown" && ownResults.has(n.id)) y = Math.max(y, n.pos[1] + n.size[1] + ROW_GAP);
   }
-  const others: Rect[] = board.nodes.flatMap((n) => (n.type === "unknown" ? [] : [{ x: n.pos[0], y: n.pos[1], w: n.size[0], h: n.size[1] }]));
-  // 每次让到挡路节点下方；节点数有限，最多让 nodes.length 次。
-  for (let i = 0; i <= others.length; i++) {
-    const candidate = { x, y, w: size[0], h: size[1] };
-    const blocker = others.find((o) => overlaps(candidate, o));
-    if (!blocker) break;
-    y = blocker.y + blocker.h + ROW_GAP;
-  }
-  return [Math.round(x), Math.round(y)];
+  return placeNear(board, [x, y], size);
 }
 
 export interface NewResult {

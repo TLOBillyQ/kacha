@@ -102,6 +102,22 @@ describe("单任务端到端", () => {
     expect(requests.map((r) => r.url)).toEqual(["http://gw/v1/images/edits"]);
   });
 
+  it("生成变体：按该结果的任务目录重跑，即使父任务之后又提交过别的参数；新结果进父任务结果列", async () => {
+    const { d } = deps(ok);
+    const { job: older, board: b1 } = await prepareJob(d, { board: board(true), table: BUILTIN_TABLE, tableSha256: "x", outputRoot: "/root", taskNodeId: "t" });
+    await writeJob(d, "/root", older);
+    const edited = { ...b1, nodes: b1.nodes.map((n) => (n.type === "prompt" ? { ...n, text: "一只黑猫" } : n)) };
+    d.now = () => new Date("2026-09-17T01:00:00Z");
+    const { job: newer, board: b2 } = await prepareJob(d, { board: edited, table: BUILTIN_TABLE, tableSha256: "x", outputRoot: "/root", taskNodeId: "t" });
+    await writeJob(d, "/root", newer);
+
+    d.now = () => new Date("2026-09-18T01:00:00Z");
+    const { job: variant } = await prepareRegenerate(d, { board: b2, table: BUILTIN_TABLE, tableSha256: "y", outputRoot: "/root", taskNodeId: "t", fromTaskId: older.taskId });
+    expect(variant.taskNodeId).toBe("t");
+    expect(variant.record.prompt).toBe("一只橘猫");
+    expect(variant.taskId).not.toBe(older.taskId);
+  });
+
   it("文生图走 generations", async () => {
     const { d, requests } = deps(ok);
     const { job } = await prepareJob(d, { board: board(false), table: BUILTIN_TABLE, tableSha256: "x", outputRoot: "/root", taskNodeId: "t" });

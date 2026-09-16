@@ -233,15 +233,15 @@ export function useRunner(boards: { getBoard: (key: string) => Board | null; upd
     [submit],
   );
 
-  /** 重新生成：同参数新任务，不经二次确认；返回本地失败说明。 */
+  /** 重新生成 / 生成变体（fromTaskId = 该结果的任务编号）：同参数新任务，不经二次确认；返回本地失败说明。 */
   const regenerate = useCallback(
-    async (target: RunTarget, taskNodeId: string): Promise<string | null> => {
+    async (target: RunTarget, taskNodeId: string, fromTaskId?: string): Promise<string | null> => {
       if (occupied(target.boardKey, taskNodeId)) return null;
       const tableSha256 = await tableDigest(target.table);
       return submit(target, taskNodeId, async () => {
         const board = boardsRef.current.getBoard(target.boardKey);
         if (!board) throw new Error("画板已关闭");
-        return prepareRegenerate(deps, { board, table: target.table, tableSha256, outputRoot: target.outputRoot, taskNodeId });
+        return prepareRegenerate(deps, { board, table: target.table, tableSha256, outputRoot: target.outputRoot, taskNodeId, fromTaskId });
       });
     },
     [submit],

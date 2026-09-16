@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useState } from "react";
 import type { Board, KnownNode } from "../core/board";
 import type { CapabilityTable, ModelCapability } from "../core/capabilities";
-import { joinPath } from "../core/paths";
+import { joinPath, resolveFromRoot } from "../core/paths";
 import type { TaskStatus } from "../core/run";
 import { isInterrupted } from "../core/submission";
 import { OUTCOME_FILE, parseOutcome, taskDirOfTaskId, type TaskOutcome } from "../core/taskDir";
@@ -20,6 +20,12 @@ export interface BoardActions {
   forkPrompt: (promptId: string, text: string) => void;
   cancelTask: (taskId: string) => void;
   regenerate: (taskId: string) => void;
+  /** 迭代动作：触发节点在多选内时按选中顺序带上其余图片节点。 */
+  continueEditing: (nodeId: string) => void;
+  addAsReference: (resultId: string) => void;
+  generateVariant: (resultId: string) => void;
+  /** 缺图节点：pick = 选文件，search = 在输出根目录内按身份找。 */
+  relocate: (nodeId: string, mode: "pick" | "search") => void;
 }
 
 export const BoardContext = createContext<BoardActions | null>(null);
@@ -38,12 +44,7 @@ export function useImageInfo(absPath: string | null): ImageInfo | null | undefin
   useEffect(() => {
     if (absPath === null) return setInfo(undefined);
     let alive = true;
-    let pending = imageInfoCache.get(absPath);
-    if (!pending) {
-      pending = ipc.inspectImage(absPath).catch(() => null);
-      imageInfoCache.set(absPath, pending);
-    }
-    void pending.then((value) => alive && setInfo(value));
+    void cachedImageInfo(absPath).then((value) => alive && setInfo(value));
     return () => {
       alive = false;
     };
@@ -53,6 +54,33 @@ export function useImageInfo(absPath: string | null): ImageInfo | null | undefin
 
 export function primeImageInfo(absPath: string, info: ImageInfo): void {
   imageInfoCache.set(absPath, Promise.resolve(info));
+}
+
+function cachedImageInfo(absPath: string): Promise<ImageInfo | null> {
+  let pending = imageInfoCache.get(absPath);
+  if (!pending) {
+    pending = ipc.inspectImage(absPath).catch(() => null);
+    imageInfoCache.set(absPath, pending);
+  }
+  return pending;
+}
+
+/** 图片文件读不到的参考图 / 结果节点 id；读完之前为空（不闪缺图占位）。 */
+export function useMissingImages(board: Board, outputRoot: string): ReadonlySet<string> {
+  const [missing, setMissing] = useState<ReadonlySet<string>>(new Set());
+  const images = board.nodes.flatMap((n) => (n.type === "reference" || n.type === "result" ? [[n.id, resolveFromRoot(outputRoot, n.path)] as const] : []));
+  const signature = JSON.stringify(images);
+  useEffect(() => {
+    let alive = true;
+    void Promise.all(images.map(async ([id, abs]) => ((await cachedImageInfo(abs)) ? null : id))).then(
+      (ids) => alive && setMissing(new Set(ids.filter((id): id is string => id !== null))),
+    );
+    return () => {
+      alive = false;
+    };
+    // images 由 signature 概括。
+  }, [signature]);
+  return missing;
 }
 
 // 任务目录的结局记录只写一次，读过就缓存；null = 没有记录。

@@ -142,15 +142,17 @@ function jobOf(taskNodeId: string, plan: SubmissionPlan, model: ModelCapability)
 /**
  * 重新生成：按任务节点上次提交的任务目录（task.json 与参考图快照）同参数再提交一次，
  * 不看画板当前内容。新任务、新结果节点；不写盘，同 prepareJob。
+ * 生成变体：fromTaskId = 该结果的任务编号，按那次提交的任务目录重跑，新结果仍进本任务节点的结果列。
  */
 export async function prepareRegenerate(
   deps: RunDeps,
-  args: { board: Board; table: CapabilityTable; tableSha256: string; outputRoot: string; taskNodeId: string },
+  args: { board: Board; table: CapabilityTable; tableSha256: string; outputRoot: string; taskNodeId: string; fromTaskId?: string },
 ): Promise<{ job: PreparedJob; board: Board }> {
   const { board, outputRoot, taskNodeId } = args;
   const task = board.nodes.find((n) => n.id === taskNodeId);
   const last = task?.type === "task" ? task.last_submitted : null;
-  const oldDir = typeof last?.task_id === "string" ? taskDirOfTaskId(last.task_id) : null;
+  const fromTaskId = args.fromTaskId ?? last?.task_id;
+  const oldDir = typeof fromTaskId === "string" ? taskDirOfTaskId(fromTaskId) : null;
   if (!last || !oldDir) throw new LocalError("任务节点没有可重新生成的提交");
   const path = (file: string) => joinPath(outputRoot, ...oldDir.split("/"), file);
 
