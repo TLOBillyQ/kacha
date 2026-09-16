@@ -3,7 +3,8 @@ import base64, json, sys, time, urllib.request, urllib.error, os
 sys.path.insert(0, "../../../src")
 from ugc_image_tool.contracts.recorder import _sanitize_headers, _decode_and_sanitize
 from datetime import UTC, datetime
-BASE = "http://lzxsvn:3001"; KEY = os.environ["UGC_IMAGE_TOOL_GATEWAY_API_KEY"]
+BASE = "http://lzxsvn:3001"
+KEY = os.environ.get("UGC_IMAGE_TOOL_GATEWAY_API_KEY") or open(os.path.expanduser(os.environ.get("UGC_IMAGE_TOOL_GATEWAY_KEY_FILE", "../../../.scratch/gateway.key"))).read().strip()
 def durl(p):
     return "data:image/png;base64," + base64.b64encode(open(p,"rb").read()).decode()
 def run(name, body, path="/v1/images/edits"):
