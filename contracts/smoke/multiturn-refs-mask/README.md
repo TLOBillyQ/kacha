@@ -5,9 +5,10 @@
 ```bash
 cd contracts/smoke/multiturn-refs-mask
 python3 -m venv .venv && .venv/bin/pip install pillow
-export UGC_IMAGE_TOOL_GATEWAY_API_KEY='临时密钥'
+export UGC_IMAGE_TOOL_GATEWAY_API_KEY='临时密钥'   # 或写入 .scratch/gateway.key（chmod 600）
 export SMOKE_MODEL='seedream-xxx'          # 默认 qwen-image-3.0-pro
 .venv/bin/python gen_images.py             # 合成测试图 → in/
+.venv/bin/python probe.py gen_img          # seedream 先探请求形态：gen_t2i | gen_img | edits_msgs | edits_image；lite 用 SMOKE_SIZE=2K
 .venv/bin/python batch1.py t1              # 结果回灌第 1 轮（t2a/t2c 依赖其输出）
 .venv/bin/python batch1.py t2d; .venv/bin/python batch1.py t2a; .venv/bin/python batch1.py t2c
 for k in tu image picture tuzh; do for n in 2 3; do .venv/bin/python batch2.py $k $n; done; done
