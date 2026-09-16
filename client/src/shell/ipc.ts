@@ -1,5 +1,7 @@
 // Rust 壳命令的类型化封装；命令实现见 src-tauri/src/lib.rs。
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
+import type { FetchLike } from "../core/gateway";
 
 export interface AppPaths {
   default_output_root: string;
@@ -31,6 +33,20 @@ export const ipc = {
   writeUiState: (text: string) => invoke<void>("write_ui_state", { text }),
   readCapabilityOverride: () => invoke<string | null>("read_capability_override"),
   inspectImage: (path: string) => invoke<ImageInfo>("inspect_image", { path }),
+  readSettings: () => invoke<string | null>("read_settings"),
+  writeSettings: (text: string) => invoke<void>("write_settings", { text }),
+  readModelsCache: () => invoke<string | null>("read_models_cache"),
+  writeModelsCache: (text: string) => invoke<void>("write_models_cache", { text }),
+  /** 系统凭据库；不可用时 reject（调用方退回会话内存）。 */
+  secretGet: () => invoke<string | null>("secret_get"),
+  secretSet: (key: string) => invoke<void>("secret_set", { key }),
+  secretDelete: () => invoke<void>("secret_delete"),
+  readFileBytes: async (path: string) => new Uint8Array(await invoke<ArrayBuffer>("read_file_bytes", { path })),
+  /** 只新建不覆盖：目标已存在时 reject。 */
+  writeNewFile: (path: string, bytes: Uint8Array) => invoke<void>("write_new_file", bytes, { headers: { "x-path": encodeURIComponent(path) } }),
 };
+
+/** 网关请求走 Rust 侧 HTTP（不受 WebView CORS 限制）。 */
+export const httpFetch: FetchLike = (url, init) => tauriFetch(url, init);
 
 export const fileUrl = (absPath: string) => convertFileSrc(absPath);

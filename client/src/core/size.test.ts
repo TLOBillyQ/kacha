@@ -1,15 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { BUILTIN_TABLE } from "./capabilities";
-import { ratiosForTier, resolveSize, tiersOf } from "./size";
+import { ratiosForSizeTier, resolveSize, sizeTiersOf } from "./size";
 
 const rule = BUILTIN_TABLE.models[0].workflows.text_to_image.size_rule;
 
 describe("档位 × 比例 → 像素", () => {
   it("档位按表声明顺序，比例随档位变化", () => {
-    expect(tiersOf(rule)).toEqual(["1K", "2K"]);
-    expect(ratiosForTier(rule, "1K")).toEqual(["1:1"]);
-    expect(ratiosForTier(rule, "2K")).toEqual(["1:1", "16:9", "9:16"]);
-    expect(ratiosForTier(rule, "4K")).toEqual([]);
+    expect(sizeTiersOf(rule)).toEqual(["1K", "2K"]);
+    expect(ratiosForSizeTier(rule, "1K")).toEqual(["1:1"]);
+    expect(ratiosForSizeTier(rule, "2K")).toEqual(["1:1", "16:9", "9:16"]);
+    expect(ratiosForSizeTier(rule, "4K")).toEqual([]);
   });
 
   it("换算为像素", () => {

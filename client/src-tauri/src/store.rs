@@ -42,6 +42,24 @@ pub fn atomic_write(target: &Path, bytes: &[u8]) -> io::Result<()> {
     result
 }
 
+/// 任务目录文件（参考图快照、结果图、task.json）提交后不可变：目标已存在时拒绝，不覆盖。
+/// 先写临时文件，再硬链接到目标（目标已存在时由文件系统原子地拒绝），最后删临时文件。
+pub fn write_new_file(target: &Path, bytes: &[u8]) -> io::Result<()> {
+    if let Some(dir) = target.parent() {
+        fs::create_dir_all(dir)?;
+    }
+    let tmp = temp_path_for(target);
+    let result = (|| {
+        let mut file = OpenOptions::new().write(true).create_new(true).open(&tmp)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        drop(file);
+        fs::hard_link(&tmp, target)
+    })();
+    let _ = fs::remove_file(&tmp);
+    result
+}
+
 pub fn bak_path(board: &Path) -> PathBuf {
     let mut name = board.file_name().unwrap_or_default().to_os_string();
     name.push(".bak");
@@ -175,6 +193,15 @@ mod tests {
         assert!(atomic_write(&target, b"data").is_err());
         assert!(target.is_dir());
         assert!(leftovers(dir.path()).is_empty());
+    }
+
+    #[test]
+    fn write_new_file_refuses_to_overwrite() {
+        let dir = tmpdir();
+        let target = dir.path().join("2026-09-16").join("t").join("result.png");
+        write_new_file(&target, b"1").unwrap();
+        assert_eq!(write_new_file(&target, b"2").unwrap_err().kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read(&target).unwrap(), b"1");
     }
 
     #[test]

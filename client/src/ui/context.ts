@@ -1,11 +1,15 @@
 import { createContext, useContext, useEffect, useState } from "react";
 import type { KnownNode } from "../core/board";
-import type { CapabilityTable } from "../core/capabilities";
+import type { CapabilityTable, ModelCapability } from "../core/capabilities";
 import { ipc, type ImageInfo } from "../shell/ipc";
 
 export interface BoardActions {
   table: CapabilityTable;
   outputRoot: string;
+  /** 任务节点模型下拉：网关发现 ∩ 上架清单。 */
+  availableModels: ModelCapability[];
+  /** 选模型：写节点并记为画板级最近模型。 */
+  setTaskModel: (id: string, modelId: string) => void;
   updateNode: (id: string, patch: Partial<KnownNode>) => void;
   moveImagePort: (taskId: string, from: number, to: number) => void;
 }

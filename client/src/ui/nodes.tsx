@@ -12,9 +12,10 @@ import {
   type InputImageRule,
   type WorkflowName,
 } from "../core/capabilities";
+import type { TaskStatus } from "../core/run";
 import { IMAGE_PORT_PREFIX, imageRuleViolations, type TaskPorts } from "../core/graph";
 import { resolveFromRoot } from "../core/paths";
-import { ratiosForTier, tiersOf } from "../core/size";
+import { ratiosForSizeTier, sizeTiersOf } from "../core/size";
 import { fileUrl } from "../shell/ipc";
 import { useBoardActions, useImageInfo } from "./context";
 
@@ -27,7 +28,7 @@ export interface ImagePortInfo {
   absPath: string | null;
 }
 export type TaskFlowNode = Node<
-  { node: TaskModel; ports: TaskPorts; issues: string[]; workflow: WorkflowName; images: ImagePortInfo[]; hasPositive: boolean },
+  { node: TaskModel; ports: TaskPorts; issues: string[]; workflow: WorkflowName; images: ImagePortInfo[]; hasPositive: boolean; status: TaskStatus | null },
   "task"
 >;
 
@@ -163,6 +164,24 @@ function ModelInfo({ modelId, onClose }: { modelId: string; onClose: () => void 
   );
 }
 
+function StatusBadge({ status }: { status: TaskStatus }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (status.kind !== "running") return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [status]);
+  if (status.kind === "queued") return <span className="status status-queued">排队中</span>;
+  if (status.kind === "failed") return <span className="status status-failed">失败 · {status.label}</span>;
+  const seconds = Math.max(0, Math.floor((now - status.startedAt) / 1000));
+  return (
+    <span className="status status-running">
+      <span className="spinner" />
+      执行中 {Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, "0")}
+    </span>
+  );
+}
+
 function PortRow({ id, label, children, className = "", ...drag }: { id: string; label: ReactNode; children?: ReactNode; className?: string } & React.HTMLAttributes<HTMLDivElement>) {
   return (
     <div className={`port-row ${className}`} {...drag}>
@@ -174,15 +193,19 @@ function PortRow({ id, label, children, className = "", ...drag }: { id: string;
 }
 
 export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskFlowNode>) {
-  const { table, updateNode, moveImagePort } = useBoardActions();
-  const { node, ports, issues, workflow, images, hasPositive } = data;
+  const { table, updateNode, moveImagePort, availableModels, setTaskModel } = useBoardActions();
+  const { node, ports, issues, workflow, images, hasPositive, status } = data;
   const [infoOpen, setInfoOpen] = useState(false);
   const [dragFrom, setDragFrom] = useState<number | null>(null);
   const updateInternals = useUpdateNodeInternals();
   const model = findModel(table, node.model);
   const rule = model?.workflows[workflow].size_rule;
-  const groups = modelsByTier(table);
-  const shelved = groups.some((g) => g.models.some((m) => m.model_id === node.model));
+  const availableIds = new Set(availableModels.map((m) => m.model_id));
+  const groups = modelsByTier(table)
+    .map((g) => ({ ...g, models: g.models.filter((m) => availableIds.has(m.model_id)) }))
+    .filter((g) => g.models.length > 0);
+  const listed = availableIds.has(node.model);
+  const shelved = modelsByTier(table).some((g) => g.models.some((m) => m.model_id === node.model));
 
   // 端口重排用 pointer 事件：窗口开启了文件拖入（dragDropEnabled），Windows 上收不到 HTML5 drop。
   // 拖动中全局换成 grabbing 指针，悬停在可放的行上高亮该行，其余位置显示 no-drop。
@@ -222,11 +245,11 @@ export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskF
   const portSignature = `${ports.negative}|${ports.imageSlots}|${images.map((i) => i.label).join(",")}`;
   useEffect(() => updateInternals(node.id), [portSignature, node.id, updateInternals]);
 
-  const tiers = rule ? tiersOf(rule) : [];
+  const tiers = rule ? sizeTiersOf(rule) : [];
   const tier = node.size_spec.tier;
-  const ratios = rule && tier ? ratiosForTier(rule, tier) : [];
+  const ratios = rule && tier ? ratiosForSizeTier(rule, tier) : [];
   const setTier = (next: string) => {
-    const available = rule ? ratiosForTier(rule, next) : [];
+    const available = rule ? ratiosForSizeTier(rule, next) : [];
     const ratio = node.size_spec.ratio && available.includes(node.size_spec.ratio) ? node.size_spec.ratio : (available[0] ?? null);
     updateNode(node.id, { size_spec: { ...node.size_spec, tier: next, ratio, width: null, height: null } });
   };
@@ -244,12 +267,17 @@ export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskF
       title={
         <>
           生成任务<span className="muted">{workflow === "image_edit" ? " · 图片编辑" : " · 文生图"}</span>
+          {status && <StatusBadge status={status} />}
         </>
       }
     >
       <div className="field nodrag">
-        <select value={node.model} onChange={(e) => updateNode(node.id, { model: e.target.value })}>
-          {!shelved && <option value={node.model}>{model ? `${model.display_name}（未上架）` : `${node.model}（未知模型）`}</option>}
+        <select value={node.model} onChange={(e) => setTaskModel(node.id, e.target.value)}>
+          {!listed && (
+            <option value={node.model}>
+              {!model ? `${node.model}（未知模型）` : shelved ? `${model.display_name}（网关未提供）` : `${model.display_name}（未上架）`}
+            </option>
+          )}
           {groups.map((g) => (
             <optgroup key={g.tier} label={TIER_LABELS[g.tier]}>
               {g.models.map((m) => (
@@ -267,7 +295,7 @@ export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskF
       {infoOpen && <ModelInfo modelId={node.model} onClose={() => setInfoOpen(false)} />}
 
       <div className="field nodrag">
-        <select value={tier ?? ""} onChange={(e) => setTier(e.target.value)} title="档位">
+        <select value={tier ?? ""} onChange={(e) => setTier(e.target.value)} title="尺寸档">
           {tier !== null && !tiers.includes(tier) && <option value={tier}>{tier}（不支持）</option>}
           {tier === null && <option value="">自定义</option>}
           {tiers.map((t) => (

@@ -93,6 +93,8 @@ export interface Board {
   viewport: { zoom: number; x: number; y: number };
   nodes: BoardNode[];
   edges: BoardEdge[];
+  /** 画板级最近选择的模型，新建任务节点默认用它；缺省 = 从未选过。 */
+  last_model?: string | null;
   extra: Json;
 }
 
@@ -214,7 +216,7 @@ function parseEdge(raw: unknown): BoardEdge {
   };
 }
 
-const BOARD_KEYS = ["format_version", "title", "viewport", "nodes", "edges"];
+const BOARD_KEYS = ["format_version", "title", "viewport", "nodes", "edges", "last_model"];
 
 export function parseBoard(text: string): ParsedBoard {
   let raw: unknown;
@@ -237,6 +239,7 @@ export function parseBoard(text: string): ParsedBoard {
       edges: need<unknown[]>(Array.isArray(o.edges), o.edges, "edges 必须是数组").map(parseEdge),
       extra: extraOf(o, BOARD_KEYS),
     };
+    if (o.last_model !== undefined && o.last_model !== null) board.last_model = str(o, "last_model");
     return { kind: "ok", board };
   } catch (error) {
     if (error instanceof Corrupt) return { kind: "corrupt", reason: error.message };
@@ -281,6 +284,7 @@ export function serializeBoard(board: Board): string {
     viewport: board.viewport,
     nodes: board.nodes.map(serializeNode),
     edges: board.edges.map(serializeEdge),
+    ...(board.last_model ? { last_model: board.last_model } : {}),
     ...board.extra,
   };
   return `${JSON.stringify(out, null, 2)}\n`;

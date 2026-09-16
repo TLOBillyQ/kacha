@@ -79,6 +79,20 @@ describe("画板文件写出", () => {
   });
 });
 
+describe("画板级最近模型 last_model", () => {
+  it("有值才写出，读入往返保持；缺省为 null", () => {
+    expect(JSON.parse(serializeBoard(sample()))).not.toHaveProperty("last_model");
+    const withModel = { ...sample(), last_model: "qwen-image-3.0" };
+    const text = serializeBoard(withModel);
+    expect(JSON.parse(text).last_model).toBe("qwen-image-3.0");
+    const parsed = parseBoard(text);
+    expect(parsed.kind === "ok" && parsed.board.last_model).toBe("qwen-image-3.0");
+    const plain = parseBoard(serializeBoard(sample()));
+    expect(plain.kind === "ok" && (plain.board.last_model ?? null)).toBe(null);
+    expect(parseBoard(JSON.stringify({ ...JSON.parse(text), last_model: 3 })).kind).toBe("corrupt");
+  });
+});
+
 describe("画板文件读入", () => {
   it("未知字段读写保留（顶层、节点、连线）", () => {
     const raw = JSON.parse(serializeBoard(sample()));

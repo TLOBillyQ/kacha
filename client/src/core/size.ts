@@ -8,11 +8,11 @@ export interface SizeSpec {
   height: number | null;
 }
 
-export function tiersOf(rule: SizeRule): string[] {
+export function sizeTiersOf(rule: SizeRule): string[] {
   return Object.keys(rule.tiers);
 }
 
-export function ratiosForTier(rule: SizeRule, tier: string): string[] {
+export function ratiosForSizeTier(rule: SizeRule, tier: string): string[] {
   return Object.keys(rule.tiers[tier] ?? {});
 }
 
@@ -39,7 +39,7 @@ export function resolveSize(rule: SizeRule, spec: SizeSpec): { width: number; he
 
 /** 新建任务时的默认尺寸：表中第一个档位的第一个比例。 */
 export function defaultSizeSpec(rule: SizeRule): SizeSpec {
-  const tier = tiersOf(rule)[0] ?? null;
-  const ratio = tier === null ? null : (ratiosForTier(rule, tier)[0] ?? null);
+  const tier = sizeTiersOf(rule)[0] ?? null;
+  const ratio = tier === null ? null : (ratiosForSizeTier(rule, tier)[0] ?? null);
   return { tier, ratio, width: null, height: null };
 }

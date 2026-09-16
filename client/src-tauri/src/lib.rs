@@ -1,6 +1,7 @@
 //! Tauri 壳：只承担单实例、文件系统原子写与系统对话框等原生职责；业务逻辑在前端 TypeScript（规格第 2 节）。
 
 mod image_info;
+mod secret;
 mod store;
 
 use std::path::{Path, PathBuf};
@@ -11,6 +12,8 @@ use tauri::{Emitter, Manager};
 
 const UI_STATE_FILE: &str = "ui-state.json";
 const CAPABILITY_OVERRIDE_FILE: &str = "capabilities.override.json";
+const SETTINGS_FILE: &str = "settings.json";
+const MODELS_CACHE_FILE: &str = "models-cache.json";
 /// 与 v1 保持一致的默认输出根目录名（图片目录下）。
 const DEFAULT_OUTPUT_DIR_NAME: &str = "UGC AI 生图工具";
 
@@ -85,6 +88,58 @@ fn read_capability_override(app: tauri::AppHandle) -> Result<Option<String>, Str
 }
 
 #[tauri::command]
+fn read_settings(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    store::read_text(&app_data_dir(&app)?.join(SETTINGS_FILE)).map_err(err)
+}
+
+#[tauri::command]
+fn write_settings(app: tauri::AppHandle, text: String) -> Result<(), String> {
+    store::atomic_write(&app_data_dir(&app)?.join(SETTINGS_FILE), text.as_bytes()).map_err(err)
+}
+
+#[tauri::command]
+fn read_models_cache(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    store::read_text(&app_data_dir(&app)?.join(MODELS_CACHE_FILE)).map_err(err)
+}
+
+#[tauri::command]
+fn write_models_cache(app: tauri::AppHandle, text: String) -> Result<(), String> {
+    store::atomic_write(&app_data_dir(&app)?.join(MODELS_CACHE_FILE), text.as_bytes()).map_err(err)
+}
+
+#[tauri::command]
+fn secret_get() -> Result<Option<String>, String> {
+    secret::get()
+}
+
+#[tauri::command]
+fn secret_set(key: String) -> Result<(), String> {
+    secret::set(&key)
+}
+
+#[tauri::command]
+fn secret_delete() -> Result<(), String> {
+    secret::delete()
+}
+
+/// 原始字节直接走 IPC 响应体，不经 JSON 数组编码。
+#[tauri::command]
+fn read_file_bytes(path: String) -> Result<tauri::ipc::Response, String> {
+    std::fs::read(&path).map(tauri::ipc::Response::new).map_err(err)
+}
+
+/// 请求体是原始字节，目标路径放在 `x-path` 头（百分号编码，头部只能是 ASCII）；目标已存在时拒绝。
+#[tauri::command]
+fn write_new_file(request: tauri::ipc::Request) -> Result<(), String> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err("请求体必须是二进制".into());
+    };
+    let header = request.headers().get("x-path").and_then(|v| v.to_str().ok()).ok_or("缺少目标路径")?;
+    let path = percent_encoding::percent_decode_str(header).decode_utf8().map_err(err)?;
+    store::write_new_file(Path::new(path.as_ref()), bytes).map_err(err)
+}
+
+#[tauri::command]
 fn inspect_image(path: String) -> Result<image_info::ImageInfo, String> {
     image_info::inspect(Path::new(&path)).map_err(err)
 }
@@ -103,6 +158,7 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_http::init())
         .invoke_handler(tauri::generate_handler![
             app_paths,
             startup_args,
@@ -114,6 +170,15 @@ pub fn run() {
             write_ui_state,
             read_capability_override,
             inspect_image,
+            read_settings,
+            write_settings,
+            read_models_cache,
+            write_models_cache,
+            secret_get,
+            secret_set,
+            secret_delete,
+            read_file_bytes,
+            write_new_file,
         ])
         .build(tauri::generate_context!())
         .expect("启动 Tauri 应用失败")

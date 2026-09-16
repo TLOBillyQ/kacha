@@ -4,9 +4,14 @@ import { ReactFlowProvider } from "@xyflow/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { BOARD_EXTENSION, type Board } from "./core/board";
 import { BUILTIN_TABLE, effectiveTable, type CapabilityTable } from "./core/capabilities";
+import { runScope, buildConfirmItems, imageSources, type ConfirmItem } from "./core/submission";
 import { parseUiState, serializeUiState, type UiState } from "./core/uiState";
 import { ipc } from "./shell/ipc";
 import { BoardCanvas } from "./ui/BoardCanvas";
+import { RunConfirmDialog } from "./ui/RunConfirmDialog";
+import { SettingsPanel } from "./ui/SettingsPanel";
+import { useRunner } from "./ui/useRunner";
+import { useSettings } from "./ui/useSettings";
 import { TabBar } from "./ui/TabBar";
 import { useBoardSessions } from "./ui/useBoardSessions";
 
@@ -14,6 +19,10 @@ const isBoardPath = (p: string) => p.toLowerCase().endsWith(BOARD_EXTENSION);
 
 export function App() {
   const [outputRoot, setOutputRoot] = useState<string | null>(null);
+  const [defaultRoot, setDefaultRoot] = useState<string | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [confirm, setConfirm] = useState<{ boardKey: string; board: Board; items: ConfirmItem[]; scope: "selection" | "board" } | null>(null);
+  const settings = useSettings();
   const [table, setTable] = useState<CapabilityTable>(BUILTIN_TABLE);
   const [tableError, setTableError] = useState<string | null>(null);
   const [fatal, setFatal] = useState<string | null>(null);
@@ -26,6 +35,7 @@ export function App() {
   const { sessions, activeKey, openPath, createBoard, flushAll } = boards;
 
   const { updateBoard } = boards;
+  const runner = useRunner(boards);
   const updateActive = useCallback((fn: (b: Board) => Board) => activeKey && updateBoard(activeKey, fn), [activeKey, updateBoard]);
   const openFromCanvas = useCallback((p: string) => void openOrWarnRef.current(p), []);
   const openOrWarnRef = useRef<(p: string) => Promise<void>>(async () => undefined);
@@ -62,12 +72,73 @@ export function App() {
         initialUi.current = ui;
         windowSize.current = ui.window;
         if (ui.window) await getCurrentWindow().setSize(new LogicalSize(ui.window.width, ui.window.height));
-        setOutputRoot(paths.default_output_root);
+        setDefaultRoot(paths.default_output_root);
       } catch (e) {
         setFatal(String(e));
       }
     })();
   }, []);
+
+  // 设置读完再定输出根目录（设置里没填就用默认）。
+  useEffect(() => {
+    if (defaultRoot && settings.loaded && outputRoot === null) setOutputRoot(settings.settings.output_root ?? defaultRoot);
+  }, [defaultRoot, settings.loaded, settings.settings.output_root, outputRoot]);
+
+  // 切换输出根目录：不搬文件，关掉全部标签页；新目录的画板列表为空。
+  const switchOutputRoot = useCallback(
+    async (root: string) => {
+      await boards.closeAll();
+      setOutputRoot(root);
+      toast("已切换输出根目录：旧目录的画板与任务目录原样保留，新目录的画板列表为空");
+    },
+    [boards, toast],
+  );
+
+  const openRunConfirm = useCallback(
+    async (selectedIds: string[]) => {
+      if (!activeKey || !outputRoot) return;
+      if (!settings.apiKey) {
+        toast("请先在高级设置中填写 API 密钥");
+        setSettingsOpen(true);
+        return;
+      }
+      await boards.flushAll();
+      const board = boards.getBoard(activeKey);
+      if (!board) return;
+      const busy = new Set([...runner.statuses].filter(([, st]) => st.kind !== "failed").map(([id]) => id));
+      const ids = runScope(board, selectedIds, busy);
+      const sources = ids.flatMap((id) => imageSources(board, id, outputRoot));
+      const missingNodes = new Set<string>();
+      await Promise.all(
+        sources.map((src) =>
+          ipc.inspectImage(src.absPath).catch(() => {
+            missingNodes.add(src.nodeId);
+          }),
+        ),
+      );
+      const items = buildConfirmItems(board, table, ids, { discovery: settings.discovery, missingNodes });
+      setConfirm({ boardKey: activeKey, board, items, scope: selectedIds.length ? "selection" : "board" });
+    },
+    [activeKey, outputRoot, settings.apiKey, settings.discovery, boards, runner.statuses, table, toast],
+  );
+
+  const startRun = useCallback(
+    async (boardKey: string, board: Board, taskIds: string[]) => {
+      setConfirm(null);
+      if (!outputRoot) return;
+      const problems = await runner.run({
+        boardKey,
+        board,
+        taskIds,
+        table,
+        outputRoot,
+        baseUrl: settings.settings.base_url,
+        apiKey: settings.apiKey,
+      });
+      if (problems.length) toast(`${problems.length} 个任务提交失败：${problems[0]}`);
+    },
+    [outputRoot, runner, table, settings.settings.base_url, settings.apiKey, toast],
+  );
 
   // 第二阶段：恢复标签页，再打开启动参数里的画板；一个都没有就新建。
   useEffect(() => {
@@ -162,14 +233,25 @@ export function App() {
           <button onClick={() => setTableError(null)}>知道了</button>
         </div>
       )}
-      <TabBar
-        sessions={sessions}
-        activeKey={activeKey}
-        onActivate={boards.setActiveKey}
-        onClose={(key) => void boards.closeBoard(key)}
-        onRename={(key, title) => void boards.renameBoard(key, title)}
-        onCreate={() => void createBoard()}
-      />
+      <div className="topbar">
+        <TabBar
+          sessions={sessions}
+          activeKey={activeKey}
+          onActivate={boards.setActiveKey}
+          onClose={(key) => void boards.closeBoard(key)}
+          onRename={(key, title) => void boards.renameBoard(key, title)}
+          onCreate={() => void createBoard()}
+        />
+        <button className="settings-button" onClick={() => setSettingsOpen(true)} disabled={!settings.loaded || !outputRoot}>
+          ⚙ 高级设置
+        </button>
+      </div>
+      {settings.fileProblem && !settingsOpen && (
+        <div className="bar bar-warn">
+          <span>{settings.fileProblem}</span>
+          <button onClick={() => setSettingsOpen(true)}>打开高级设置</button>
+        </div>
+      )}
       {active?.status === "ok" && active.notice && (
         <div className="bar bar-warn">
           <span>{active.notice}</span>
@@ -198,10 +280,31 @@ export function App() {
               update={updateActive}
               openBoardPath={openFromCanvas}
               toast={toast}
+              discovery={settings.discovery}
+              statuses={runner.statuses}
+              onRun={(ids) => void openRunConfirm(ids)}
             />
           </ReactFlowProvider>
         )}
       </main>
+      {settingsOpen && outputRoot && defaultRoot && (
+        <SettingsPanel
+          settings={settings}
+          outputRoot={outputRoot}
+          defaultOutputRoot={defaultRoot}
+          busy={runner.busy}
+          onOutputRootChange={switchOutputRoot}
+          onClose={() => setSettingsOpen(false)}
+        />
+      )}
+      {confirm && (
+        <RunConfirmDialog
+          items={confirm.items}
+          scope={confirm.scope}
+          onCancel={() => setConfirm(null)}
+          onConfirm={(ids) => void startRun(confirm.boardKey, confirm.board, ids)}
+        />
+      )}
       {toastText && <div className="toast">{toastText}</div>}
     </div>
   );

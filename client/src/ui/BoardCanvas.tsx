@@ -17,6 +17,8 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BOARD_EXTENSION, type Board, type BoardEdge, type KnownNode, type TaskNode } from "../core/board";
 import { findModel, modelsByTier, type CapabilityTable, type InputImageRule } from "../core/capabilities";
+import type { TaskStatus } from "../core/run";
+import { availableModels, defaultTaskModel, modelAvailabilityIssue, type Discovery } from "../core/settings";
 import {
   canConnect,
   connect,
@@ -46,6 +48,10 @@ interface Props {
   update: (fn: (board: Board) => Board) => void;
   openBoardPath: (path: string) => void;
   toast: (message: string) => void;
+  discovery: Discovery;
+  statuses: ReadonlyMap<string, TaskStatus>;
+  /** 点「运行」：传当前选中的节点 id。 */
+  onRun: (selectedIds: string[]) => void;
 }
 
 const edgeId = (e: BoardEdge) => `${e.from.join(":")}->${e.to.join(":")}`;
@@ -55,7 +61,7 @@ function defaultModel(table: CapabilityTable): string | null {
   return modelsByTier(table)[0]?.models[0]?.model_id ?? null;
 }
 
-export function BoardCanvas({ board, table, outputRoot, update, openBoardPath, toast }: Props) {
+export function BoardCanvas({ board, table, outputRoot, update, openBoardPath, toast, discovery, statuses, onRun }: Props) {
   const flow = useReactFlow();
   const wrapper = useRef<HTMLDivElement>(null);
   const [selectedNodes, setSelectedNodes] = useState<Set<string>>(new Set());
@@ -68,11 +74,18 @@ export function BoardCanvas({ board, table, outputRoot, update, openBoardPath, t
     () => ({
       table,
       outputRoot,
+      availableModels: availableModels(table, discovery),
+      setTaskModel: (id, modelId) =>
+        updateBoard((b) => ({
+          ...b,
+          last_model: modelId,
+          nodes: b.nodes.map((n) => (n.id === id && n.type === "task" ? { ...n, model: modelId } : n)),
+        })),
       updateNode: (id, patch) =>
         updateBoard((b) => ({ ...b, nodes: b.nodes.map((n) => (n.id === id && n.type !== "unknown" ? ({ ...n, ...patch } as KnownNode) : n)) })),
       moveImagePort: (taskId, from, to) => updateBoard((b) => ({ ...b, edges: moveImagePort(b, taskId, from, to) })),
     }),
-    [table, outputRoot, updateBoard],
+    [table, outputRoot, discovery, updateBoard],
   );
 
   const nodes = useMemo<Node[]>(() => {
@@ -109,16 +122,17 @@ export function BoardCanvas({ board, table, outputRoot, update, openBoardPath, t
               data: {
                 node: n,
                 ports: taskPorts(board, table, n.id),
-                issues: taskIssues(board, table, n.id),
+                issues: withAvailability(taskIssues(board, table, n.id), modelAvailabilityIssue(table, discovery, n.model)),
                 workflow: workflowOf(board, n.id),
                 images: imageEdges(board, n.id).map((e) => labelOf(e.from[0])),
                 hasPositive: board.edges.some((e) => e.to[0] === n.id && e.to[1] === "positive"),
+                status: statuses.get(n.id) ?? null,
               },
             },
           ];
       }
     });
-  }, [board, table, outputRoot, selectedNodes, measured]);
+  }, [board, table, outputRoot, selectedNodes, measured, statuses, discovery]);
 
   const edges = useMemo<Edge[]>(
     () =>
@@ -277,12 +291,10 @@ export function BoardCanvas({ board, table, outputRoot, update, openBoardPath, t
     addNode({ type: "prompt", id: crypto.randomUUID(), pos: posOf(centerPosition()), size: [240, 140], text: "", extra: {} });
 
   const addTask = () => {
-    const lastTask = [...board.nodes].reverse().find((n): n is TaskNode => n.type === "task");
-    const lastModel = lastTask && findModel(table, lastTask.model);
-    const modelId = lastModel?.tier ? lastModel.model_id : defaultModel(table);
+    const modelId = defaultTaskModel(table, discovery, board.last_model);
     const model = modelId ? findModel(table, modelId) : undefined;
     if (!model) return toast("能力表中没有上架模型");
-    addNode({
+    const node: TaskNode = {
       type: "task",
       id: crypto.randomUUID(),
       pos: posOf(centerPosition()),
@@ -294,7 +306,9 @@ export function BoardCanvas({ board, table, outputRoot, update, openBoardPath, t
       transparent_background: false,
       last_submitted: null,
       extra: {},
-    });
+    };
+    update((b) => ({ ...b, last_model: model.model_id, nodes: [...b.nodes, node] }));
+    setSelectedNodes(new Set([node.id]));
   };
 
   const importReferences = useCallback(
@@ -357,6 +371,9 @@ export function BoardCanvas({ board, table, outputRoot, update, openBoardPath, t
           <button onClick={addPrompt}>＋ 提示词</button>
           <button onClick={addTask}>＋ 生成任务</button>
           <button onClick={() => void pickReferences()}>＋ 参考图…</button>
+          <button className="primary" onClick={() => onRun([...selectedNodes])} title="有选中时只运行选中子图，否则运行整个画板中需要运行的任务">
+            ▶ 运行{selectedNodes.size > 0 ? "选中" : ""}
+          </button>
         </div>
         <ReactFlow
           nodes={nodes}
@@ -381,6 +398,10 @@ export function BoardCanvas({ board, table, outputRoot, update, openBoardPath, t
       </div>
     </BoardContext.Provider>
   );
+}
+
+function withAvailability(issues: string[], unavailable: string | null): string[] {
+  return unavailable ? [...issues, unavailable] : issues;
 }
 
 function posOf(p: { x: number; y: number }): [number, number] {

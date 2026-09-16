@@ -101,6 +101,18 @@ export function useBoardSessions(outputRoot: string | null) {
     [patch, scheduleSave],
   );
 
+  /** 最新的画板内容（不等 React 重渲染）；会话不存在或不可编辑时为 null。 */
+  const getBoard = useCallback((key: string): Board | null => {
+    const s = sessionsRef.current.find((x) => x.key === key);
+    return s?.status === "ok" ? s.board : null;
+  }, []);
+
+  /** 关闭全部标签页（切换输出根目录时用）；先落盘。 */
+  const closeAll = useCallback(async () => {
+    for (const s of sessionsRef.current) await closeBoardRef.current(s.key);
+  }, []);
+  const closeBoardRef = useRef<(key: string) => Promise<void>>(async () => undefined);
+
   const flushAll = useCallback(async () => {
     const pending = [...savers.current.entries()].filter(([, s]) => s.timer !== null).map(([key]) => flush(key));
     await Promise.all([...pending, ...[...savers.current.values()].map((s) => s.chain)]);
@@ -166,6 +178,8 @@ export function useBoardSessions(outputRoot: string | null) {
     [flush, setSessions],
   );
 
+  closeBoardRef.current = closeBoard;
+
   /** 改标题：文件名由标题派生，重名加 (2)，连同 .bak 一起改名。 */
   const renameBoard = useCallback(
     async (key: string, rawTitle: string) => {
@@ -224,6 +238,8 @@ export function useBoardSessions(outputRoot: string | null) {
     renameBoard,
     saveAs,
     updateBoard,
+    getBoard,
+    closeAll,
     flushAll,
     dismissNotice,
   };
