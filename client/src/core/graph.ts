@@ -214,6 +214,59 @@ export function taskIssues(board: Board, table: CapabilityTable, taskId: string)
   return issues;
 }
 
+// ---- 编辑已提交过的提示词节点（规格第 3.5 节） ----
+
+/** 提示词节点直接下游的任务里有已提交过的（有 last_submitted）。 */
+function recordedTasks(board: Board, promptId: string): Set<string> {
+  return new Set(
+    board.edges.filter((e) => e.from[0] === promptId && findTask(board, e.to[0])?.last_submitted).map((e) => e.to[0]),
+  );
+}
+
+export function hasDownstreamRecords(board: Board, promptId: string): boolean {
+  return recordedTasks(board, promptId).size > 0;
+}
+
+const FORK_GAP = 24;
+
+/** 断开并分叉：旧文本进新提示词节点（落在被编辑节点下方）接回有执行记录的任务，新文本留在被编辑节点。 */
+export function forkPrompt(board: Board, promptId: string, fork: { newNodeId: string; text: string }): Board {
+  const prompt = board.nodes.find((n) => n.id === promptId);
+  if (prompt?.type !== "prompt") return board;
+  const recorded = recordedTasks(board, promptId);
+  // 旧文本在原位新建节点，被编辑节点让到下方。
+  const old = { ...prompt, id: fork.newNodeId, extra: {} };
+  const moved = { ...prompt, text: fork.text, pos: [prompt.pos[0], prompt.pos[1] + prompt.size[1] + FORK_GAP] as [number, number] };
+  return {
+    ...board,
+    nodes: [...board.nodes.map((n) => (n.id === promptId ? moved : n)), old],
+    edges: board.edges.map((e) => (e.from[0] === promptId && recorded.has(e.to[0]) ? { ...e, from: [fork.newNodeId, e.from[1]] } : e)),
+  };
+}
+
+// ---- 链深 ----
+
+/** 链深达到此值时任务节点轻徽标、二次确认附提示；不阻断。 */
+export const CHAIN_DEPTH_HINT = 3;
+
+/**
+ * 从最近的参考图节点到本任务经过的生成任务节点数（含本任务）。
+ * 图片线来自参考图 = 0；来自结果节点 = 其产出任务的链深（产出任务已删 = 0）；无图片线的文生图 = 链起点。
+ */
+export function chainDepth(board: Board, taskId: string, memo = new Map<string, number>()): number {
+  const cached = memo.get(taskId);
+  if (cached !== undefined) return cached;
+  const upstream = imageEdges(board, taskId).map((e) => {
+    const src = board.nodes.find((n) => n.id === e.from[0]);
+    if (src?.type !== "result") return 0;
+    const producer = board.edges.find((x) => x.system && x.to[0] === src.id)?.from[0];
+    return producer && findTask(board, producer) ? chainDepth(board, producer, memo) : 0;
+  });
+  const depth = 1 + (upstream.length ? Math.min(...upstream) : 0);
+  memo.set(taskId, depth);
+  return depth;
+}
+
 // ---- 参考图输入规则 ----
 
 export interface ImageFacts {

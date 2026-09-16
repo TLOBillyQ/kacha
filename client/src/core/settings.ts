@@ -12,7 +12,7 @@ export interface Settings {
   base_url: string;
   /** null = 跟随默认输出根目录（图片目录下）。 */
   output_root: string | null;
-  /** 本切片只存储，运行编排切片才生效。 */
+  /** 全局队列的并发上限。 */
   concurrency: number;
   extra: Json;
 }

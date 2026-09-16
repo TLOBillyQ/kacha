@@ -166,6 +166,16 @@ describe("网关适配器：请求载荷对照夹具", () => {
     expect(composeSendText({ prompt: "蓝天", negativePrompt: "文字", referenceCount: 0 })).toBe("蓝天");
   });
 
+  it("发送文本里 @图N 按提示词语言改写；英文提示词用英文数量顺序前缀", () => {
+    expect(composeSendText({ prompt: "把@图2的帽子戴到@图1头上", negativePrompt: "", referenceCount: 2 })).toBe(
+      "本次提供 2 张参考图，按顺序为图1、图2。\n把图2的帽子戴到图1头上",
+    );
+    expect(composeSendText({ prompt: "Put the hat from @图2 on @图1", negativePrompt: "text", referenceCount: 2 })).toBe(
+      "This request provides 2 reference images, in order: Image 1, Image 2.\nPut the hat from Image 2 on Image 1\nAvoid: text",
+    );
+    expect(composeSendText({ prompt: "Make @图1 blue", negativePrompt: "", referenceCount: 1 })).toBe("This request provides 1 reference image.\nMake Image 1 blue");
+  });
+
   it("request_shape 未实现的模型拒绝构造请求（Seedream 形态留接口）", () => {
     const seedream = findModel(BUILTIN_TABLE, "doubao-seedream-5-0-pro-260628")!;
     expect(() => buildGenerationRequest(textInput({ model: seedream }))).toThrow(GatewayError);

@@ -23,6 +23,12 @@ export function taskDirOf(submittedAt: Date, taskId: string): string {
   return `${submittedAt.toISOString().slice(0, 10)}/${taskId}`;
 }
 
+/** 由 task_id 开头的 UTC 时间戳还原任务目录；不是本工具生成的编号时为 null。 */
+export function taskDirOfTaskId(taskId: string): string | null {
+  const m = /^(\d{4})(\d{2})(\d{2})T\d{6}Z-/.exec(taskId);
+  return m ? `${m[1]}-${m[2]}-${m[3]}/${taskId}` : null;
+}
+
 export function sniffImage(bytes: Uint8Array): { ext: string; mediaType: string } | null {
   const starts = (sig: number[], offset = 0) => sig.every((b, i) => bytes[offset + i] === b);
   const ascii = (text: string, offset = 0) => starts([...text].map((c) => c.charCodeAt(0)), offset);

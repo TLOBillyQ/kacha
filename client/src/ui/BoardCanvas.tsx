@@ -1,5 +1,5 @@
 // 单个画板的画布：React Flow 视图完全由画板文件模型派生；选中、测量尺寸只在本地，不落盘。
-import { open } from "@tauri-apps/plugin-dialog";
+import { ask, open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import {
   Background,
@@ -22,8 +22,11 @@ import { availableModels, defaultTaskModel, modelAvailabilityIssue, type Discove
 import {
   canConnect,
   connect,
+  chainDepth,
   deletionBlocker,
   disconnect,
+  forkPrompt,
+  hasDownstreamRecords,
   imageEdges,
   moveImagePort,
   removeNodes,
@@ -35,9 +38,11 @@ import {
 } from "../core/graph";
 import { basename, resolveFromRoot, toRootRelative } from "../core/paths";
 import { defaultSizeSpec } from "../core/size";
+import { imageRefProblems, isInterrupted } from "../core/submission";
 import { ipc } from "../shell/ipc";
 import { BoardContext, primeImageInfo, type BoardActions } from "./context";
 import { nodeTypes, type ImagePortInfo } from "./nodes";
+import { isActive } from "./useRunner";
 
 const IMAGE_EXTENSIONS = ["png", "jpg", "jpeg", "webp", "bmp", "gif", "tif", "tiff", "heic", "heif"];
 
@@ -50,9 +55,17 @@ interface Props {
   toast: (message: string) => void;
   discovery: Discovery;
   statuses: ReadonlyMap<string, TaskStatus>;
+  /** 本次程序运行期间队列经手过的提交，用于推导「已中断」。 */
+  handled: ReadonlySet<string>;
   /** 点「运行」：传当前选中的节点 id。 */
   onRun: (selectedIds: string[]) => void;
+  onCancelTask: (taskId: string) => void;
+  onRegenerate: (taskId: string) => void;
+  /** 运行指示跳转：居中并选中该节点；nonce 变化即再跳一次。 */
+  focus: { nodeId: string; nonce: number } | null;
 }
+
+const LOCKED_HINT = "任务排队 / 执行中：模型、尺寸、开关、图片端口与连线已锁定";
 
 const edgeId = (e: BoardEdge) => `${e.from.join(":")}->${e.to.join(":")}`;
 const dims = (w: number | undefined, h: number | undefined) => ({ width: w, height: h });
@@ -61,7 +74,7 @@ function defaultModel(table: CapabilityTable): string | null {
   return modelsByTier(table)[0]?.models[0]?.model_id ?? null;
 }
 
-export function BoardCanvas({ board, table, outputRoot, update, openBoardPath, toast, discovery, statuses, onRun }: Props) {
+export function BoardCanvas({ board, table, outputRoot, update, openBoardPath, toast, discovery, statuses, handled, onRun, onCancelTask, onRegenerate, focus }: Props) {
   const flow = useReactFlow();
   const wrapper = useRef<HTMLDivElement>(null);
   const [selectedNodes, setSelectedNodes] = useState<Set<string>>(new Set());
@@ -70,12 +83,22 @@ export function BoardCanvas({ board, table, outputRoot, update, openBoardPath, t
 
   const updateBoard = useCallback((fn: (b: Board) => Board) => update((b) => syncImagePorts(fn(b))), [update]);
 
+  const statusOf = useCallback(
+    (taskId: string): TaskStatus | null => statuses.get(taskId) ?? (isInterrupted(board, taskId, handled) ? { kind: "interrupted" } : null),
+    [statuses, board, handled],
+  );
+  // 排队 / 执行中的任务节点：参数与连线锁定，上游提示词仍可编辑（经三选）。
+  const locked = useMemo(() => new Set([...statuses].filter(([, st]) => isActive(st)).map(([id]) => id)), [statuses]);
+  const lockedRef = useRef(locked);
+  lockedRef.current = locked;
+
   const actions = useMemo<BoardActions>(
     () => ({
       table,
       outputRoot,
       availableModels: availableModels(table, discovery),
       setTaskModel: (id, modelId) =>
+        !lockedRef.current.has(id) &&
         updateBoard((b) => ({
           ...b,
           last_model: modelId,
@@ -83,9 +106,12 @@ export function BoardCanvas({ board, table, outputRoot, update, openBoardPath, t
         })),
       updateNode: (id, patch) =>
         updateBoard((b) => ({ ...b, nodes: b.nodes.map((n) => (n.id === id && n.type !== "unknown" ? ({ ...n, ...patch } as KnownNode) : n)) })),
-      moveImagePort: (taskId, from, to) => updateBoard((b) => ({ ...b, edges: moveImagePort(b, taskId, from, to) })),
+      moveImagePort: (taskId, from, to) => !lockedRef.current.has(taskId) && updateBoard((b) => ({ ...b, edges: moveImagePort(b, taskId, from, to) })),
+      forkPrompt: (promptId, text) => updateBoard((b) => forkPrompt(b, promptId, { newNodeId: crypto.randomUUID(), text })),
+      cancelTask: onCancelTask,
+      regenerate: onRegenerate,
     }),
-    [table, outputRoot, discovery, updateBoard],
+    [table, outputRoot, discovery, updateBoard, onCancelTask, onRegenerate],
   );
 
   const nodes = useMemo<Node[]>(() => {
@@ -101,7 +127,7 @@ export function BoardCanvas({ board, table, outputRoot, update, openBoardPath, t
       const base = { id: n.id, position: { x: n.pos[0], y: n.pos[1] }, selected: selectedNodes.has(n.id), measured: measured[n.id] };
       switch (n.type) {
         case "prompt":
-          return [{ ...base, type: "prompt", data: { node: n } }];
+          return [{ ...base, type: "prompt", data: { node: n, recorded: hasDownstreamRecords(board, n.id) } }];
         case "result":
           return [{ ...base, type: "result", data: { node: n } }];
         case "reference": {
@@ -114,7 +140,8 @@ export function BoardCanvas({ board, table, outputRoot, update, openBoardPath, t
           });
           return [{ ...base, type: "reference", data: { node: n, rules } }];
         }
-        case "task":
+        case "task": {
+          const refs = imageRefProblems(board, n.id);
           return [
             {
               ...base,
@@ -122,17 +149,22 @@ export function BoardCanvas({ board, table, outputRoot, update, openBoardPath, t
               data: {
                 node: n,
                 ports: taskPorts(board, table, n.id),
-                issues: withAvailability(taskIssues(board, table, n.id), modelAvailabilityIssue(table, discovery, n.model)),
+                issues: [...withAvailability(taskIssues(board, table, n.id), modelAvailabilityIssue(table, discovery, n.model)), ...refs.issues],
+                warnings: refs.warnings,
+                unreferenced: refs.unreferenced,
+                chainDepth: chainDepth(board, n.id),
+                locked: locked.has(n.id),
                 workflow: workflowOf(board, n.id),
                 images: imageEdges(board, n.id).map((e) => labelOf(e.from[0])),
                 hasPositive: board.edges.some((e) => e.to[0] === n.id && e.to[1] === "positive"),
-                status: statuses.get(n.id) ?? null,
+                status: statusOf(n.id),
               },
             },
           ];
+        }
       }
     });
-  }, [board, table, outputRoot, selectedNodes, measured, statuses, discovery]);
+  }, [board, table, outputRoot, selectedNodes, measured, statusOf, locked, discovery]);
 
   const edges = useMemo<Edge[]>(
     () =>
@@ -204,8 +236,8 @@ export function BoardCanvas({ board, table, outputRoot, update, openBoardPath, t
 
   const isValidConnection = useCallback(
     (c: Edge | { source: string; sourceHandle?: string | null; target: string; targetHandle?: string | null }) =>
-      canConnect(board, table, toConnection(c)).ok,
-    [board, table],
+      !locked.has(c.target) && canConnect(board, table, toConnection(c)).ok,
+    [board, table, locked],
   );
 
   const onConnect = useCallback(
@@ -213,7 +245,7 @@ export function BoardCanvas({ board, table, outputRoot, update, openBoardPath, t
       const conn = toConnection(c);
       updateBoard((b) => {
         const verdict = canConnect(b, table, conn);
-        if (!verdict.ok) return b;
+        if (!verdict.ok || lockedRef.current.has(conn.target)) return b;
         // 提示词连正向 / 负向即确定其角色；角色由连线端口体现，无需另存字段。
         return { ...b, edges: connect(b, conn) };
       });
@@ -226,10 +258,11 @@ export function BoardCanvas({ board, table, outputRoot, update, openBoardPath, t
     (_event, state) => {
       if (state.isValid || !state.fromHandle || !state.toHandle || !state.fromNode || !state.toNode) return;
       const [src, dst] = state.fromHandle.type === "source" ? [state.fromHandle, state.toHandle] : [state.toHandle, state.fromHandle];
+      if (locked.has(dst.nodeId)) return toast(LOCKED_HINT);
       const verdict = canConnect(board, table, { source: src.nodeId, sourceHandle: src.id ?? "", target: dst.nodeId, targetHandle: dst.id ?? "" });
       if (!verdict.ok) toast(verdict.reason);
     },
-    [board, table, toast],
+    [board, table, toast, locked],
   );
 
   const onBeforeDelete = useCallback(
@@ -243,9 +276,25 @@ export function BoardCanvas({ board, table, outputRoot, update, openBoardPath, t
       const gone = new Set(ids);
       // 系统连线只能随节点一起消失，用户不能单独删。
       const userEdges = es.filter((e) => e.deletable !== false || gone.has(e.source) || gone.has(e.target));
+      // 锁定任务的连线不能动（任务本身一起删除除外）。
+      if (userEdges.some((e) => locked.has(e.target) && !gone.has(e.target))) {
+        toast(LOCKED_HINT);
+        return false;
+      }
+      const running = ids.filter((id) => locked.has(id));
+      if (running.length) {
+        const confirmed = await ask(`${running.length} 个任务正在排队 / 执行。先取消再删除？\n已在执行的只停止本地等待，网关侧计算可能仍在继续。`, {
+          title: "删除任务节点",
+          kind: "warning",
+          okLabel: "取消并删除",
+          cancelLabel: "不删除",
+        });
+        if (!confirmed) return false;
+        running.forEach(onCancelTask);
+      }
       return { nodes: ns, edges: userEdges };
     },
-    [board, toast],
+    [board, toast, locked, onCancelTask],
   );
 
   const onDelete = useCallback(
@@ -272,6 +321,16 @@ export function BoardCanvas({ board, table, outputRoot, update, openBoardPath, t
     },
     [update],
   );
+
+  useEffect(() => {
+    if (!focus) return;
+    const node = board.nodes.find((n) => n.id === focus.nodeId);
+    if (!node || node.type === "unknown") return;
+    const size = measured[node.id];
+    void flow.setCenter(node.pos[0] + (size?.width ?? node.size[0]) / 2, node.pos[1] + (size?.height ?? node.size[1]) / 2, { zoom: Math.max(flow.getZoom(), 0.8), duration: 300 });
+    setSelectedNodes(new Set([node.id]));
+    // 只在跳转请求变化时执行。
+  }, [focus]);
 
   const centerPosition = useCallback(() => {
     const rect = wrapper.current?.getBoundingClientRect();

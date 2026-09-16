@@ -543,3 +543,68 @@ button.primary:disabled {
     transform: rotate(360deg);
   }
 }
+
+/* ---- 运行编排 ---- */
+.status-backoff {
+  background: #fff8c5;
+  color: #7d4e00;
+}
+.badge-chain {
+  margin-left: 6px;
+  background: #fff8c5;
+  color: #7d4e00;
+  font-weight: normal;
+}
+.port-unreferenced {
+  background: #fff8c5;
+  box-shadow: inset 3px 0 0 var(--yellow);
+}
+.task-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 6px;
+}
+.fork-choice {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 180px;
+}
+.run-indicator {
+  position: relative;
+  margin: 4px 0 4px 8px;
+}
+.run-indicator > button {
+  height: 100%;
+}
+.run-list {
+  position: absolute;
+  z-index: 30;
+  right: 0;
+  top: calc(100% + 4px);
+  width: 360px;
+  padding: 8px;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+}
+.run-list ul {
+  max-height: 280px;
+  margin: 0 0 8px;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+}
+.run-list li button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 3px 0;
+  text-align: left;
+}
+.run-list .status {
+  margin-left: 0;
+}

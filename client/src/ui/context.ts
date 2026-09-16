@@ -12,6 +12,10 @@ export interface BoardActions {
   setTaskModel: (id: string, modelId: string) => void;
   updateNode: (id: string, patch: Partial<KnownNode>) => void;
   moveImagePort: (taskId: string, from: number, to: number) => void;
+  /** 编辑已提交过的提示词节点，选「断开并分叉」。 */
+  forkPrompt: (promptId: string, text: string) => void;
+  cancelTask: (taskId: string) => void;
+  regenerate: (taskId: string) => void;
 }
 
 export const BoardContext = createContext<BoardActions | null>(null);

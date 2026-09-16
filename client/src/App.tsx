@@ -1,5 +1,6 @@
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
+import { ask } from "@tauri-apps/plugin-dialog";
 import { ReactFlowProvider } from "@xyflow/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { BOARD_EXTENSION, type Board } from "./core/board";
@@ -9,8 +10,9 @@ import { parseUiState, serializeUiState, type UiState } from "./core/uiState";
 import { ipc } from "./shell/ipc";
 import { BoardCanvas } from "./ui/BoardCanvas";
 import { RunConfirmDialog } from "./ui/RunConfirmDialog";
+import { RunIndicator } from "./ui/RunIndicator";
 import { SettingsPanel } from "./ui/SettingsPanel";
-import { useRunner } from "./ui/useRunner";
+import { isActive, useRunner, type RunTarget } from "./ui/useRunner";
 import { useSettings } from "./ui/useSettings";
 import { TabBar } from "./ui/TabBar";
 import { useBoardSessions } from "./ui/useBoardSessions";
@@ -35,7 +37,10 @@ export function App() {
   const { sessions, activeKey, openPath, createBoard, flushAll } = boards;
 
   const { updateBoard } = boards;
-  const runner = useRunner(boards);
+  const runner = useRunner(boards, settings.settings.concurrency);
+  const runnerRef = useRef(runner);
+  runnerRef.current = runner;
+  const [focus, setFocus] = useState<{ boardKey: string; nodeId: string; nonce: number } | null>(null);
   const updateActive = useCallback((fn: (b: Board) => Board) => activeKey && updateBoard(activeKey, fn), [activeKey, updateBoard]);
   const openFromCanvas = useCallback((p: string) => void openOrWarnRef.current(p), []);
   const openOrWarnRef = useRef<(p: string) => Promise<void>>(async () => undefined);
@@ -105,7 +110,7 @@ export function App() {
       await boards.flushAll();
       const board = boards.getBoard(activeKey);
       if (!board) return;
-      const busy = new Set([...runner.statuses].filter(([, st]) => st.kind !== "failed").map(([id]) => id));
+      const busy = new Set([...runner.statuses].filter(([, st]) => isActive(st)).map(([id]) => id));
       const ids = runScope(board, selectedIds, busy);
       const sources = ids.flatMap((id) => imageSources(board, id, outputRoot));
       const missingNodes = new Set<string>();
@@ -138,6 +143,44 @@ export function App() {
       if (problems.length) toast(`${problems.length} 个任务提交失败：${problems[0]}`);
     },
     [outputRoot, runner, table, settings.settings.base_url, settings.apiKey, toast],
+  );
+
+  const regenerate = useCallback(
+    async (taskNodeId: string) => {
+      if (!activeKey || !outputRoot) return;
+      if (!settings.apiKey) {
+        toast("请先在高级设置中填写 API 密钥");
+        setSettingsOpen(true);
+        return;
+      }
+      const target: RunTarget = { boardKey: activeKey, table, outputRoot, baseUrl: settings.settings.base_url, apiKey: settings.apiKey };
+      const problem = await runnerRef.current.regenerate(target, taskNodeId);
+      if (problem) toast(`重新生成失败：${problem}`);
+    },
+    [activeKey, outputRoot, settings.apiKey, settings.settings.base_url, table, toast],
+  );
+
+  const cancelTask = useCallback((taskNodeId: string) => activeKey && runnerRef.current.cancelTask(activeKey, taskNodeId), [activeKey]);
+
+  /** 画板还有排队 / 执行中的任务时，关闭前阻断式二选一；不后台续跑。 */
+  const confirmStopTasks = (count: number) =>
+    ask(`还有 ${count} 个任务在排队或执行。关闭后不会在后台继续；已在执行的只停止本地等待，网关侧计算可能仍在继续。`, {
+      title: "任务未完成",
+      kind: "warning",
+      okLabel: "取消全部并关闭",
+      cancelLabel: "留在画板",
+    });
+
+  const closeBoard = useCallback(
+    async (key: string) => {
+      const count = runnerRef.current.pendingCount(key);
+      if (count > 0) {
+        if (!(await confirmStopTasks(count))) return;
+        runnerRef.current.cancelBoard(key);
+      }
+      await boards.closeBoard(key);
+    },
+    [boards],
   );
 
   // 第二阶段：恢复标签页，再打开启动参数里的画板；一个都没有就新建。
@@ -194,13 +237,25 @@ export function App() {
       timer = setTimeout(() => void persistRef.current(), 500);
     });
     // 注册了关闭监听后由前端调用 destroy 关窗（需 core:window:allow-destroy）；保存出错也不能挡住关窗。
-    const closing = win.onCloseRequested(async () => {
+    // 有未完成任务时先阻断式确认，全局只弹一次。
+    let asking = false;
+    const closing = win.onCloseRequested(async (event) => {
+      const count = runnerRef.current.pendingCount();
+      if (count > 0) {
+        event.preventDefault();
+        if (asking) return;
+        asking = true;
+        const confirmed = await confirmStopTasks(count).finally(() => (asking = false));
+        if (!confirmed) return;
+        runnerRef.current.cancelAll();
+      }
       try {
         await flushAll();
         await persistRef.current();
       } catch (e) {
         console.error("关闭前保存失败", e);
       }
+      if (count > 0) await win.destroy();
     });
     return () => {
       clearTimeout(timer);
@@ -237,10 +292,25 @@ export function App() {
         <TabBar
           sessions={sessions}
           activeKey={activeKey}
-          onActivate={boards.setActiveKey}
-          onClose={(key) => void boards.closeBoard(key)}
+          onActivate={(key) => {
+            setFocus(null);
+            boards.setActiveKey(key);
+          }}
+          onClose={(key) => void closeBoard(key)}
           onRename={(key, title) => void boards.renameBoard(key, title)}
           onCreate={() => void createBoard()}
+        />
+        <RunIndicator
+          active={runner.active}
+          titleOf={(key) => {
+            const s = sessions.find((x) => x.key === key);
+            return s?.status === "ok" ? s.board.title : "（已关闭的画板）";
+          }}
+          onJump={(t) => {
+            boards.setActiveKey(t.boardKey);
+            setFocus((f) => ({ boardKey: t.boardKey, nodeId: t.taskNodeId, nonce: (f?.nonce ?? 0) + 1 }));
+          }}
+          onCancelWaiting={runner.cancelWaiting}
         />
         <button className="settings-button" onClick={() => setSettingsOpen(true)} disabled={!settings.loaded || !outputRoot}>
           ⚙ 高级设置
@@ -282,7 +352,11 @@ export function App() {
               toast={toast}
               discovery={settings.discovery}
               statuses={runner.statuses}
+              handled={runner.handled}
               onRun={(ids) => void openRunConfirm(ids)}
+              onCancelTask={cancelTask}
+              onRegenerate={regenerate}
+              focus={focus?.boardKey === active.key ? focus : null}
             />
           </ReactFlowProvider>
         )}
