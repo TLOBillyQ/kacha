@@ -184,6 +184,40 @@ export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskF
   const groups = modelsByTier(table);
   const shelved = groups.some((g) => g.models.some((m) => m.model_id === node.model));
 
+  // 端口重排用 pointer 事件：窗口开启了文件拖入（dragDropEnabled），Windows 上收不到 HTML5 drop。
+  // 拖动中全局换成 grabbing 指针，悬停在可放的行上高亮该行，其余位置显示 no-drop。
+  const [dropTo, setDropTo] = useState<number | null>(null);
+  useEffect(() => {
+    if (dragFrom === null) return;
+    const targetAt = (e: PointerEvent) => {
+      const row = document.elementFromPoint(e.clientX, e.clientY)?.closest<HTMLElement>("[data-port-index]");
+      if (!row || row.closest(".react-flow__node")?.getAttribute("data-id") !== node.id) return null;
+      const to = Number(row.dataset.portIndex);
+      return to === dragFrom ? null : to;
+    };
+    const move = (e: PointerEvent) => {
+      const to = targetAt(e);
+      setDropTo(to);
+      document.body.dataset.portDrag = to === null ? "none" : "ok";
+    };
+    const up = (e: PointerEvent) => {
+      const to = targetAt(e);
+      if (to !== null) moveImagePort(node.id, dragFrom, to);
+      setDragFrom(null);
+    };
+    document.body.dataset.portDrag = "none";
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
+    return () => {
+      delete document.body.dataset.portDrag;
+      setDropTo(null);
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+    };
+  }, [dragFrom, node.id, moveImagePort]);
+
   // 端口数量或顺序变化后，React Flow 需要重新测量 Handle 位置。
   const portSignature = `${ports.negative}|${ports.imageSlots}|${images.map((i) => i.label).join(",")}`;
   useEffect(() => updateInternals(node.id), [portSignature, node.id, updateInternals]);
@@ -290,19 +324,13 @@ export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskF
             <PortRow
               key={i}
               id={`${IMAGE_PORT_PREFIX}${i}`}
-              className={`nodrag ${image ? "port-filled" : "port-empty"} ${dragFrom !== null && dragFrom !== i && image ? "port-drop" : ""}`}
+              className={`nodrag ${image ? "port-filled" : "port-empty"} ${dragFrom === i ? "port-dragging" : ""} ${dropTo === i ? "port-drop" : ""}`}
               label={image ? `图${i + 1} · ${image.label}` : `图${i + 1}（空）`}
-              draggable={!!image}
-              onDragStart={(e) => {
-                e.dataTransfer.effectAllowed = "move";
-                setDragFrom(i);
-              }}
-              onDragEnd={() => setDragFrom(null)}
-              onDragOver={(e) => image && dragFrom !== null && e.preventDefault()}
-              onDrop={(e) => {
+              data-port-index={image ? i : undefined}
+              onPointerDown={(e) => {
+                if (!image || e.button !== 0 || (e.target as HTMLElement).closest(".react-flow__handle")) return;
                 e.preventDefault();
-                if (dragFrom !== null && image) moveImagePort(node.id, dragFrom, i);
-                setDragFrom(null);
+                setDragFrom(i);
               }}
             >
               {image && <span className="grip" title="拖动调整参考图顺序">⋮⋮</span>}

@@ -310,11 +310,41 @@ textarea {
 .port-filled {
   cursor: grab;
 }
+.port-dragging {
+  opacity: 0.45;
+}
 .port-drop {
   background: #ddf4ff;
+  box-shadow: inset 0 2px 0 #0969da;
+}
+body[data-port-drag],
+body[data-port-drag] * {
+  cursor: no-drop !important;
+  user-select: none;
+}
+body[data-port-drag="ok"],
+body[data-port-drag="ok"] * {
+  cursor: grabbing !important;
 }
 .grip {
   color: #8c959f;
+}
+
+/* 端口与连线加大，便于点中。 */
+.react-flow__handle {
+  width: 12px;
+  height: 12px;
+  border-width: 2px;
+}
+.react-flow__edge-path,
+.react-flow__connection-path {
+  stroke-width: 2.5;
+}
+.react-flow__edge.selected .react-flow__edge-path {
+  stroke-width: 3.5;
+}
+.react-flow__edge-interaction {
+  stroke-width: 24;
 }
 
 .edge-system path {
