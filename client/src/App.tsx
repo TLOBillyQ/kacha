@@ -122,9 +122,14 @@ export function App() {
       clearTimeout(timer);
       timer = setTimeout(() => void persistRef.current(), 500);
     });
+    // 注册了关闭监听后由前端调用 destroy 关窗（需 core:window:allow-destroy）；保存出错也不能挡住关窗。
     const closing = win.onCloseRequested(async () => {
-      await flushAll();
-      await persistRef.current();
+      try {
+        await flushAll();
+        await persistRef.current();
+      } catch (e) {
+        console.error("关闭前保存失败", e);
+      }
     });
     return () => {
       clearTimeout(timer);
