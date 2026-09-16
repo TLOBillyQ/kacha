@@ -1,0 +1,315 @@
+{
+  "format_version": 1,
+  "models": [
+    {
+      "model_id": "qwen-image-3.0-pro",
+      "display_name": "Qwen Image 3.0",
+      "tier": "flagship",
+      "help_url": "https://platform.qianwenai.com/docs/developer-guides/image-generation/image-editing",
+      "request_shape": "qwen_images_edits",
+      "fixed_params": { "watermark": false },
+      "input_image_rule": {
+        "formats": ["png", "jpeg"],
+        "max_bytes": 10485760,
+        "min_total_pixels": null,
+        "max_total_pixels": 4194304,
+        "min_short_edge": 384,
+        "min_aspect_ratio": null,
+        "max_aspect_ratio": null
+      },
+      "reference_phrasing": { "en_verified": "supported" },
+      "region_hint": {
+        "highlight_overlay": "supported",
+        "marked_image": "unsupported",
+        "bbox_tag": "unsupported"
+      },
+      "region_hint_phrasing": {
+        "highlight_overlay": {
+          "zh": "图{overlay} 是图{source} 的标注版，紫色半透明高亮标出的区域是要修改的范围。只修改图{source} 中高亮区域内的内容，高亮区域之外的所有内容保持完全不变，输出图里不要出现紫色高亮。",
+          "en": "Image {overlay} is an annotated copy of Image {source}; the translucent purple highlight marks the area to modify. Only change the content inside the highlighted area of Image {source}, keep everything outside it exactly unchanged, and do not show the purple highlight in the output."
+        }
+      },
+      "native_mask": "unsupported",
+      "transparent_background": "unsupported",
+      "workflows": {
+        "text_to_image": {
+          "supports_negative_prompt": "supported",
+          "min_references": 0,
+          "max_references": 0,
+          "size_rule": {
+            "tiers": {
+              "1K": { "1:1": [1024, 1024] },
+              "2K": { "1:1": [2048, 2048], "16:9": [1920, 1080], "9:16": [1080, 1920] }
+            },
+            "custom": { "min_total_pixels": 262144, "max_total_pixels": 4194304, "min_aspect_ratio": 0.125, "max_aspect_ratio": 8 }
+          },
+          "layer_decomposition": "unsupported"
+        },
+        "image_edit": {
+          "supports_negative_prompt": "supported",
+          "min_references": 1,
+          "max_references": 3,
+          "size_rule": {
+            "tiers": {
+              "1K": { "1:1": [1024, 1024] },
+              "2K": { "1:1": [2048, 2048], "16:9": [1920, 1080], "9:16": [1080, 1920] }
+            },
+            "custom": { "min_total_pixels": 262144, "max_total_pixels": 4194304, "min_aspect_ratio": 0.125, "max_aspect_ratio": 8 }
+          },
+          "layer_decomposition": "unsupported"
+        }
+      }
+    },
+    {
+      "model_id": "qwen-image-3.0",
+      "display_name": "Qwen Image 3.0 经济版",
+      "tier": "economy",
+      "help_url": "https://platform.qianwenai.com/docs/developer-guides/image-generation/image-editing",
+      "request_shape": "qwen_images_edits",
+      "fixed_params": { "watermark": false },
+      "input_image_rule": {
+        "formats": ["png", "jpeg"],
+        "max_bytes": 10485760,
+        "min_total_pixels": null,
+        "max_total_pixels": 4194304,
+        "min_short_edge": 384,
+        "min_aspect_ratio": null,
+        "max_aspect_ratio": null
+      },
+      "reference_phrasing": { "en_verified": "supported" },
+      "region_hint": {
+        "highlight_overlay": "supported",
+        "marked_image": "unsupported",
+        "bbox_tag": "unsupported"
+      },
+      "region_hint_phrasing": {
+        "highlight_overlay": {
+          "zh": "图{overlay} 是图{source} 的标注版，紫色半透明高亮标出的区域是要修改的范围。只修改图{source} 中高亮区域内的内容，高亮区域之外的所有内容保持完全不变，输出图里不要出现紫色高亮。",
+          "en": "Image {overlay} is an annotated copy of Image {source}; the translucent purple highlight marks the area to modify. Only change the content inside the highlighted area of Image {source}, keep everything outside it exactly unchanged, and do not show the purple highlight in the output."
+        }
+      },
+      "native_mask": "unsupported",
+      "transparent_background": "unsupported",
+      "workflows": {
+        "text_to_image": {
+          "supports_negative_prompt": "supported",
+          "min_references": 0,
+          "max_references": 0,
+          "size_rule": {
+            "tiers": {
+              "1K": { "1:1": [1024, 1024] },
+              "2K": { "1:1": [2048, 2048], "16:9": [1920, 1080], "9:16": [1080, 1920] }
+            },
+            "custom": { "min_total_pixels": 262144, "max_total_pixels": 4194304, "min_aspect_ratio": 0.125, "max_aspect_ratio": 8 }
+          },
+          "layer_decomposition": "unsupported"
+        },
+        "image_edit": {
+          "supports_negative_prompt": "supported",
+          "min_references": 1,
+          "max_references": 3,
+          "size_rule": {
+            "tiers": {
+              "1K": { "1:1": [1024, 1024] },
+              "2K": { "1:1": [2048, 2048], "16:9": [1920, 1080], "9:16": [1080, 1920] }
+            },
+            "custom": { "min_total_pixels": 262144, "max_total_pixels": 4194304, "min_aspect_ratio": 0.125, "max_aspect_ratio": 8 }
+          },
+          "layer_decomposition": "unsupported"
+        }
+      }
+    },
+    {
+      "model_id": "doubao-seedream-5-0-pro-260628",
+      "display_name": "Seedream 5.0 pro",
+      "tier": null,
+      "help_url": "https://docs.volcengine.com/docs/82379/1829186?lang=zh",
+      "request_shape": "unconfirmed",
+      "fixed_params": { "watermark": false, "output_format": "png" },
+      "input_image_rule": {
+        "formats": ["jpeg", "png", "webp", "bmp", "tiff", "gif", "heic", "heif"],
+        "max_bytes": 31457280,
+        "min_total_pixels": 196,
+        "max_total_pixels": 36000000,
+        "min_short_edge": 15,
+        "min_aspect_ratio": 0.0625,
+        "max_aspect_ratio": 16
+      },
+      "reference_phrasing": { "en_verified": "untested" },
+      "region_hint": {
+        "highlight_overlay": "unsupported",
+        "marked_image": "untested",
+        "bbox_tag": "untested"
+      },
+      "region_hint_phrasing": {},
+      "native_mask": "unsupported",
+      "transparent_background": "untested",
+      "workflows": {
+        "text_to_image": {
+          "supports_negative_prompt": "unsupported",
+          "min_references": 0,
+          "max_references": 10,
+          "size_rule": {
+            "tiers": { "2K": { "1:1": [2048, 2048] } },
+            "custom": { "min_total_pixels": 921600, "max_total_pixels": 4624220, "min_aspect_ratio": 0.0625, "max_aspect_ratio": 16 }
+          },
+          "layer_decomposition": "untested"
+        },
+        "image_edit": {
+          "supports_negative_prompt": "unsupported",
+          "min_references": 0,
+          "max_references": 10,
+          "size_rule": {
+            "tiers": { "2K": { "1:1": [2048, 2048] } },
+            "custom": { "min_total_pixels": 921600, "max_total_pixels": 4624220, "min_aspect_ratio": 0.0625, "max_aspect_ratio": 16 }
+          },
+          "layer_decomposition": "untested"
+        }
+      }
+    },
+    {
+      "model_id": "doubao-seedream-5-0-260128",
+      "display_name": "Seedream 5.0 lite",
+      "tier": null,
+      "help_url": "https://docs.volcengine.com/docs/82379/1829186?lang=zh",
+      "request_shape": "unconfirmed",
+      "fixed_params": { "watermark": false, "output_format": "png", "sequential_image_generation": "disabled" },
+      "input_image_rule": {
+        "formats": ["jpeg", "png", "webp", "bmp", "tiff", "gif", "heic", "heif"],
+        "max_bytes": 31457280,
+        "min_total_pixels": 196,
+        "max_total_pixels": 36000000,
+        "min_short_edge": 15,
+        "min_aspect_ratio": 0.0625,
+        "max_aspect_ratio": 16
+      },
+      "reference_phrasing": { "en_verified": "untested" },
+      "region_hint": {
+        "highlight_overlay": "unsupported",
+        "marked_image": "untested",
+        "bbox_tag": "unsupported"
+      },
+      "region_hint_phrasing": {},
+      "native_mask": "unsupported",
+      "transparent_background": "unsupported",
+      "workflows": {
+        "text_to_image": {
+          "supports_negative_prompt": "unsupported",
+          "min_references": 0,
+          "max_references": 14,
+          "size_rule": {
+            "tiers": { "2K": { "16:9": [2848, 1600] } },
+            "custom": { "min_total_pixels": 3686400, "max_total_pixels": 16777216, "min_aspect_ratio": 0.0625, "max_aspect_ratio": 16 }
+          },
+          "layer_decomposition": "unsupported"
+        },
+        "image_edit": {
+          "supports_negative_prompt": "unsupported",
+          "min_references": 0,
+          "max_references": 14,
+          "size_rule": {
+            "tiers": { "2K": { "16:9": [2848, 1600] } },
+            "custom": { "min_total_pixels": 3686400, "max_total_pixels": 16777216, "min_aspect_ratio": 0.0625, "max_aspect_ratio": 16 }
+          },
+          "layer_decomposition": "unsupported"
+        }
+      }
+    },
+    {
+      "model_id": "doubao-seedream-4-5-251128",
+      "display_name": "Seedream 4.5",
+      "tier": null,
+      "help_url": "https://docs.volcengine.com/docs/82379/1829186?lang=zh",
+      "request_shape": "unconfirmed",
+      "fixed_params": { "watermark": false, "sequential_image_generation": "disabled" },
+      "input_image_rule": {
+        "formats": ["jpeg", "png", "webp", "bmp", "tiff", "gif", "heic", "heif"],
+        "max_bytes": 31457280,
+        "min_total_pixels": 196,
+        "max_total_pixels": 36000000,
+        "min_short_edge": 15,
+        "min_aspect_ratio": 0.0625,
+        "max_aspect_ratio": 16
+      },
+      "reference_phrasing": { "en_verified": "untested" },
+      "region_hint": {
+        "highlight_overlay": "unsupported",
+        "marked_image": "untested",
+        "bbox_tag": "unsupported"
+      },
+      "region_hint_phrasing": {},
+      "native_mask": "unsupported",
+      "transparent_background": "unsupported",
+      "workflows": {
+        "text_to_image": {
+          "supports_negative_prompt": "unsupported",
+          "min_references": 0,
+          "max_references": 14,
+          "size_rule": {
+            "tiers": {},
+            "custom": { "min_total_pixels": 3686400, "max_total_pixels": 16777216, "min_aspect_ratio": 0.0625, "max_aspect_ratio": 16 }
+          },
+          "layer_decomposition": "unsupported"
+        },
+        "image_edit": {
+          "supports_negative_prompt": "unsupported",
+          "min_references": 0,
+          "max_references": 14,
+          "size_rule": {
+            "tiers": {},
+            "custom": { "min_total_pixels": 3686400, "max_total_pixels": 16777216, "min_aspect_ratio": 0.0625, "max_aspect_ratio": 16 }
+          },
+          "layer_decomposition": "unsupported"
+        }
+      }
+    },
+    {
+      "model_id": "doubao-seedream-4-0-250828",
+      "display_name": "Seedream 4.0",
+      "tier": null,
+      "help_url": "https://docs.volcengine.com/docs/82379/1829186?lang=zh",
+      "request_shape": "unconfirmed",
+      "fixed_params": { "watermark": false, "sequential_image_generation": "disabled" },
+      "input_image_rule": {
+        "formats": ["jpeg", "png", "webp", "bmp", "tiff", "gif", "heic", "heif"],
+        "max_bytes": 31457280,
+        "min_total_pixels": 196,
+        "max_total_pixels": 36000000,
+        "min_short_edge": 15,
+        "min_aspect_ratio": 0.0625,
+        "max_aspect_ratio": 16
+      },
+      "reference_phrasing": { "en_verified": "untested" },
+      "region_hint": {
+        "highlight_overlay": "unsupported",
+        "marked_image": "untested",
+        "bbox_tag": "unsupported"
+      },
+      "region_hint_phrasing": {},
+      "native_mask": "unsupported",
+      "transparent_background": "unsupported",
+      "workflows": {
+        "text_to_image": {
+          "supports_negative_prompt": "unsupported",
+          "min_references": 0,
+          "max_references": 14,
+          "size_rule": {
+            "tiers": { "1K": { "16:9": [1280, 720] } },
+            "custom": { "min_total_pixels": 921600, "max_total_pixels": 16777216, "min_aspect_ratio": 0.0625, "max_aspect_ratio": 16 }
+          },
+          "layer_decomposition": "unsupported"
+        },
+        "image_edit": {
+          "supports_negative_prompt": "unsupported",
+          "min_references": 0,
+          "max_references": 14,
+          "size_rule": {
+            "tiers": { "1K": { "16:9": [1280, 720] } },
+            "custom": { "min_total_pixels": 921600, "max_total_pixels": 16777216, "min_aspect_ratio": 0.0625, "max_aspect_ratio": 16 }
+          },
+          "layer_decomposition": "unsupported"
+        }
+      }
+    }
+  ]
+}

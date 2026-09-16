@@ -1,0 +1,203 @@
+import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
+import { ReactFlowProvider } from "@xyflow/react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { BOARD_EXTENSION, type Board } from "./core/board";
+import { BUILTIN_TABLE, effectiveTable, type CapabilityTable } from "./core/capabilities";
+import { parseUiState, serializeUiState, type UiState } from "./core/uiState";
+import { ipc } from "./shell/ipc";
+import { BoardCanvas } from "./ui/BoardCanvas";
+import { TabBar } from "./ui/TabBar";
+import { useBoardSessions } from "./ui/useBoardSessions";
+
+const isBoardPath = (p: string) => p.toLowerCase().endsWith(BOARD_EXTENSION);
+
+export function App() {
+  const [outputRoot, setOutputRoot] = useState<string | null>(null);
+  const [table, setTable] = useState<CapabilityTable>(BUILTIN_TABLE);
+  const [tableError, setTableError] = useState<string | null>(null);
+  const [fatal, setFatal] = useState<string | null>(null);
+  const [ready, setReady] = useState(false);
+  const [toastText, setToastText] = useState<string | null>(null);
+  const started = useRef(false);
+  const initialUi = useRef<UiState | null>(null);
+  const windowSize = useRef<UiState["window"]>(null);
+  const boards = useBoardSessions(outputRoot);
+  const { sessions, activeKey, openPath, createBoard, flushAll } = boards;
+
+  const { updateBoard } = boards;
+  const updateActive = useCallback((fn: (b: Board) => Board) => activeKey && updateBoard(activeKey, fn), [activeKey, updateBoard]);
+  const openFromCanvas = useCallback((p: string) => void openOrWarnRef.current(p), []);
+  const openOrWarnRef = useRef<(p: string) => Promise<void>>(async () => undefined);
+
+  const toast = useCallback((message: string) => setToastText(message), []);
+  useEffect(() => {
+    if (!toastText) return;
+    const timer = setTimeout(() => setToastText(null), 4000);
+    return () => clearTimeout(timer);
+  }, [toastText]);
+
+  const openOrWarn = useCallback(
+    async (path: string) => {
+      const found = await openPath(path, true).catch(() => false);
+      if (!found) toast(`找不到画板文件：${path}`);
+    },
+    [openPath, toast],
+  );
+  openOrWarnRef.current = openOrWarn;
+
+  // 第一阶段：路径、能力表、界面状态、窗口尺寸。
+  useEffect(() => {
+    void (async () => {
+      try {
+        const paths = await ipc.appPaths();
+        const override = await ipc.readCapabilityOverride().catch((e) => {
+          setTableError(`读取能力表覆盖文件失败：${e}`);
+          return null;
+        });
+        const effective = effectiveTable(override);
+        setTable(effective.table);
+        if (effective.error) setTableError(effective.error);
+        const ui = parseUiState(await ipc.readUiState().catch(() => null));
+        initialUi.current = ui;
+        windowSize.current = ui.window;
+        if (ui.window) await getCurrentWindow().setSize(new LogicalSize(ui.window.width, ui.window.height));
+        setOutputRoot(paths.default_output_root);
+      } catch (e) {
+        setFatal(String(e));
+      }
+    })();
+  }, []);
+
+  // 第二阶段：恢复标签页，再打开启动参数里的画板；一个都没有就新建。
+  useEffect(() => {
+    if (!outputRoot || started.current) return;
+    started.current = true;
+    void (async () => {
+      const ui = initialUi.current!;
+      const opened: string[] = [];
+      for (const p of ui.open_boards) {
+        if (await openPath(p, false).catch(() => false)) opened.push(p);
+      }
+      let activated = false;
+      if (ui.active_board && opened.includes(ui.active_board)) activated = await openPath(ui.active_board, true);
+      for (const p of (await ipc.startupArgs().catch(() => [])).filter(isBoardPath)) {
+        if (await openPath(p, true).catch(() => false)) activated = true;
+        else toast(`找不到画板文件：${p}`);
+      }
+      if (!activated && opened.length) await openPath(opened[0], true);
+      else if (!activated) await createBoard();
+      setReady(true);
+    })();
+  }, [outputRoot, openPath, createBoard, toast]);
+
+  // 第二实例把参数转交过来。
+  useEffect(() => {
+    const unlisten = listen<string[]>("second-instance", (event) => {
+      event.payload.filter(isBoardPath).forEach((p) => void openOrWarn(p));
+    });
+    return () => void unlisten.then((fn) => fn());
+  }, [openOrWarn]);
+
+  const persistUi = useCallback(() => {
+    const active = sessions.find((s) => s.key === activeKey);
+    const state: UiState = { window: windowSize.current, open_boards: sessions.map((s) => s.path), active_board: active?.path ?? null };
+    return ipc.writeUiState(serializeUiState(state)).catch(() => undefined);
+  }, [sessions, activeKey]);
+  const persistRef = useRef(persistUi);
+  persistRef.current = persistUi;
+
+  const uiSignature = JSON.stringify([sessions.map((s) => s.path), sessions.find((s) => s.key === activeKey)?.path]);
+  useEffect(() => {
+    if (ready) void persistRef.current();
+  }, [ready, uiSignature]);
+
+  useEffect(() => {
+    const win = getCurrentWindow();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const resized = win.onResized(async ({ payload }) => {
+      if (await win.isMaximized()) return;
+      const logical = payload.toLogical(await win.scaleFactor());
+      windowSize.current = { width: Math.round(logical.width), height: Math.round(logical.height) };
+      clearTimeout(timer);
+      timer = setTimeout(() => void persistRef.current(), 500);
+    });
+    const closing = win.onCloseRequested(async () => {
+      await flushAll();
+      await persistRef.current();
+    });
+    return () => {
+      clearTimeout(timer);
+      void resized.then((fn) => fn());
+      void closing.then((fn) => fn());
+    };
+  }, [flushAll]);
+
+  if (fatal) return <div className="fatal">启动失败：{fatal}</div>;
+
+  const active = sessions.find((s) => s.key === activeKey);
+  const failing = sessions.filter((s) => s.status === "ok" && s.saveError);
+
+  return (
+    <div className="app">
+      {failing.map(
+        (s) =>
+          s.status === "ok" && (
+            <div key={s.key} className="bar bar-error">
+              <span>
+                「{s.board.title}」{s.saveError}（之后每次修改都会重试）
+              </span>
+              <button onClick={() => void boards.saveAs(s.key)}>另存到…</button>
+            </div>
+          ),
+      )}
+      {tableError && (
+        <div className="bar bar-warn">
+          <span>{tableError}（已使用内置能力表）</span>
+          <button onClick={() => setTableError(null)}>知道了</button>
+        </div>
+      )}
+      <TabBar
+        sessions={sessions}
+        activeKey={activeKey}
+        onActivate={boards.setActiveKey}
+        onClose={(key) => void boards.closeBoard(key)}
+        onRename={(key, title) => void boards.renameBoard(key, title)}
+        onCreate={() => void createBoard()}
+      />
+      {active?.status === "ok" && active.notice && (
+        <div className="bar bar-warn">
+          <span>{active.notice}</span>
+          <button onClick={() => boards.dismissNotice(active.key)}>知道了</button>
+        </div>
+      )}
+      <main className="workspace">
+        {!active || !outputRoot ? (
+          <div className="empty">{ready ? "没有打开的画板" : "正在加载…"}</div>
+        ) : active.status === "newer" ? (
+          <div className="empty">
+            该画板由更新版本的工具保存（format_version {active.version}），本版本无法打开；文件未做任何改动。
+            <div className="mono muted">{active.path}</div>
+          </div>
+        ) : active.status === "corrupt" ? (
+          <div className="empty">
+            画板文件已损坏且没有可用备份：{active.reason}
+            <div className="mono muted">{active.path}</div>
+          </div>
+        ) : (
+          <ReactFlowProvider key={active.key}>
+            <BoardCanvas
+              board={active.board}
+              table={table}
+              outputRoot={outputRoot}
+              update={updateActive}
+              openBoardPath={openFromCanvas}
+              toast={toast}
+            />
+          </ReactFlowProvider>
+        )}
+      </main>
+      {toastText && <div className="toast">{toastText}</div>}
+    </div>
+  );
+}

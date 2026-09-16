@@ -1,0 +1,24 @@
+{
+  "format_version": 1,
+  "title": "结果节点夹具",
+  "viewport": { "zoom": 1, "x": 0, "y": 0 },
+  "nodes": [
+    { "id": "5b0c7a52-6f7e-4b43-9d52-0f1f7e3f6a01", "type": "prompt", "pos": [0, 0], "size": [240, 140], "text": "蓝紫渐变的抽象背景" },
+    { "id": "5b0c7a52-6f7e-4b43-9d52-0f1f7e3f6a02", "type": "task", "pos": [320, 0], "size": [300, 300],
+      "model": "qwen-image-3.0-pro",
+      "size_spec": { "tier": "1K", "ratio": "1:1", "width": null, "height": null },
+      "image_ports": 0, "layer_decomposition": false, "transparent_background": false,
+      "last_submitted": null },
+    { "id": "5b0c7a52-6f7e-4b43-9d52-0f1f7e3f6a03", "type": "result", "pos": [700, 0], "size": [220, 280],
+      "task_id": "20260916T091500Z-3f9c2a1b", "file": "result.png",
+      "path": "2026-09-16/20260916T091500Z-3f9c2a1b/result.png",
+      "layer_count": 0,
+      "record": { "model": "qwen-image-3.0-pro", "prompt": "蓝紫渐变的抽象背景", "negative_prompt": "",
+                  "size_spec": { "tier": "1K", "ratio": "1:1", "width": null, "height": null },
+                  "submitted_at": "2026-09-16T09:15:00Z" } }
+  ],
+  "edges": [
+    { "from": ["5b0c7a52-6f7e-4b43-9d52-0f1f7e3f6a01", "out"], "to": ["5b0c7a52-6f7e-4b43-9d52-0f1f7e3f6a02", "positive"], "source_layer": null, "region": null },
+    { "from": ["5b0c7a52-6f7e-4b43-9d52-0f1f7e3f6a02", "result"], "to": ["5b0c7a52-6f7e-4b43-9d52-0f1f7e3f6a03", "in"], "system": true }
+  ]
+}

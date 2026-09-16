@@ -1,0 +1,388 @@
+// 单个画板的画布：React Flow 视图完全由画板文件模型派生；选中、测量尺寸只在本地，不落盘。
+import { open } from "@tauri-apps/plugin-dialog";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
+import {
+  Background,
+  Controls,
+  MiniMap,
+  ReactFlow,
+  useReactFlow,
+  type Edge,
+  type EdgeChange,
+  type Node,
+  type NodeChange,
+  type OnConnectEnd,
+  type Viewport,
+} from "@xyflow/react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { BOARD_EXTENSION, type Board, type BoardEdge, type KnownNode, type TaskNode } from "../core/board";
+import { findModel, modelsByTier, type CapabilityTable, type InputImageRule } from "../core/capabilities";
+import {
+  canConnect,
+  connect,
+  deletionBlocker,
+  disconnect,
+  imageEdges,
+  moveImagePort,
+  removeNodes,
+  syncImagePorts,
+  taskIssues,
+  taskPorts,
+  workflowOf,
+  type Connection,
+} from "../core/graph";
+import { basename, resolveFromRoot, toRootRelative } from "../core/paths";
+import { defaultSizeSpec } from "../core/size";
+import { ipc } from "../shell/ipc";
+import { BoardContext, primeImageInfo, type BoardActions } from "./context";
+import { nodeTypes, type ImagePortInfo } from "./nodes";
+
+const IMAGE_EXTENSIONS = ["png", "jpg", "jpeg", "webp", "bmp", "gif", "tif", "tiff", "heic", "heif"];
+
+interface Props {
+  board: Board;
+  table: CapabilityTable;
+  outputRoot: string;
+  update: (fn: (board: Board) => Board) => void;
+  openBoardPath: (path: string) => void;
+  toast: (message: string) => void;
+}
+
+const edgeId = (e: BoardEdge) => `${e.from.join(":")}->${e.to.join(":")}`;
+const dims = (w: number | undefined, h: number | undefined) => ({ width: w, height: h });
+
+function defaultModel(table: CapabilityTable): string | null {
+  return modelsByTier(table)[0]?.models[0]?.model_id ?? null;
+}
+
+export function BoardCanvas({ board, table, outputRoot, update, openBoardPath, toast }: Props) {
+  const flow = useReactFlow();
+  const wrapper = useRef<HTMLDivElement>(null);
+  const [selectedNodes, setSelectedNodes] = useState<Set<string>>(new Set());
+  const [selectedEdges, setSelectedEdges] = useState<Set<string>>(new Set());
+  const [measured, setMeasured] = useState<Record<string, { width?: number; height?: number }>>({});
+
+  const updateBoard = useCallback((fn: (b: Board) => Board) => update((b) => syncImagePorts(fn(b))), [update]);
+
+  const actions = useMemo<BoardActions>(
+    () => ({
+      table,
+      outputRoot,
+      updateNode: (id, patch) =>
+        updateBoard((b) => ({ ...b, nodes: b.nodes.map((n) => (n.id === id && n.type !== "unknown" ? ({ ...n, ...patch } as KnownNode) : n)) })),
+      moveImagePort: (taskId, from, to) => updateBoard((b) => ({ ...b, edges: moveImagePort(b, taskId, from, to) })),
+    }),
+    [table, outputRoot, updateBoard],
+  );
+
+  const nodes = useMemo<Node[]>(() => {
+    const fallback = defaultModel(table);
+    const labelOf = (id: string): ImagePortInfo => {
+      const src = board.nodes.find((n) => n.id === id);
+      if (src?.type === "reference") return { label: src.display_name, absPath: resolveFromRoot(outputRoot, src.path) };
+      if (src?.type === "result") return { label: src.file, absPath: resolveFromRoot(outputRoot, src.path) };
+      return { label: "?", absPath: null };
+    };
+    return board.nodes.flatMap((n): Node[] => {
+      if (n.type === "unknown") return [];
+      const base = { id: n.id, position: { x: n.pos[0], y: n.pos[1] }, selected: selectedNodes.has(n.id), measured: measured[n.id] };
+      switch (n.type) {
+        case "prompt":
+          return [{ ...base, type: "prompt", data: { node: n } }];
+        case "result":
+          return [{ ...base, type: "result", data: { node: n } }];
+        case "reference": {
+          const downstream = board.edges.filter((e) => e.from[0] === n.id).map((e) => board.nodes.find((t) => t.id === e.to[0]));
+          const modelIds = downstream.flatMap((t) => (t?.type === "task" ? [t.model] : []));
+          const ids = modelIds.length ? [...new Set(modelIds)] : fallback ? [fallback] : [];
+          const rules: InputImageRule[] = ids.flatMap((id) => {
+            const rule = findModel(table, id)?.input_image_rule;
+            return rule ? [rule] : [];
+          });
+          return [{ ...base, type: "reference", data: { node: n, rules } }];
+        }
+        case "task":
+          return [
+            {
+              ...base,
+              type: "task",
+              data: {
+                node: n,
+                ports: taskPorts(board, table, n.id),
+                issues: taskIssues(board, table, n.id),
+                workflow: workflowOf(board, n.id),
+                images: imageEdges(board, n.id).map((e) => labelOf(e.from[0])),
+                hasPositive: board.edges.some((e) => e.to[0] === n.id && e.to[1] === "positive"),
+              },
+            },
+          ];
+      }
+    });
+  }, [board, table, outputRoot, selectedNodes, measured]);
+
+  const edges = useMemo<Edge[]>(
+    () =>
+      board.edges.map((e) => ({
+        id: edgeId(e),
+        source: e.from[0],
+        sourceHandle: e.from[1],
+        target: e.to[0],
+        targetHandle: e.to[1],
+        selected: selectedEdges.has(edgeId(e)),
+        deletable: !e.system,
+        selectable: !e.system,
+        className: e.system ? "edge-system" : e.to[1] === "negative" ? "edge-negative" : undefined,
+      })),
+    [board.edges, selectedEdges],
+  );
+
+  const onNodesChange = useCallback(
+    (changes: NodeChange[]) => {
+      const moves = new Map<string, { x: number; y: number }>();
+      for (const c of changes) {
+        if (c.type === "position" && c.position) moves.set(c.id, c.position);
+        else if (c.type === "dimensions" && c.dimensions) {
+          const { width, height } = c.dimensions;
+          setMeasured((m) => (m[c.id]?.width === width && m[c.id]?.height === height ? m : { ...m, [c.id]: dims(width, height) }));
+        } else if (c.type === "select") {
+          setSelectedNodes((s) => {
+            if (s.has(c.id) === c.selected) return s;
+            const next = new Set(s);
+            if (c.selected) next.add(c.id);
+            else next.delete(c.id);
+            return next;
+          });
+        }
+        // remove 由 onBeforeDelete / onDelete 统一处理。
+      }
+      if (moves.size) {
+        update((b) => ({
+          ...b,
+          nodes: b.nodes.map((n) => {
+            const p = n.type !== "unknown" && moves.get(n.id);
+            return p ? { ...n, pos: [Math.round(p.x), Math.round(p.y)] as [number, number] } : n;
+          }),
+        }));
+      }
+    },
+    [update],
+  );
+
+  const onEdgesChange = useCallback((changes: EdgeChange[]) => {
+    for (const c of changes) {
+      if (c.type !== "select") continue;
+      setSelectedEdges((s) => {
+        if (s.has(c.id) === c.selected) return s;
+        const next = new Set(s);
+        if (c.selected) next.add(c.id);
+        else next.delete(c.id);
+        return next;
+      });
+    }
+  }, []);
+
+  const toConnection = (c: { source: string; sourceHandle?: string | null; target: string; targetHandle?: string | null }): Connection => ({
+    source: c.source,
+    sourceHandle: c.sourceHandle ?? "",
+    target: c.target,
+    targetHandle: c.targetHandle ?? "",
+  });
+
+  const isValidConnection = useCallback(
+    (c: Edge | { source: string; sourceHandle?: string | null; target: string; targetHandle?: string | null }) =>
+      canConnect(board, table, toConnection(c)).ok,
+    [board, table],
+  );
+
+  const onConnect = useCallback(
+    (c: { source: string; sourceHandle: string | null; target: string; targetHandle: string | null }) => {
+      const conn = toConnection(c);
+      updateBoard((b) => {
+        const verdict = canConnect(b, table, conn);
+        if (!verdict.ok) return b;
+        // 提示词连正向 / 负向即确定其角色；角色由连线端口体现，无需另存字段。
+        return { ...b, edges: connect(b, conn) };
+      });
+    },
+    [table, updateBoard],
+  );
+
+  // 拖到端口上却不合法时，告诉用户原因。
+  const onConnectEnd = useCallback<OnConnectEnd>(
+    (_event, state) => {
+      if (state.isValid || !state.fromHandle || !state.toHandle || !state.fromNode || !state.toNode) return;
+      const [src, dst] = state.fromHandle.type === "source" ? [state.fromHandle, state.toHandle] : [state.toHandle, state.fromHandle];
+      const verdict = canConnect(board, table, { source: src.nodeId, sourceHandle: src.id ?? "", target: dst.nodeId, targetHandle: dst.id ?? "" });
+      if (!verdict.ok) toast(verdict.reason);
+    },
+    [board, table, toast],
+  );
+
+  const onBeforeDelete = useCallback(
+    async ({ nodes: ns, edges: es }: { nodes: Node[]; edges: Edge[] }) => {
+      const ids = ns.map((n) => n.id);
+      const blocker = deletionBlocker(board, ids);
+      if (blocker) {
+        toast(blocker);
+        return false;
+      }
+      const gone = new Set(ids);
+      // 系统连线只能随节点一起消失，用户不能单独删。
+      const userEdges = es.filter((e) => e.deletable !== false || gone.has(e.source) || gone.has(e.target));
+      return { nodes: ns, edges: userEdges };
+    },
+    [board, toast],
+  );
+
+  const onDelete = useCallback(
+    ({ nodes: ns, edges: es }: { nodes: Node[]; edges: Edge[] }) => {
+      const removedIds = new Set(es.map((e) => e.id));
+      updateBoard((b) => {
+        let next = b;
+        const userRemoved = next.edges.filter((e) => removedIds.has(edgeId(e)) && !e.system);
+        if (userRemoved.length) next = { ...next, edges: disconnect(next, userRemoved) };
+        if (ns.length) next = removeNodes(next, ns.map((n) => n.id));
+        return next;
+      });
+      setSelectedNodes(new Set());
+      setSelectedEdges(new Set());
+    },
+    [updateBoard],
+  );
+
+  const onMoveEnd = useCallback(
+    (_: unknown, vp: Viewport) => {
+      update((b) =>
+        b.viewport.x === vp.x && b.viewport.y === vp.y && b.viewport.zoom === vp.zoom ? b : { ...b, viewport: { x: vp.x, y: vp.y, zoom: vp.zoom } },
+      );
+    },
+    [update],
+  );
+
+  const centerPosition = useCallback(() => {
+    const rect = wrapper.current?.getBoundingClientRect();
+    if (!rect) return { x: 0, y: 0 };
+    return flow.screenToFlowPosition({ x: rect.left + rect.width / 2 - 120, y: rect.top + rect.height / 2 - 80 });
+  }, [flow]);
+
+  const addNode = useCallback(
+    (node: KnownNode) => {
+      update((b) => ({ ...b, nodes: [...b.nodes, node] }));
+      setSelectedNodes(new Set([node.id]));
+    },
+    [update],
+  );
+
+  const addPrompt = () =>
+    addNode({ type: "prompt", id: crypto.randomUUID(), pos: posOf(centerPosition()), size: [240, 140], text: "", extra: {} });
+
+  const addTask = () => {
+    const lastTask = [...board.nodes].reverse().find((n): n is TaskNode => n.type === "task");
+    const lastModel = lastTask && findModel(table, lastTask.model);
+    const modelId = lastModel?.tier ? lastModel.model_id : defaultModel(table);
+    const model = modelId ? findModel(table, modelId) : undefined;
+    if (!model) return toast("能力表中没有上架模型");
+    addNode({
+      type: "task",
+      id: crypto.randomUUID(),
+      pos: posOf(centerPosition()),
+      size: [280, 260],
+      model: model.model_id,
+      size_spec: defaultSizeSpec(model.workflows.text_to_image.size_rule),
+      image_ports: 0,
+      layer_decomposition: false,
+      transparent_background: false,
+      last_submitted: null,
+      extra: {},
+    });
+  };
+
+  const importReferences = useCallback(
+    async (paths: string[], at: { x: number; y: number }) => {
+      let offset = 0;
+      for (const abs of paths) {
+        try {
+          const info = await ipc.inspectImage(abs);
+          primeImageInfo(abs, info);
+          addNode({
+            type: "reference",
+            id: crypto.randomUUID(),
+            pos: posOf({ x: at.x + offset, y: at.y + offset }),
+            size: [200, 220],
+            path: toRootRelative(outputRoot, abs),
+            sha256: info.sha256,
+            display_name: basename(abs),
+            extra: {},
+          });
+          offset += 32;
+        } catch (e) {
+          toast(`无法导入 ${basename(abs)}：${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
+    },
+    [addNode, outputRoot, toast],
+  );
+
+  const pickReferences = async () => {
+    const picked = await open({ multiple: true, filters: [{ name: "图片", extensions: IMAGE_EXTENSIONS }] });
+    if (picked) await importReferences(Array.isArray(picked) ? picked : [picked], centerPosition());
+  };
+
+  // 从资源管理器拖入：画板文件打开为标签页，其余当参考图导入。
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+    void getCurrentWebview()
+      .onDragDropEvent((event) => {
+        if (event.payload.type !== "drop") return;
+        const { paths, position } = event.payload;
+        const scale = window.devicePixelRatio || 1;
+        const at = flow.screenToFlowPosition({ x: position.x / scale, y: position.y / scale });
+        const boards = paths.filter((p) => p.toLowerCase().endsWith(BOARD_EXTENSION));
+        boards.forEach(openBoardPath);
+        const images = paths.filter((p) => !boards.includes(p));
+        if (images.length) void importReferences(images, at);
+      })
+      .then((fn) => (disposed ? fn() : (unlisten = fn)));
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [flow, importReferences, openBoardPath]);
+
+  return (
+    <BoardContext.Provider value={actions}>
+      <div className="canvas" ref={wrapper}>
+        <div className="toolbar">
+          <button onClick={addPrompt}>＋ 提示词</button>
+          <button onClick={addTask}>＋ 生成任务</button>
+          <button onClick={() => void pickReferences()}>＋ 参考图…</button>
+        </div>
+        <ReactFlow
+          nodes={nodes}
+          edges={edges}
+          nodeTypes={nodeTypes}
+          defaultViewport={board.viewport}
+          onNodesChange={onNodesChange}
+          onEdgesChange={onEdgesChange}
+          isValidConnection={isValidConnection}
+          onConnect={onConnect}
+          onConnectEnd={onConnectEnd}
+          onBeforeDelete={onBeforeDelete}
+          onDelete={onDelete}
+          onMoveEnd={onMoveEnd}
+          deleteKeyCode={["Delete", "Backspace"]}
+          minZoom={0.1}
+        >
+          <Background />
+          <Controls />
+          <MiniMap pannable zoomable />
+        </ReactFlow>
+      </div>
+    </BoardContext.Provider>
+  );
+}
+
+function posOf(p: { x: number; y: number }): [number, number] {
+  return [Math.round(p.x), Math.round(p.y)];
+}
