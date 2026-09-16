@@ -1,0 +1,67 @@
+{
+  "interface": "image_edit",
+  "recorded_at": "2026-09-16T05:47:03.647119+00:00",
+  "request": {
+    "method": "POST",
+    "path": "/v1/images/edits",
+    "headers": {
+      "Accept": "application/json",
+      "Authorization": "[REDACTED]",
+      "Content-Type": "application/json"
+    },
+    "body": {
+      "model": "qwen-image-3.0-pro",
+      "prompt": "[REDACTED_PROMPT]",
+      "input": {
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "image": "[REDACTED_IMAGE]"
+              },
+              {
+                "text": "[REDACTED_PROMPT]"
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "image": "[REDACTED_IMAGE]"
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "text": "[REDACTED_PROMPT]"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "response": {
+    "status": 400,
+    "headers": {
+      "Content-Type": "application/json; charset=utf-8",
+      "X-New-Api-Version": "v0.0.0",
+      "X-Oneapi-Request-Id": "202609160547010471757008268d9d6j3tmEB1N",
+      "Date": "Wed, 16 Sep 2026 05:47:03 GMT",
+      "Content-Length": "143",
+      "Connection": "close"
+    },
+    "body": {
+      "error": {
+        "message": "Input should be 'user': ***.***.***.role",
+        "type": "bad_response_status_code",
+        "param": "",
+        "code": "bad_response_status_code"
+      }
+    }
+  }
+}

@@ -1,0 +1,149 @@
+{
+  "schema_version": 1,
+  "verified_at": "2026-09-16T06:30:00Z",
+  "gateway": {
+    "base_url": "http://lzxsvn:3001",
+    "version": "new-api（2026-09-16 实测；版本号本轮未核对）",
+    "authentication": {
+      "header": "Authorization",
+      "scheme": "Bearer"
+    },
+    "response_headers": [
+      "X-Oneapi-Request-Id"
+    ]
+  },
+  "interfaces": {
+    "image_edit": {
+      "path": "/v1/images/edits",
+      "method": "POST",
+      "exchanges": [
+        {
+          "evidence": "edit-multiturn-two-user-messages-400.json",
+          "summary": "input.messages 放两条 user 消息：HTTP 400，上游报「Image editing only supports single-turn conversation. messages array must contain exactly one object.」"
+        },
+        {
+          "evidence": "edit-multiturn-assistant-role-400.json",
+          "summary": "user/assistant/user 三条消息（末条无图）：HTTP 400，role 校验只接受 user。多轮对话式编辑在 qwen-image-3.0-pro 上不可用。"
+        },
+        {
+          "evidence": "edit-feedback-turn1.json",
+          "summary": "结果回灌第 1 轮：红圆白底 → 背景改黄，正常出图。"
+        },
+        {
+          "evidence": "edit-feedback-turn2-stateless.json",
+          "summary": "结果回灌第 2 轮：把第 1 轮结果图作为唯一参考图 + 新指令（圆改方），无状态单轮即得到累计效果（黄底红方）。"
+        },
+        {
+          "evidence": "edit-ref-index-tu-2.json",
+          "summary": "3 张参考图（红圆/蓝方/绿三角）+ 前缀「按顺序为图1、图2、图3」+「只画出图2里的物体」：输出蓝方，命中。"
+        },
+        {
+          "evidence": "edit-ref-index-tu-3.json",
+          "summary": "同上，「图3」：输出绿三角，命中。"
+        },
+        {
+          "evidence": "edit-ref-index-image-2.json",
+          "summary": "英文前缀 + 「Image 2」：输出蓝方，命中。"
+        },
+        {
+          "evidence": "edit-ref-index-image-3.json",
+          "summary": "英文前缀 + 「Image 3」：输出绿三角，命中。"
+        },
+        {
+          "evidence": "edit-ref-index-picture-2.json",
+          "summary": "对照组「Picture 2」：输出蓝方，命中。"
+        },
+        {
+          "evidence": "edit-ref-index-picture-3.json",
+          "summary": "对照组「Picture 3」：输出绿三角，命中。"
+        },
+        {
+          "evidence": "edit-ref-index-tuzh-2.json",
+          "summary": "对照组汉字序号「图二」：输出蓝方，命中。"
+        },
+        {
+          "evidence": "edit-ref-index-tuzh-3.json",
+          "summary": "对照组汉字序号「图三」：输出绿三角，命中。"
+        },
+        {
+          "evidence": "edit-native-mask-field-ignored.json",
+          "summary": "附带 input.mask 与 parameters.mask_image_url（黑白 mask 只覆盖右侧）：HTTP 200 但两个物体全被改色，mask 字段被静默忽略；百炼文档亦无 mask/区域参数。"
+        },
+        {
+          "evidence": "edit-highlight-overlay-run1.json",
+          "summary": "图1 原图（左红圆右蓝方）+ 图2 紫色半透明高亮右侧 + 「只改高亮区域内物体为黄色」：仅右方变黄，左圆不变，无紫色残留。"
+        },
+        {
+          "evidence": "edit-highlight-overlay-run2.json",
+          "summary": "同上第二次：结果一致。"
+        },
+        {
+          "evidence": "edit-highlight-overlay-identical-row.json",
+          "summary": "5 个完全相同的蓝方一排，高亮第 4 个，提示词不含任何位置词：恰好第 4 个变黄，其余不变。高亮叠加图可作为区域指示。"
+        },
+        {
+          "evidence": "edit-no-overlay-identical-row-control.json",
+          "summary": "对照：同一排、同一提示词（「高亮区域」）但不给叠加图：改了第 2 个（随机），证明区域信息确实来自叠加图。"
+        },
+        {
+          "evidence": "edit-text-position-control.json",
+          "summary": "对照：不给叠加图，用文字「右边的物体」定位：命中。可用文字描述的区域不需要叠加图。"
+        }
+      ],
+      "request_shape": {
+        "encoding": "application/json",
+        "top_level_fields": [
+          "model",
+          "prompt（网关 binding:required，必填）",
+          "parameters",
+          "input"
+        ],
+        "parameters": {
+          "size": "宽*高 星号格式；本轮实测 1024*1024 与 1536*512",
+          "mask_image_url": "非官方字段；网关与上游接受但忽略"
+        },
+        "input": {
+          "messages": "有且只有一条 role=user 消息；多条或含 assistant 角色均 HTTP 400。content 按顺序放 1～3 个 image 项 + 末尾 text 项",
+          "mask": "非官方字段；网关与上游接受但忽略"
+        }
+      }
+    }
+  },
+  "behaviors": {
+    "multi_turn_messages": {
+      "status": "unsupported",
+      "evidence": "edit-multiturn-two-user-messages-400.json 与 edit-multiturn-assistant-role-400.json：上游明确报单轮限制；多轮修改只能采用结果回灌（edit-feedback-turn2-stateless.json）。"
+    },
+    "reference_index_phrasing": {
+      "status": "confirmed",
+      "evidence": "edit-ref-index-*.json 共 8 次（图N / Image N / Picture N / 图N 汉字，各取序号 2 与 3）全部命中，3 张参考图下指代准确率 8/8。"
+    },
+    "native_mask": {
+      "status": "unsupported",
+      "evidence": "edit-native-mask-field-ignored.json：input.mask 与 parameters.mask_image_url 被忽略；百炼 qwen-image-3.0 API 文档无 mask/区域参数。"
+    },
+    "highlight_overlay_region": {
+      "status": "confirmed",
+      "evidence": "edit-highlight-overlay-run1/run2/identical-row.json 三次全部只改高亮区域；对照 edit-no-overlay-identical-row-control.json 无叠加图时随机。叠加图占用一个参考图名额。"
+    },
+    "rate_limit": {
+      "status": "confirmed",
+      "evidence": "本轮 6～10 个请求并发提交时收到 HTTP 429（message: Requests rate limit exceeded…），无 Retry-After 头；串行且间隔 60 s 后重试成功。429 样例在重试时被覆盖，未单独保存。"
+    }
+  },
+  "verified_models": [
+    "qwen-image-3.0-pro"
+  ],
+  "untested": [
+    "qwen-image-3.0（非 pro）的上述行为",
+    "参考图 > 3 张（网关模型列表无 wan2.7，0～9 张附带验证无法进行）",
+    "真实照片/复杂场景下高亮叠加的精度（本轮为合成几何图形）",
+    "429 的确切触发阈值（RPM 还是并发数）"
+  ],
+  "conclusions": [
+    "多轮修改固定采用结果回灌：上一轮结果作为唯一（或首张）参考图重新提交，不依赖网关会话。",
+    "参考图序号措辞：客户端沿用「图N」/「Image N」改写并保留数量顺序前缀；Picture N 与汉字序号亦可用但不作为默认。",
+    "局部修改：无原生 mask；用「原图 + 紫色半透明高亮叠加图」作第 2 张参考图并在提示词中说明只改高亮区域，实测有效，代价是占用一个参考图名额（余 1 张）。",
+    "网关有速率限制且无 Retry-After，客户端并发上限需保守且 429 后退避重试。"
+  ]
+}
