@@ -81,6 +81,14 @@ EOF
   ```
 
   `tea api -f` passes values as strings (array fields fail to unmarshal); use `-F` for array/object fields (values starting with `[`/`{` are parsed as JSON).
+- Issue dependencies (blocked-by) go through `tea api`, and the body fields are `index`/`owner`/`repo` passed as raw JSON with `-d` (`-F owner=... name=...` fails with `repository does not exist`):
+
+  ```bash
+  tea api /repos/{owner}/{repo}/issues/<idx>/dependencies
+  tea api -X POST -d '{"index":<blocker>,"owner":"qinyuanj","repo":"ugc-image-tool"}' \
+    /repos/{owner}/{repo}/issues/<idx>/dependencies
+  ```
+
 - `tea issue list -o json` returns `labels` as a string array; a single-issue `tea issue <idx> -o json` returns an object array.
 - Use `tea api` only for endpoints the CLI does not cover; do not fall back to raw curl.
 
