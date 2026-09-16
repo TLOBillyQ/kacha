@@ -2,6 +2,7 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import type { FetchLike } from "../core/gateway";
+import type { DirEntry } from "../core/relocate";
 
 export interface AppPaths {
   default_output_root: string;
@@ -41,9 +42,8 @@ export const ipc = {
   secretGet: () => invoke<string | null>("secret_get"),
   secretSet: (key: string) => invoke<void>("secret_set", { key }),
   secretDelete: () => invoke<void>("secret_delete"),
-  listDir: (path: string) => invoke<{ name: string; is_dir: boolean }[]>("list_dir", { path }),
-  /** 是普通文件才为 true。 */
-  pathExists: (path: string) => invoke<boolean>("path_exists", { path }),
+  listDir: (path: string) => invoke<DirEntry[]>("list_dir", { path }),
+  isFile: (path: string) => invoke<boolean>("is_file", { path }),
   readFileBytes: async (path: string) => new Uint8Array(await invoke<ArrayBuffer>("read_file_bytes", { path })),
   /** 只新建不覆盖：目标已存在时 reject。 */
   writeNewFile: (path: string, bytes: Uint8Array) => invoke<void>("write_new_file", bytes, { headers: { "x-path": encodeURIComponent(path) } }),

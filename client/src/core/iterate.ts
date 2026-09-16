@@ -50,6 +50,8 @@ export function continueEditing(
   if (!model) return { ok: false, reason: "上架清单中没有支持图片编辑的模型" };
   const rule = model.workflows.image_edit.size_rule;
   const size_spec = inherited && resolveSize(rule, inherited.size_spec) ? { ...inherited.size_spec } : defaultSizeSpec(rule);
+  const limit = model.workflows.image_edit.max_references;
+  if (sources.length > limit) return { ok: false, reason: `${model.display_name} 最多接 ${limit} 张参考图，选中了 ${sources.length} 张` };
 
   const right = Math.max(...sources.map((n) => n.pos[0] + n.size[0]));
   const taskPos = placeNear(board, [right + COLUMN_GAP, first.pos[1]], TASK_NODE_SIZE);
@@ -132,7 +134,7 @@ export interface Clip {
   edges: BoardEdge[];
 }
 
-const PASTE_OFFSET = 40;
+export const PASTE_OFFSET = 40;
 
 /** 复制：提示词 / 参考图 / 任务节点及其之间的用户连线；结果节点由系统产出，不复制。存快照。 */
 export function copySelection(board: Board, ids: string[]): Clip {

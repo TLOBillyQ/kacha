@@ -3,9 +3,14 @@
 import { BOARDS_DIR_NAME, joinPath } from "./paths";
 import { taskDirOfTaskId } from "./taskDir";
 
+export interface DirEntry {
+  name: string;
+  is_dir: boolean;
+}
+
 export interface RelocateFs {
-  listDir(absDir: string): Promise<{ name: string; is_dir: boolean }[]>;
-  exists(absPath: string): Promise<boolean>;
+  listDir(absDir: string): Promise<DirEntry[]>;
+  isFile(absPath: string): Promise<boolean>;
   sha256(absPath: string): Promise<string>;
 }
 
@@ -14,36 +19,43 @@ export const IMAGE_EXTENSIONS = ["png", "jpg", "jpeg", "webp", "bmp", "gif", "ti
 const isImageName = (name: string) => IMAGE_EXTENSIONS.includes(name.slice(name.lastIndexOf(".") + 1).toLowerCase());
 const quiet = <T>(p: Promise<T>, fallback: T) => p.catch(() => fallback);
 
-/** 结果：先看 task_id 推导出的任务目录，再看根目录各一级子目录下的同名任务目录。 */
+/** 结果：先看 task_id 推导出的任务目录，再在根目录内递归找同名任务目录。 */
 export async function findResultFile(fs: RelocateFs, root: string, ref: { task_id: string; file: string }): Promise<string | null> {
   const dir = taskDirOfTaskId(ref.task_id);
   if (dir) {
     const expected = joinPath(root, ...dir.split("/"), ref.file);
-    if (await quiet(fs.exists(expected), false)) return expected;
+    if (await quiet(fs.isFile(expected), false)) return expected;
   }
-  for (const entry of await quiet(fs.listDir(root), [])) {
-    if (!entry.is_dir || entry.name === BOARDS_DIR_NAME) continue;
-    const candidate = joinPath(root, entry.name, ref.task_id, ref.file);
-    if (await quiet(fs.exists(candidate), false)) return candidate;
+  for (const dir of await walk(fs, root, (name) => name === ref.task_id)) {
+    const candidate = joinPath(dir, ref.file);
+    if (await quiet(fs.isFile(candidate), false)) return candidate;
   }
   return null;
 }
 
-/** 参考图：递归列出根目录内的图片文件（跳过画板目录），与原文件名同名的先算哈希。 */
-export async function findReferenceFile(fs: RelocateFs, root: string, ref: { sha256: string; display_name: string }): Promise<string | null> {
-  const images: string[] = [];
+/** 递归遍历根目录（跳过画板目录）：返回名字符合的目录，或 dirs 为 false 时返回名字符合的文件。 */
+async function walk(fs: RelocateFs, root: string, match: (name: string) => boolean, dirs = true): Promise<string[]> {
+  const found: string[] = [];
   const stack = [root];
   while (stack.length) {
     const dir = stack.pop()!;
     for (const entry of await quiet(fs.listDir(dir), [])) {
       const path = joinPath(dir, entry.name);
       if (entry.is_dir) {
-        if (!(dir === root && entry.name === BOARDS_DIR_NAME)) stack.push(path);
-      } else if (isImageName(entry.name)) {
-        images.push(path);
+        if (dir === root && entry.name === BOARDS_DIR_NAME) continue;
+        stack.push(path);
+        if (dirs && match(entry.name)) found.push(path);
+      } else if (!dirs && match(entry.name)) {
+        found.push(path);
       }
     }
   }
+  return found;
+}
+
+/** 参考图：递归列出根目录内的图片文件（跳过画板目录），与原文件名同名的先算哈希。 */
+export async function findReferenceFile(fs: RelocateFs, root: string, ref: { sha256: string; display_name: string }): Promise<string | null> {
+  const images = await walk(fs, root, isImageName, false);
   const wanted = ref.display_name.toLowerCase();
   const nameOf = (p: string) => p.slice(Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\")) + 1).toLowerCase();
   const ordered = [...images.filter((p) => nameOf(p) === wanted), ...images.filter((p) => nameOf(p) !== wanted)];

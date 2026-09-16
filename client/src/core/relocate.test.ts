@@ -18,7 +18,7 @@ function memoryFs(files: Record<string, string>) {
       if (!names.size && !Object.keys(files).some((p) => p.startsWith(prefix))) throw new Error("ENOENT");
       return [...names].map(([name, is_dir]) => ({ name, is_dir }));
     },
-    async exists(path) {
+    async isFile(path) {
       return path in files;
     },
     async sha256(path) {
@@ -38,9 +38,14 @@ describe("重新定位：结果按 task_id 找", () => {
     expect(await findResultFile(fs, ROOT, { task_id: "20260916T091500Z-0000abcd", file: "result.png" })).toBe("/out/2026-09-16/20260916T091500Z-0000abcd/result.png");
   });
 
-  it("任务目录被挪到别的日期目录下：在根目录的一级子目录里找同名任务目录", async () => {
+  it("任务目录被挪到别的日期目录下：在根目录里找同名任务目录", async () => {
     const { fs } = memoryFs({ "/out/归档/20260916T091500Z-0000abcd/result.png": "h", "/out/2026-09-17/x.png": "y" });
     expect(await findResultFile(fs, ROOT, { task_id: "20260916T091500Z-0000abcd", file: "result.png" })).toBe("/out/归档/20260916T091500Z-0000abcd/result.png");
+  });
+
+  it("任务目录被挪到更深的目录里：递归找，跳过画板目录", async () => {
+    const { fs } = memoryFs({ "/out/画板/20260916T091500Z-0000abcd/result.png": "h", "/out/归档/2026/09/20260916T091500Z-0000abcd/result.png": "h" });
+    expect(await findResultFile(fs, ROOT, { task_id: "20260916T091500Z-0000abcd", file: "result.png" })).toBe("/out/归档/2026/09/20260916T091500Z-0000abcd/result.png");
   });
 
   it("找不到为 null", async () => {

@@ -159,7 +159,7 @@ fn list_dir(path: String) -> Result<Vec<DirEntry>, String> {
 }
 
 #[tauri::command]
-fn path_exists(path: String) -> bool {
+fn is_file(path: String) -> bool {
     Path::new(&path).is_file()
 }
 
@@ -204,7 +204,7 @@ pub fn run() {
             read_file_bytes,
             write_new_file,
             list_dir,
-            path_exists,
+            is_file,
         ])
         .build(tauri::generate_context!())
         .expect("启动 Tauri 应用失败")

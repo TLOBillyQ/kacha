@@ -142,7 +142,8 @@ function jobOf(taskNodeId: string, plan: SubmissionPlan, model: ModelCapability)
 /**
  * 重新生成：按任务节点上次提交的任务目录（task.json 与参考图快照）同参数再提交一次，
  * 不看画板当前内容。新任务、新结果节点；不写盘，同 prepareJob。
- * 生成变体：fromTaskId = 该结果的任务编号，按那次提交的任务目录重跑，新结果仍进本任务节点的结果列。
+ * 生成变体：fromTaskId = 该结果的任务编号，按那次提交的任务目录重跑，新结果仍进本任务节点的结果列；
+ * 不改 last_submitted，之后的「重新生成」仍重跑节点最近一次提交。
  */
 export async function prepareRegenerate(
   deps: RunDeps,
@@ -190,6 +191,7 @@ export async function prepareRegenerate(
     capabilityTableSha256: args.tableSha256,
     references,
   };
+  if (args.fromTaskId !== undefined) return { job: jobOf(taskNodeId, plan, model), board };
   const nextBoard: Board = {
     ...board,
     nodes: board.nodes.map((n) => (n.id === taskNodeId && n.type === "task" ? { ...n, last_submitted: { ...last, task_id: taskId } } : n)),

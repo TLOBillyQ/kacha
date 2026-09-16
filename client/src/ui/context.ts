@@ -36,7 +36,7 @@ export function useBoardActions(): BoardActions {
   return ctx;
 }
 
-// 同一路径的图片只检查一次；null = 读取失败（缺图）。
+// 读到过的图片只检查一次；null = 读取失败（缺图），不缓存，下次再查（文件可能被放回原处）。
 const imageInfoCache = new Map<string, Promise<ImageInfo | null>>();
 
 export function useImageInfo(absPath: string | null): ImageInfo | null | undefined {
@@ -59,7 +59,10 @@ export function primeImageInfo(absPath: string, info: ImageInfo): void {
 function cachedImageInfo(absPath: string): Promise<ImageInfo | null> {
   let pending = imageInfoCache.get(absPath);
   if (!pending) {
-    pending = ipc.inspectImage(absPath).catch(() => null);
+    pending = ipc.inspectImage(absPath).catch(() => {
+      imageInfoCache.delete(absPath);
+      return null;
+    });
     imageInfoCache.set(absPath, pending);
   }
   return pending;

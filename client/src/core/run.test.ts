@@ -112,10 +112,12 @@ describe("单任务端到端", () => {
     await writeJob(d, "/root", newer);
 
     d.now = () => new Date("2026-09-18T01:00:00Z");
-    const { job: variant } = await prepareRegenerate(d, { board: b2, table: BUILTIN_TABLE, tableSha256: "y", outputRoot: "/root", taskNodeId: "t", fromTaskId: older.taskId });
+    const { job: variant, board: b3 } = await prepareRegenerate(d, { board: b2, table: BUILTIN_TABLE, tableSha256: "y", outputRoot: "/root", taskNodeId: "t", fromTaskId: older.taskId });
     expect(variant.taskNodeId).toBe("t");
     expect(variant.record.prompt).toBe("一只橘猫");
     expect(variant.taskId).not.toBe(older.taskId);
+    // 任务节点的上次提交仍是 newer：之后「重新生成」重跑的是最近一次提交，不是变体。
+    expect(b3).toBe(b2);
   });
 
   it("文生图走 generations", async () => {

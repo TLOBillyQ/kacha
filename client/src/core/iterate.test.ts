@@ -124,6 +124,13 @@ describe("以此继续编辑", () => {
     expect(find<TaskNode>(b, "new-task")).toMatchObject({ model: "qwen-image-3.0", size_spec: SPEC_2K });
   });
 
+  it("选中的图片超过模型参考图上限：拒绝，画板不变", () => {
+    const refs = ["a", "b", "c", "d"].map((id) => reference(id));
+    const r = continueEditing(board(refs), BUILTIN_TABLE, NONE, ["a", "b", "c", "d"], ids);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toMatch(/最多接 3 张参考图，选中了 4 张/);
+  });
+
   it("没有图片节点可用时拒绝", () => {
     expect(continueEditing(board([prompt("p")]), BUILTIN_TABLE, NONE, ["p"], ids)).toEqual({ ok: false, reason: "先选中结果或参考图节点" });
   });

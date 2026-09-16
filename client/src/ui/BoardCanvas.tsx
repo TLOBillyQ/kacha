@@ -36,7 +36,7 @@ import {
   workflowOf,
   type Connection,
 } from "../core/graph";
-import { addAsReference, addAsReferenceTarget, continueEditing, copySelection, lineage, pasteClip, producerOf, type Clip } from "../core/iterate";
+import { addAsReference, addAsReferenceTarget, continueEditing, copySelection, lineage, pasteClip, PASTE_OFFSET, producerOf, type Clip, type Outcome } from "../core/iterate";
 import { PROMPT_NODE_SIZE, TASK_NODE_SIZE } from "../core/layout";
 import { basename, resolveFromRoot, toRootRelative } from "../core/paths";
 import { findReferenceFile, findResultFile, IMAGE_EXTENSIONS, type RelocateFs } from "../core/relocate";
@@ -49,7 +49,7 @@ import { isActive } from "./useRunner";
 
 const relocateFs: RelocateFs = {
   listDir: ipc.listDir,
-  exists: ipc.pathExists,
+  isFile: ipc.isFile,
   sha256: async (path) => (await ipc.inspectImage(path)).sha256,
 };
 
@@ -97,6 +97,26 @@ export function BoardCanvas({ board, table, outputRoot, update, openBoardPath, t
 
   const updateBoard = useCallback((fn: (b: Board) => Board) => update((b) => syncImagePorts(fn(b))), [update]);
 
+  /** 应用一次可能被拒的画板变更；被拒时提示原因。返回是否已应用（会话不可编辑时也为 false）。 */
+  const applyOutcome = useCallback(
+    (fn: (b: Board) => Outcome) => {
+      let applied = false;
+      let problem: string | null = null;
+      updateBoard((b) => {
+        const r = fn(b);
+        if (!r.ok) {
+          problem = r.reason;
+          return b;
+        }
+        applied = true;
+        return r.board;
+      });
+      if (problem) toast(problem);
+      return applied;
+    },
+    [updateBoard, toast],
+  );
+
   const boardRef = useRef(board);
   boardRef.current = board;
   const selectedRef = useRef(selectedNodes);
@@ -133,14 +153,7 @@ export function BoardCanvas({ board, table, outputRoot, update, openBoardPath, t
         const selected = selectedRef.current;
         const sources = selected.has(nodeId) ? [...selected] : [nodeId];
         const ids = { taskId: crypto.randomUUID(), promptId: crypto.randomUUID() };
-        let problem: string | null = null;
-        updateBoard((b) => {
-          const r = continueEditing(b, table, discovery, sources, ids);
-          if (r.ok) return r.board;
-          problem = r.reason;
-          return b;
-        });
-        if (problem) return toast(problem);
+        if (!applyOutcome((b) => continueEditing(b, table, discovery, sources, ids))) return;
         setSelectedNodes(new Set([ids.promptId]));
         setFocusPrompt(ids.promptId);
       },
@@ -148,14 +161,7 @@ export function BoardCanvas({ board, table, outputRoot, update, openBoardPath, t
         const target = addAsReferenceTarget(boardRef.current, [...selectedRef.current]);
         if (!target.ok) return toast(target.reason);
         if (lockedRef.current.has(target.taskId)) return toast(LOCKED_HINT);
-        let problem: string | null = null;
-        updateBoard((b) => {
-          const r = addAsReference(b, table, resultId, target.taskId);
-          if (r.ok) return r.board;
-          problem = r.reason;
-          return b;
-        });
-        if (problem) toast(problem);
+        applyOutcome((b) => addAsReference(b, table, resultId, target.taskId));
       },
       generateVariant: (resultId) => {
         const b = boardRef.current;
@@ -193,7 +199,7 @@ export function BoardCanvas({ board, table, outputRoot, update, openBoardPath, t
           }
         })(),
     }),
-    [table, outputRoot, discovery, update, updateBoard, onCancelTask, onRegenerate, toast],
+    [table, outputRoot, discovery, update, updateBoard, applyOutcome, onCancelTask, onRegenerate, toast],
   );
 
   // 选中任一节点即高亮其谱系。
@@ -514,7 +520,7 @@ export function BoardCanvas({ board, table, outputRoot, update, openBoardPath, t
           return r.board;
         });
         // 连续粘贴逐次错开。
-        clipboard = { ...clip, nodes: clip.nodes.map((n) => ({ ...n, pos: [n.pos[0] + 40, n.pos[1] + 40] as [number, number] })) };
+        clipboard = { ...clip, nodes: clip.nodes.map((n) => ({ ...n, pos: [n.pos[0] + PASTE_OFFSET, n.pos[1] + PASTE_OFFSET] as [number, number] })) };
         setSelectedNodes(new Set(pasted));
       }
     };
