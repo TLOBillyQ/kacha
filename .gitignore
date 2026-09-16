@@ -1,9 +1,5 @@
-.swarmforge/
 .worktrees/
 .claude/worktrees/
-
-# SwarmForge helper scripts are injected by the forge host at project open
-swarmforge/scripts/
 
 # Agent scratch and toolchain caches
 tmp/
@@ -30,8 +26,6 @@ venv/
 build/
 dist/
 *.egg-info/
-*.spec
-!packaging/ugc-image-tool.spec
 
 # OS and editor files
 .DS_Store

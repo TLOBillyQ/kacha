@@ -4,7 +4,7 @@
 
 ## 适配器实现状态
 
-`src/ugc_image_tool/team_gateway.py` 依据本目录夹具实现真实适配器，客户端默认通过它接入团队网关：
+以下为 v1 适配器 `src/ugc_image_tool/team_gateway.py`（已归档于 `archive/v1` 分支）依据本目录夹具实现的行为；v2 客户端 `client/src/core/gateway.ts` 同样以本目录夹具为准：
 
 - **模型发现**：`GET /v1/models`，`Authorization: Bearer` 鉴权；`data[].id` 作为模型 ID 交给本地能力表合并，未知模型保持禁用。
 - **文生图**：`POST /v1/images/generations`，仅发送实测字段 `model`、`prompt`、`negative_prompt`、`n`、`size`（`WxH`）、`watermark`。
