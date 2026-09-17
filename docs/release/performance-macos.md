@@ -24,7 +24,7 @@ v2 规格 §13 要求补测 macOS 性能与包体数字；Windows 包体一并�
 
 ## 结果
 
-测试版本：待填　测试提交：待填
+测试版本：0.2.0　测试提交：5377b2f（包体数字；其余项待测）
 
 ### macOS（Apple Silicon）— 待在 Apple Silicon 机器上实测
 
@@ -33,10 +33,10 @@ v2 规格 §13 要求补测 macOS 性能与包体数字；Windows 包体一并�
 | 冷启动到首帧 |  | 待在 Apple Silicon 机器上实测 |
 | 空闲 RSS |  | 待在 Apple Silicon 机器上实测 |
 | 50 节点画板 RSS |  | 待在 Apple Silicon 机器上实测 |
-| `.app` 大小 |  | 待在 Apple Silicon 机器上实测 |
-| zip 大小 |  | 待在 Apple Silicon 机器上实测 |
+| `.app` 大小 | 5.9 MB（`du -sk` 6012 KB） | 2026-09-17，ad-hoc 签名后 |
+| zip 大小 | 2.9 MB（3,013,446 字节） | `ditto` 生成 |
 
-机器：待填（型号 / 芯片 / 内存 / macOS 版本）
+机器：MacBookPro18,2 / Apple M1 Max / 32 GB / macOS 27.0（26A428）；rustc 1.98.1，Node 26.8.2
 
 ### Windows x64 — 待在 Windows x64 机器上实测
 
