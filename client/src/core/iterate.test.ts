@@ -74,7 +74,7 @@ describe("以此继续编辑", () => {
     );
 
   it("新建任务：结果接图1，空提示词接正向，负向扇出复用源任务的；模型 / 尺寸继承，开关不继承", () => {
-    const b = ok(continueEditing(lineage(), BUILTIN_TABLE, NONE, ["res"], ids));
+    const b = ok(continueEditing(lineage(), BUILTIN_TABLE, NONE, ["res"], "res", ids));
     expect(find<TaskNode>(b, "new-task")).toMatchObject({ model: "qwen-image-3.0", size_spec: SPEC_2K, layer_decomposition: false, image_ports: 1, last_submitted: null });
     expect(find<PromptNode>(b, "new-prompt").text).toBe("");
     const into = b.edges.filter((e) => e.to[0] === "new-task").map((e) => [e.from[0], e.to[1]]);
@@ -85,7 +85,7 @@ describe("以此继续编辑", () => {
 
   it("新任务在触发节点右侧，空提示词节点在其左上；已有节点位置不动", () => {
     const before = lineage();
-    const b = ok(continueEditing(before, BUILTIN_TABLE, NONE, ["res"], ids));
+    const b = ok(continueEditing(before, BUILTIN_TABLE, NONE, ["res"], "res", ids));
     expect(find<TaskNode>(b, "new-task").pos).toEqual([400 + 220 + 60, 100]);
     expect(find<PromptNode>(b, "new-prompt").pos).toEqual([400 + 220 + 60 - PROMPT_NODE_SIZE[0] - 60, 100 - PROMPT_NODE_SIZE[1] - 24]);
     expect(find<TaskNode>(b, "new-task").size).toEqual(TASK_NODE_SIZE);
@@ -93,14 +93,25 @@ describe("以此继续编辑", () => {
   });
 
   it("多选按选中顺序接入；新任务在最右侧的触发节点右边", () => {
-    const b = ok(continueEditing(board([reference("a", [0, 0]), reference("b", [500, 300])]), BUILTIN_TABLE, NONE, ["b", "a"], ids));
+    const b = ok(continueEditing(board([reference("a", [0, 0]), reference("b", [500, 300])]), BUILTIN_TABLE, NONE, ["b", "a"], "b", ids));
     const images = b.edges.filter((e) => e.to[0] === "new-task" && e.to[1].startsWith("image:")).map((e) => [e.from[0], e.to[1]]);
     expect(images).toEqual([["b", "image:0"], ["a", "image:1"]]);
     expect(find<TaskNode>(b, "new-task").pos).toEqual([500 + 200 + 60, 300]);
   });
 
+  it("多选：模型 / 尺寸继承点击的触发节点，与其同行；横向仍在最右侧的选中节点右边", () => {
+    const b0 = board(
+      [task("src1"), result("r1", [400, 0]), task("src2", { model: "qwen-image-3.0-pro", pos: [0, 600] }), result("r2", [300, 600], "qwen-image-3.0-pro")],
+      [edge("src1", "result", "r1", "in", true), edge("src2", "result", "r2", "in", true)],
+    );
+    const b = ok(continueEditing(b0, BUILTIN_TABLE, NONE, ["r1", "r2"], "r2", ids));
+    expect(find<TaskNode>(b, "new-task")).toMatchObject({ model: "qwen-image-3.0-pro", pos: [400 + 220 + 60, 600] });
+    const images = b.edges.filter((e) => e.to[0] === "new-task" && e.to[1].startsWith("image:")).map((e) => e.from[0]);
+    expect(images).toEqual(["r1", "r2"]);
+  });
+
   it("触发于参考图节点：用上架清单默认编辑模型，不接负向", () => {
-    const b = ok(continueEditing(board([reference("r")]), BUILTIN_TABLE, NONE, ["r"], ids));
+    const b = ok(continueEditing(board([reference("r")]), BUILTIN_TABLE, NONE, ["r"], "r", ids));
     expect(find<TaskNode>(b, "new-task").model).toBe("qwen-image-3.0-pro");
     expect(b.edges.some((e) => e.to[1] === "negative")).toBe(false);
   });
@@ -111,28 +122,28 @@ describe("以此继续编辑", () => {
     src.model = "doubao-seedream-4-5-251128";
     const t = structuredClone(BUILTIN_TABLE);
     t.models.find((m) => m.model_id === src.model)!.workflows.image_edit.max_references = 0;
-    const b = ok(continueEditing(b0, t, NONE, ["res"], ids));
+    const b = ok(continueEditing(b0, t, NONE, ["res"], "res", ids));
     expect(find<TaskNode>(b, "new-task")).toMatchObject({ model: "qwen-image-3.0-pro", size_spec: SPEC_2K });
 
     src.size_spec = { tier: "8K", ratio: "1:1", width: null, height: null };
-    const c = ok(continueEditing(b0, t, NONE, ["res"], ids));
+    const c = ok(continueEditing(b0, t, NONE, ["res"], "res", ids));
     expect(find<TaskNode>(c, "new-task").size_spec.tier).toBe("1K");
   });
 
   it("产出任务已删除：按结果记录的模型与尺寸继承", () => {
-    const b = ok(continueEditing(board([result("res", [0, 0], "qwen-image-3.0")]), BUILTIN_TABLE, NONE, ["res"], ids));
+    const b = ok(continueEditing(board([result("res", [0, 0], "qwen-image-3.0")]), BUILTIN_TABLE, NONE, ["res"], "res", ids));
     expect(find<TaskNode>(b, "new-task")).toMatchObject({ model: "qwen-image-3.0", size_spec: SPEC_2K });
   });
 
   it("选中的图片超过模型参考图上限：拒绝，画板不变", () => {
     const refs = ["a", "b", "c", "d"].map((id) => reference(id));
-    const r = continueEditing(board(refs), BUILTIN_TABLE, NONE, ["a", "b", "c", "d"], ids);
+    const r = continueEditing(board(refs), BUILTIN_TABLE, NONE, ["a", "b", "c", "d"], "a", ids);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toMatch(/最多接 3 张参考图，选中了 4 张/);
   });
 
   it("没有图片节点可用时拒绝", () => {
-    expect(continueEditing(board([prompt("p")]), BUILTIN_TABLE, NONE, ["p"], ids)).toEqual({ ok: false, reason: "先选中结果或参考图节点" });
+    expect(continueEditing(board([prompt("p")]), BUILTIN_TABLE, NONE, ["p"], "p", ids)).toEqual({ ok: false, reason: "先选中结果或参考图节点" });
   });
 });
 

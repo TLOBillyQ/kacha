@@ -153,7 +153,7 @@ export function BoardCanvas({ board, table, outputRoot, update, openBoardPath, t
         const selected = selectedRef.current;
         const sources = selected.has(nodeId) ? [...selected] : [nodeId];
         const ids = { taskId: crypto.randomUUID(), promptId: crypto.randomUUID() };
-        if (!applyOutcome((b) => continueEditing(b, table, discovery, sources, ids))) return;
+        if (!applyOutcome((b) => continueEditing(b, table, discovery, sources, nodeId, ids))) return;
         setSelectedNodes(new Set([ids.promptId]));
         setFocusPrompt(ids.promptId);
       },
