@@ -285,7 +285,8 @@ export function BoardCanvas({
       forkPrompt: (promptId, text) => updateBoard((b) => forkPrompt(b, promptId, { newNodeId: crypto.randomUUID(), text }), { label: "分叉提示词" }),
       continueEditing: (nodeId, sourceLayer = null, at) => {
         const selected = selectedRef.current;
-        const sources = selected.has(nodeId) ? [...selected] : [nodeId];
+        // 拖线建节点（带 at）只拖出一根线，只接这一张图；按钮 / 菜单发起时在选区内沿用多选。
+        const sources = !at && selected.has(nodeId) ? [...selected] : [nodeId];
         const ids = { taskId: crypto.randomUUID(), promptId: crypto.randomUUID() };
         const sourceLayers = sourceLayer === null ? null : new Map([[nodeId, sourceLayer]]);
         const taskAt = at ? posOf(at) : null;
