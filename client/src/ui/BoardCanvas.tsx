@@ -26,7 +26,6 @@ import { availableModels, defaultTaskModel, modelAvailabilityIssue, type Discove
 import {
   canConnect,
   connect,
-  chainDepth,
   disconnect,
   firstRegionOfEdge,
   forkPrompt,
@@ -469,7 +468,6 @@ export function BoardCanvas({
                 ],
                 warnings: refs.warnings,
                 unreferenced: refs.unreferenced,
-                chainDepth: chainDepth(board, n.id),
                 locked: locked.has(n.id),
                 workflow: workflowOf(board, n.id),
                 images: taskEdges.map((e) => labelOf(e.from[0])),

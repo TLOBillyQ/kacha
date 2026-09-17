@@ -25,7 +25,7 @@ import type { MenuItem } from "../core/contextMenu";
 import type { PortKind } from "../core/ports";
 import { actionHoverInfo, CANCELLED_HINT, referenceHoverInfo, resultHoverInfo, taskHoverInfo, textHoverInfo } from "../core/hoverInfo";
 import type { TaskStatus } from "../core/run";
-import { CHAIN_DEPTH_HINT, IMAGE_PORT_PREFIX, imageRuleViolations, type TaskPorts } from "../core/graph";
+import { IMAGE_PORT_PREFIX, imageRuleViolations, type TaskPorts } from "../core/graph";
 import { imageMinSize } from "../core/nodeSize";
 import { regionCss } from "../core/overlay";
 import { resolveFromRoot } from "../core/paths";
@@ -71,7 +71,6 @@ export type TaskFlowNode = Node<
     warnings: string[];
     /** 已接线但提示词没引用的图序号（从 1 起）。 */
     unreferenced: number[];
-    chainDepth: number;
     /** 排队 / 执行中：参数与连线锁定。 */
     locked: boolean;
     workflow: WorkflowName;
@@ -383,7 +382,7 @@ function PortRow({
 
 export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskFlowNode>) {
   const { table, updateNode, moveImagePort, availableModels, setTaskModel, editRegion, perform } = useBoardActions();
-  const { node, ports, issues, warnings, unreferenced, chainDepth, locked, workflow, images, slots, regionRender, hasPositive, status, expanded, run } = data;
+  const { node, ports, issues, warnings, unreferenced, locked, workflow, images, slots, regionRender, hasPositive, status, expanded, run } = data;
   const [infoOpen, setInfoOpen] = useState(false);
   const [dragFrom, setDragFrom] = useState<number | null>(null);
   const updateInternals = useUpdateNodeInternals();
@@ -446,8 +445,7 @@ export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskF
   const transparentReady = images.length === 1 && !!singleInfo?.has_alpha;
   const transparentHint = images.length !== 1 ? "需要恰好一条图片线" : singleInfo?.has_alpha ? "" : "该图不带透明通道";
   const blocking = issues.filter((i) => i !== "正向提示词未连接");
-  const chainHint = chainDepth >= CHAIN_DEPTH_HINT ? [`已连续编辑 ${chainDepth} 轮，建议回到原图重新编辑`] : [];
-  const hover = useHover(taskHoverInfo({ modelName: modelLabel, sizeSpec: node.size_spec, issues, warnings: [...warnings, ...chainHint], status }));
+  const hover = useHover(taskHoverInfo({ modelName: modelLabel, sizeSpec: node.size_spec, issues, warnings, status }));
   const target = { kind: "node", nodeId: node.id } as const;
 
   return (
@@ -465,7 +463,6 @@ export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskF
         <span>
           生成任务<span className="muted">{workflow === "image_edit" ? " · 图片编辑" : " · 文生图"}</span>
         </span>
-        {chainDepth >= CHAIN_DEPTH_HINT && <span className="badge badge-chain">链深 {chainDepth}</span>}
         {status && <StatusBadge status={status} />}
       </div>
 

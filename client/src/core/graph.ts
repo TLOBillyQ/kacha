@@ -286,29 +286,6 @@ export function forkPrompt(board: Board, promptId: string, fork: { newNodeId: st
   };
 }
 
-// ---- 链深 ----
-
-/** 链深达到此值时任务节点轻徽标、二次确认附提示；不阻断。 */
-export const CHAIN_DEPTH_HINT = 3;
-
-/**
- * 从最近的参考图节点到本任务经过的生成任务节点数（含本任务）。
- * 图片线来自参考图 = 0；来自结果节点 = 其产出任务的链深（产出任务已删 = 0）；无图片线的文生图 = 链起点。
- */
-export function chainDepth(board: Board, taskId: string, memo = new Map<string, number>()): number {
-  const cached = memo.get(taskId);
-  if (cached !== undefined) return cached;
-  const upstream = imageEdges(board, taskId).map((e) => {
-    const src = board.nodes.find((n) => n.id === e.from[0]);
-    if (src?.type !== "result") return 0;
-    const producer = board.edges.find((x) => x.system && x.to[0] === src.id)?.from[0];
-    return producer && findTask(board, producer) ? chainDepth(board, producer, memo) : 0;
-  });
-  const depth = 1 + (upstream.length ? Math.min(...upstream) : 0);
-  memo.set(taskId, depth);
-  return depth;
-}
-
 // ---- 参考图输入规则 ----
 
 export interface ImageFacts {

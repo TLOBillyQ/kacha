@@ -2,7 +2,7 @@
 import type { Board, Region, TaskNode } from "./board";
 import { findModel, type CapabilityTable } from "./capabilities";
 import { composeSendText, isRequestShapeImplemented } from "./gateway";
-import { CHAIN_DEPTH_HINT, chainDepth, imageEdges, imagePortSlots, taskIssues, transparentAlphaIssue } from "./graph";
+import { imageEdges, imagePortSlots, taskIssues, transparentAlphaIssue } from "./graph";
 import { checkImageRefs, promptLanguage } from "./imageRefs";
 import { resolveFromRoot } from "./paths";
 import { overlayPhrases, referencedRegions, regionNames } from "./region";
@@ -181,11 +181,6 @@ export function imageRefProblems(board: Board, table: CapabilityTable, taskId: s
   };
 }
 
-export function chainDepthHint(board: Board, taskId: string): string | null {
-  const depth = chainDepth(board, taskId);
-  return depth >= CHAIN_DEPTH_HINT ? `已连续编辑 ${depth} 轮，建议回到原图重新编辑` : null;
-}
-
 export interface ConfirmContext {
   discovery: Discovery;
   /** 图片文件缺失的参考图 / 结果节点 id。 */
@@ -214,8 +209,6 @@ export function buildConfirmItems(board: Board, table: CapabilityTable, taskIds:
     if (model && images.length > 0 && promptLanguage(prompt) === "en" && model.reference_phrasing.en_verified === "untested") {
       warnings.push("该模型英文序号未验证");
     }
-    const deep = chainDepthHint(board, taskId);
-    if (deep) warnings.push(deep);
     images.forEach((img, i) => {
       if (ctx.missingNodes.has(img.nodeId)) issues.push(`图${i + 1} 图片缺失：${img.label}`);
     });

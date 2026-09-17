@@ -217,22 +217,6 @@ describe("二次确认：「图N」校验与提示", () => {
     expect(item.warnings).toContain("该模型英文序号未验证");
     expect(item.sendText).toBe("This request provides 1 reference image.\nPut Image 1 on a beach");
   });
-
-  it("链深 ≥ 3 附「已连续编辑 N 轮」提示，不阻断", () => {
-    const b = board(
-      [prompt("p", "@图1 改成蓝色"), reference("r"), task("t1"), result("x1"), task("t2"), result("x2"), task("t3")],
-      [
-        edge("p", "t1", "positive"), edge("p", "t2", "positive"), edge("p", "t3", "positive"),
-        edge("r", "t1", "image:0"), { ...edge("t1", "x1", "in"), system: true },
-        edge("x1", "t2", "image:0"), { ...edge("t2", "x2", "in"), system: true },
-        edge("x2", "t3", "image:0"),
-      ],
-    );
-    const [two, three] = buildConfirmItems(b, BUILTIN_TABLE, ["t2", "t3"], ctx);
-    expect(two.warnings).toEqual([]);
-    expect(three.issues).toEqual([]);
-    expect(three.warnings).toEqual(["已连续编辑 3 轮，建议回到原图重新编辑"]);
-  });
 });
 
 describe("图片来源", () => {

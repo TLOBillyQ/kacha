@@ -667,12 +667,6 @@ button.primary[aria-disabled="true"] {
   background: #fff8c5;
   color: #7d4e00;
 }
-.badge-chain {
-  margin-left: 6px;
-  background: #fff8c5;
-  color: #7d4e00;
-  font-weight: normal;
-}
 .port-unreferenced {
   background: #fff8c5;
   box-shadow: inset 3px 0 0 var(--yellow);
@@ -1024,8 +1018,7 @@ button.primary[aria-disabled="true"] {
   flex-wrap: wrap;
   gap: 2px;
 }
-.task-title .status,
-.task-title .badge-chain {
+.task-title .status {
   margin-left: 4px;
 }
 .expand-toggle {

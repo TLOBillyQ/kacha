@@ -3,7 +3,6 @@ import type { Board, BoardEdge, BoardNode, TaskNode } from "./board";
 import { BUILTIN_TABLE, type CapabilityTable, type ModelCapability } from "./capabilities";
 import {
   canConnect,
-  chainDepth,
   connect,
   removeNodes,
   syncImagePorts,
@@ -327,41 +326,6 @@ describe("参考图 input_image_rule 校验", () => {
     expect(imageRuleViolations({ format: "png", bytes: 1, width: 4096, height: 4096 }, rule)).toEqual(["总像素 16777216 超过上限 4194304"]);
     const seedream = BUILTIN_TABLE.models[2].input_image_rule;
     expect(imageRuleViolations({ format: "jpeg", bytes: 1, width: 3400, height: 200 }, seedream)).toEqual(["宽高比 17.00 超出 0.06～16.00"]);
-  });
-});
-
-describe("链深", () => {
-  /** 参考图 r → t1 → 结果 x1 → t2 → x2 → t3；文生图 s → 结果 y → t3 的另一端口。 */
-  function chain(): Board {
-    return board(
-      [node("r", "reference"), task("t1"), node("x1", "result"), task("t2"), node("x2", "result"), task("t3"), task("s"), node("y", "result"), task("lone")],
-      [img("r", "t1", 0), sys("t1", "x1"), img("x1", "t2", 0), sys("t2", "x2"), img("x2", "t3", 0), sys("s", "y")],
-    );
-  }
-  const img = (from: string, to: string, index: number) => edge(from, "out", to, `image:${index}`);
-  const sys = (from: string, to: string) => edge(from, "result", to, "in", true);
-
-  it("从最近的参考图节点到本任务经过的生成任务节点数（含本任务）", () => {
-    const b = chain();
-    expect(chainDepth(b, "t1")).toBe(1);
-    expect(chainDepth(b, "t2")).toBe(2);
-    expect(chainDepth(b, "t3")).toBe(3);
-    expect(chainDepth(b, "lone")).toBe(1);
-  });
-
-  it("多条图片线取最近的一条；文生图任务视作链的起点", () => {
-    const b = chain();
-    b.edges.push(img("y", "t3", 1));
-    expect(chainDepth(b, "t3")).toBe(2);
-    b.edges.push(img("r", "t3", 2));
-    expect(chainDepth(b, "t3")).toBe(1);
-  });
-
-  it("结果节点的产出任务已被删除时，该结果视作原图", () => {
-    const b = chain();
-    b.nodes = b.nodes.filter((n) => n.id !== "t2");
-    b.edges = b.edges.filter((e) => e.from[0] !== "t2" && e.to[0] !== "t2");
-    expect(chainDepth(b, "t3")).toBe(1);
   });
 });
 
