@@ -153,6 +153,14 @@ describe("步合并", () => {
     expect(after.undo).toHaveLength(undone.history.undo.length + 1);
   });
 
+  it("合并后的步描述取最后一次（如导入到第几张）", () => {
+    const merge = { key: "import:x" };
+    let h = recordChange(emptyHistory(), board([]), { label: "添加 1 张参考图", merge }, 0);
+    h = recordChange(h, board([]), { label: "添加 2 张参考图", merge }, 10);
+    expect(h.undo).toHaveLength(1);
+    expect(undoLabel(h)).toBe("添加 2 张参考图");
+  });
+
   it("系统写入不打断正在合并的输入", () => {
     const merge = { key: "text:p", windowMs: 500 };
     let h = recordChange(emptyHistory(), board([]), { label: "编辑提示词", merge }, 0);

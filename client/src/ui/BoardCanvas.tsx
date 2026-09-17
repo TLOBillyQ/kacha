@@ -159,6 +159,11 @@ export function BoardCanvas({
   boardRef.current = board;
   const selectedRef = useRef(selectedNodes);
   selectedRef.current = selectedNodes;
+  // 撤销 / 重做会让选中的节点消失：丢掉不在画板上的选中，免得「运行选中」与复制落在空集上。
+  useEffect(() => {
+    const present = new Set(board.nodes.map((n) => n.id));
+    setSelectedNodes((s) => ([...s].every((id) => present.has(id)) ? s : new Set([...s].filter((id) => present.has(id)))));
+  }, [board.nodes]);
   const [focusPrompt, setFocusPrompt] = useState<string | null>(null);
   const missing = useMissingImages(board, outputRoot);
   const [preview, setPreview] = useState<{ req: PreviewRequest; nonce: number } | null>(null);
@@ -654,8 +659,9 @@ export function BoardCanvas({
   const importReferences = useCallback(
     async (paths: string[], at: { x: number; y: number }) => {
       let offset = 0;
-      // 一次导入的多张参考图合为一步。
-      const change: UserChange = { label: countLabel("添加", paths.length, "张参考图"), merge: { key: `import:${crypto.randomUUID()}` } };
+      // 一次导入的多张参考图合为一步；合并时步描述取最后一次，张数只算导入成功的。
+      const merge = { key: `import:${crypto.randomUUID()}` };
+      let added = 0;
       for (const abs of paths) {
         try {
           const info = await ipc.inspectImage(abs);
@@ -669,7 +675,7 @@ export function BoardCanvas({
             sha256: info.sha256,
             display_name: basename(abs),
             extra: {},
-          }, change);
+          }, { label: countLabel("添加", ++added, "张参考图"), merge });
           offset += 32;
         } catch (e) {
           toast(`无法导入 ${basename(abs)}：${e instanceof Error ? e.message : String(e)}`);
