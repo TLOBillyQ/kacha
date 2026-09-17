@@ -92,6 +92,12 @@ describe("以此继续编辑", () => {
     for (const n of before.nodes) expect(find(b, n.id)).toEqual(n);
   });
 
+  it("给定落点（拖线建节点）：新任务左上角落在落点，空提示词节点在其左上", () => {
+    const b = ok(continueEditing(lineage(), BUILTIN_TABLE, NONE, ["res"], "res", ids, null, [2000, 900]));
+    expect(find<TaskNode>(b, "new-task").pos).toEqual([2000, 900]);
+    expect(find<PromptNode>(b, "new-prompt").pos).toEqual([2000 - PROMPT_NODE_SIZE[0] - 60, 900 - PROMPT_NODE_SIZE[1] - 24]);
+  });
+
   it("多选按选中顺序接入；新任务在最右侧的触发节点右边", () => {
     const b = ok(continueEditing(board([reference("a", [0, 0]), reference("b", [500, 300])]), BUILTIN_TABLE, NONE, ["b", "a"], "b", ids));
     const images = b.edges.filter((e) => e.to[0] === "new-task" && e.to[1].startsWith("image:")).map((e) => [e.from[0], e.to[1]]);

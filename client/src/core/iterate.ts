@@ -9,7 +9,8 @@ import { defaultSizeSpec, resolveSize, type SizeSpec } from "./size";
 
 export type Outcome = { ok: true; board: Board } | Extract<Verdict, { ok: false }>;
 
-const userEdge = (from: string, fromPort: string, to: string, toPort: string): BoardEdge => ({
+/** 一条用户连线（无区域、无图层）。 */
+export const userEdge = (from: string, fromPort: string, to: string, toPort: string): BoardEdge => ({
   from: [from, fromPort],
   to: [to, toPort],
   source_layer: null,
@@ -31,7 +32,7 @@ const isImageNode = (n: BoardNode | undefined): n is Extract<BoardNode, { type: 
  * 以此继续编辑：新任务节点按选中顺序接入触发节点的图片，新空提示词节点接正向，负向扇出复用源任务的。
  * 模型 / 尺寸继承被点击的触发节点的源任务（产出任务已删则按结果记录）；源模型不支持编辑或触发于参考图时用默认编辑模型。不带区域指示。
  * sourceLayers：节点 id → 图层序号（1 起）时接该图层而非合成结果（规格第 7 节）。
- * 新任务与触发节点同行，横向在最右侧的选中节点右边。
+ * 新任务与触发节点同行，横向在最右侧的选中节点右边；taskAt = 新任务左上角的指定落点（拖线建节点的松手处）。
  */
 export function continueEditing(
   board: Board,
@@ -41,6 +42,7 @@ export function continueEditing(
   triggerId: string,
   ids: { taskId: string; promptId: string },
   sourceLayers: ReadonlyMap<string, number> | null = null,
+  taskAt: [number, number] | null = null,
 ): Outcome {
   const sources = sourceIds.map((id) => board.nodes.find((n) => n.id === id)).filter(isImageNode);
   if (!sources.length) return { ok: false, reason: "先选中结果或参考图节点" };
@@ -58,7 +60,7 @@ export function continueEditing(
   if (sources.length > limit) return { ok: false, reason: `${model.display_name} 最多接 ${limit} 张参考图，选中了 ${sources.length} 张` };
 
   const right = Math.max(...sources.map((n) => n.pos[0] + n.size[0]));
-  const taskPos = placeNear(board, [right + COLUMN_GAP, trigger.pos[1]], TASK_NODE_SIZE);
+  const taskPos = taskAt ?? placeNear(board, [right + COLUMN_GAP, trigger.pos[1]], TASK_NODE_SIZE);
   const task: TaskNode = {
     id: ids.taskId,
     type: "task",

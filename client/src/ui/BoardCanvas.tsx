@@ -19,10 +19,10 @@ import {
   type Viewport,
 } from "@xyflow/react";
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
-import { BOARD_EXTENSION, type Board, type BoardEdge, type KnownNode, type TaskNode } from "../core/board";
+import { BOARD_EXTENSION, type Board, type BoardEdge, type KnownNode, type ReferenceNode } from "../core/board";
 import { findModel, modelsByTier, type CapabilityTable, type InputImageRule } from "../core/capabilities";
 import type { TaskStatus } from "../core/run";
-import { availableModels, defaultTaskModel, modelAvailabilityIssue, type Discovery } from "../core/settings";
+import { availableModels, modelAvailabilityIssue, type Discovery } from "../core/settings";
 import {
   canConnect,
   connect,
@@ -42,18 +42,18 @@ import {
   workflowOf,
   type Connection,
 } from "../core/graph";
-import { menuItems, selectionForMenu, actionBarItems, type BoardAction, type MenuFacts, type MenuTarget } from "../core/contextMenu";
+import { menuItems, selectionForMenu, actionBarItems, type BoardAction, type MenuFacts, type MenuItem, type MenuTarget } from "../core/contextMenu";
+import { attachReferences, cardDropConnection, dragCreateItems, newTask } from "../core/dragCreate";
 import { edgeHoverInfo, textHoverInfo, type HoverInfo } from "../core/hoverInfo";
 import { connectablePorts, dragKind, edgeClassName, nodeClassName, promptPortKind, type DragFrom, type DragState } from "../core/ports";
 import { countLabel, nodeEditChange, type Change, type UserChange } from "../core/history";
 import { addAsReference, addAsReferenceTarget, continueEditing, copySelection, lineage, LOCKED_HINT, pasteClip, PASTE_OFFSET, producerOf, type Clip, type Outcome } from "../core/iterate";
-import { PROMPT_NODE_SIZE, TASK_NODE_SIZE } from "../core/layout";
+import { PROMPT_NODE_SIZE } from "../core/layout";
 import { IMAGE_NODE_WIDTH, imageNodeSize, renderedImageSize } from "../core/nodeSize";
 import { placePreset, type Preset } from "../core/presets";
 import { basename, dirname, joinPath, resolveFromRoot, toRootRelative } from "../core/paths";
 import { effectiveRegionRender, setEdgeRegion } from "../core/region";
 import { findReferenceFile, findResultFile, IMAGE_EXTENSIONS, type RelocateFs } from "../core/relocate";
-import { defaultSizeSpec } from "../core/size";
 import { imageRefProblems, imageSources, type SnapshotImage } from "../core/submission";
 import { ipc } from "../shell/ipc";
 import { logEvent } from "../shell/log";
@@ -179,9 +179,14 @@ export function BoardCanvas({
   const [preview, setPreview] = useState<{ req: PreviewRequest; nonce: number } | null>(null);
   // 上下文菜单：client = 弹出处的窗口坐标，at = 同一点的画布坐标（新建节点落点）。
   const [menu, setMenu] = useState<{ target: MenuTarget; client: { x: number; y: number }; at: { x: number; y: number } } | null>(null);
-  const closeMenu = useCallback(() => setMenu(null), []);
+  const closeMenu = useCallback(() => {
+    setMenu(null);
+    setDragMenu(null);
+  }, []);
+  /** 拖线建节点多候选时弹的菜单（规格 4.1；目前三种起点均为单候选，此路径预留）。 */
+  const [dragMenu, setDragMenu] = useState<{ from: DragFrom; items: MenuItem[]; client: { x: number; y: number }; at: { x: number; y: number } } | null>(null);
   // 预设 / 预览弹窗、上下文菜单开着时快捷键不作用于背后的画板（菜单自己处理 Esc）。
-  const dialogOpen = presetsOpen || preview !== null || menu !== null;
+  const dialogOpen = presetsOpen || preview !== null || menu !== null || dragMenu !== null;
   const dialogOpenRef = useRef(false);
   dialogOpenRef.current = dialogOpen;
   /** 设置原地展开的任务节点：只在本地，不存盘。 */
@@ -278,12 +283,13 @@ export function BoardCanvas({
       moveImagePort: (taskId, from, to) =>
         !lockedRef.current.has(taskId) && updateBoard((b) => ({ ...b, edges: moveImagePort(b, taskId, from, to) }), { label: "调整图片顺序" }),
       forkPrompt: (promptId, text) => updateBoard((b) => forkPrompt(b, promptId, { newNodeId: crypto.randomUUID(), text }), { label: "分叉提示词" }),
-      continueEditing: (nodeId, sourceLayer = null) => {
+      continueEditing: (nodeId, sourceLayer = null, at) => {
         const selected = selectedRef.current;
         const sources = selected.has(nodeId) ? [...selected] : [nodeId];
         const ids = { taskId: crypto.randomUUID(), promptId: crypto.randomUUID() };
         const sourceLayers = sourceLayer === null ? null : new Map([[nodeId, sourceLayer]]);
-        if (!applyOutcome((b) => continueEditing(b, table, discovery, sources, nodeId, ids, sourceLayers), { label: "以此继续编辑" })) return;
+        const taskAt = at ? posOf(at) : null;
+        if (!applyOutcome((b) => continueEditing(b, table, discovery, sources, nodeId, ids, sourceLayers, taskAt), { label: "以此继续编辑" })) return;
         setSelectedNodes(new Set([ids.promptId]));
         setFocusPrompt(ids.promptId);
       },
@@ -592,16 +598,35 @@ export function BoardCanvas({
     [table, updateBoard],
   );
 
-  // 拖到端口上却不合法时，告诉用户原因。
+  const performDragCreateRef = useRef<(action: BoardAction, from: DragFrom, at: { x: number; y: number }) => void>(() => {});
+
+  // 松手：落在端口上却不合法时告诉原因；落在任务卡片上（非端口）接到下一个空端口；落在空白处建节点（拖线建节点）。
   const onConnectEnd = useCallback<OnConnectEnd>(
-    (_event, state) => {
-      if (state.isValid || !state.fromHandle || !state.toHandle || !state.fromNode || !state.toNode) return;
-      const [src, dst] = state.fromHandle.type === "source" ? [state.fromHandle, state.toHandle] : [state.toHandle, state.fromHandle];
-      if (locked.has(dst.nodeId)) return toast(LOCKED_HINT);
-      const verdict = canConnect(board, table, { source: src.nodeId, sourceHandle: src.id ?? "", target: dst.nodeId, targetHandle: dst.id ?? "" });
-      if (!verdict.ok) toast(verdict.reason);
+    (event, state) => {
+      if (state.isValid || !state.fromHandle) return;
+      if (state.toHandle && state.fromNode && state.toNode) {
+        const [src, dst] = state.fromHandle.type === "source" ? [state.fromHandle, state.toHandle] : [state.toHandle, state.fromHandle];
+        if (locked.has(dst.nodeId)) return toast(LOCKED_HINT);
+        const verdict = canConnect(board, table, { source: src.nodeId, sourceHandle: src.id ?? "", target: dst.nodeId, targetHandle: dst.id ?? "" });
+        if (!verdict.ok) toast(verdict.reason);
+        return;
+      }
+      const from: DragFrom = { nodeId: state.fromHandle.nodeId, handleId: state.fromHandle.id ?? "", type: state.fromHandle.type };
+      const client = clientPointOf(event);
+      const hit = dropTargetAt(client);
+      if (hit?.kind === "node") {
+        const r = cardDropConnection(board, table, from, hit.nodeId, locked);
+        if (!r) return;
+        if (!r.ok) return toast(r.reason);
+        return onConnect(r.connection);
+      }
+      if (hit?.kind !== "pane") return;
+      const items = dragCreateItems(board, from);
+      const at = flow.screenToFlowPosition(client);
+      if (items.length === 1) performDragCreateRef.current(items[0].action, from, at);
+      else if (items.length > 1) setDragMenu({ from, items, client, at });
     },
-    [board, table, toast, locked],
+    [board, table, toast, locked, flow, onConnect],
   );
 
   const onBeforeDelete = useCallback(
@@ -699,31 +724,20 @@ export function BoardCanvas({
     setPresetsOpen(false);
   };
 
-  const addTask = (at = centerPosition()) => {
-    const modelId = defaultTaskModel(table, discovery, board.last_model);
-    const model = modelId ? findModel(table, modelId) : undefined;
-    if (!model) return toast("能力表中没有上架模型");
-    const node: TaskNode = {
-      type: "task",
-      id: crypto.randomUUID(),
-      pos: posOf(at),
-      size: TASK_NODE_SIZE,
-      model: model.model_id,
-      size_spec: defaultSizeSpec(model.workflows.text_to_image.size_rule),
-      image_ports: 0,
-      layer_decomposition: false,
-      transparent_background: false,
-      last_submitted: null,
-      extra: {},
-    };
-    update((b) => ({ ...b, last_model: model.model_id, nodes: [...b.nodes, node] }), { label: "新建生成任务" });
-    setSelectedNodes(new Set([node.id]));
+  /** promptId = 从该提示词拖出（拖线建节点），接新任务的正向端口，与建节点同一步。 */
+  const addTask = (at = centerPosition(), promptId?: string) => {
+    const id = crypto.randomUUID();
+    if (applyOutcome((b) => newTask(b, table, discovery, id, posOf(at), promptId), { label: "新建生成任务" })) setSelectedNodes(new Set([id]));
   };
 
+  /**
+   * 导入参考图。attach = 同时接到该任务的下一个空图片端口（拖线建节点 / OS 文件拖到任务卡片上），
+   * place 见 attachReferences；建节点与接线同一步。
+   */
   const importReferences = useCallback(
-    async (paths: string[], at: { x: number; y: number }) => {
+    async (paths: string[], at: { x: number; y: number }, attach?: { taskId: string; place: "asIs" | "left" }) => {
       // 先逐张读取，再一次加到画板：一次导入是一步，张数只算读取成功的，读取期间的其他操作不会把它拆开。
-      const nodes: KnownNode[] = [];
+      const nodes: ReferenceNode[] = [];
       for (const abs of paths) {
         try {
           const info = await ipc.inspectImage(abs);
@@ -744,15 +758,28 @@ export function BoardCanvas({
         }
       }
       if (!nodes.length) return;
-      update((b) => ({ ...b, nodes: [...b.nodes, ...nodes] }), { label: countLabel("添加", nodes.length, "张参考图") });
+      const change = { label: countLabel("添加", nodes.length, "张参考图") };
+      if (attach) {
+        let problem: string | null = null;
+        updateBoard((b) => {
+          const r = attachReferences(b, table, nodes, attach.taskId, lockedRef.current, attach.place);
+          problem = r.reason;
+          return r.board;
+        }, change);
+        if (problem) toast(problem);
+      } else {
+        update((b) => ({ ...b, nodes: [...b.nodes, ...nodes] }), change);
+      }
       setSelectedNodes(new Set([nodes[nodes.length - 1].id]));
     },
-    [update, outputRoot, toast],
+    [update, updateBoard, table, outputRoot, toast],
   );
 
-  const pickReferences = async (at?: { x: number; y: number }) => {
-    const picked = await open({ multiple: true, filters: [{ name: "图片", extensions: IMAGE_EXTENSIONS }] });
-    if (picked) await importReferences(Array.isArray(picked) ? picked : [picked], at ?? centerPosition());
+  /** attachTo = 任务节点 id：只选一张，接到该任务的空图片端口（从图片端口反向拖线建节点）。 */
+  const pickReferences = async (at?: { x: number; y: number }, attachTo?: string) => {
+    const picked = await open({ multiple: !attachTo, filters: [{ name: "图片", extensions: IMAGE_EXTENSIONS }] });
+    if (!picked) return;
+    await importReferences(Array.isArray(picked) ? picked : [picked], at ?? centerPosition(), attachTo ? { taskId: attachTo, place: "asIs" } : undefined);
   };
 
   // 撤销 / 重做（供工具栏与上下文菜单）：锁定任务按当前状态保留。
@@ -830,6 +857,16 @@ export function BoardCanvas({
 
   performRef.current = performAction;
 
+  /** 拖线建节点：at = 松手处的画布坐标，新节点左上角落在这里。 */
+  performDragCreateRef.current = (action, from, at) => {
+    if (action === "continueEditing") actions.continueEditing(from.nodeId, null, at);
+    else if (action === "newTask") addTask(at, from.nodeId);
+    else if (action === "addReferences") {
+      if (lockedRef.current.has(from.nodeId)) return toast(LOCKED_HINT);
+      void pickReferences(at, from.nodeId);
+    }
+  };
+
   const menuEntries = menu ? menuItems(menu.target, menuFacts(menu.target.kind === "node" ? selectionForMenu(selectedNodes, menu.target.nodeId) : selectedNodes)) : [];
 
   // 悬浮动作条：光标在图片节点或动作条上时显示；从节点移到动作条之间留一点宽限。
@@ -864,7 +901,11 @@ export function BoardCanvas({
         const boards = paths.filter((p) => p.toLowerCase().endsWith(BOARD_EXTENSION));
         boards.forEach(openBoardPath);
         const images = paths.filter((p) => !boards.includes(p));
-        if (images.length) void importReferences(images, at);
+        if (!images.length) return;
+        // 落在任务节点卡片上：建参考图节点（任务左侧就近空位）并接到下一个空图片端口；其余落点照常导入到松手处。
+        const hit = dropTargetAt({ x: position.x / scale, y: position.y / scale });
+        const card = hit?.kind === "node" ? boardRef.current.nodes.find((n) => n.id === hit.nodeId) : undefined;
+        void importReferences(images, at, card?.type === "task" ? { taskId: card.id, place: "left" } : undefined);
       })
       .then((fn) => (disposed ? fn() : (unlisten = fn)));
     return () => {
@@ -964,6 +1005,14 @@ export function BoardCanvas({
         {menu && menuEntries.length > 0 && (
           <ContextMenu at={menu.client} items={menuEntries} onPick={(action) => performAction(action, menu.target, menu.at)} onClose={closeMenu} />
         )}
+        {dragMenu && (
+          <ContextMenu
+            at={dragMenu.client}
+            items={dragMenu.items}
+            onPick={(action) => performDragCreateRef.current(action, dragMenu.from, dragMenu.at)}
+            onClose={() => setDragMenu(null)}
+          />
+        )}
         {presetsOpen && <PresetDialog onUse={applyPreset} onClose={() => setPresetsOpen(false)} />}
         {preview && <PreviewDialog key={preview.nonce} req={preview.req} toast={toast} onClose={() => setPreview(null)} />}
         {hover.layer}
@@ -978,6 +1027,25 @@ export function BoardCanvas({
 function dragFromOf(c: ConnectionState): DragFrom | null {
   if (!c.inProgress) return null;
   return { nodeId: c.fromHandle.nodeId, handleId: c.fromHandle.id ?? "", type: c.fromHandle.type };
+}
+
+/** 指针事件的窗口坐标（鼠标或触控）。 */
+function clientPointOf(event: MouseEvent | TouchEvent): { x: number; y: number } {
+  if ("changedTouches" in event) {
+    const t = event.changedTouches[0];
+    return { x: t?.clientX ?? 0, y: t?.clientY ?? 0 };
+  }
+  return { x: event.clientX, y: event.clientY };
+}
+
+/** 窗口坐标处的落点：节点卡片、画布空白（含连线），其余（工具栏、小地图、控件、动作条等）为 null。 */
+function dropTargetAt(client: { x: number; y: number }): { kind: "node"; nodeId: string } | { kind: "pane" } | null {
+  const el = document.elementFromPoint(client.x, client.y);
+  const node = el?.closest(".react-flow__node");
+  const nodeId = node?.getAttribute("data-id");
+  if (nodeId) return { kind: "node", nodeId };
+  if (!el?.closest(".react-flow") || el.closest(".react-flow__panel, .react-flow__node-toolbar")) return null;
+  return { kind: "pane" };
 }
 
 function withAvailability(issues: string[], unavailable: string | null): string[] {

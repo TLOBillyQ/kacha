@@ -20,8 +20,8 @@ export interface BoardActions {
   moveImagePort: (taskId: string, from: number, to: number) => void;
   /** 编辑已提交过的提示词节点，选「断开并分叉」。 */
   forkPrompt: (promptId: string, text: string) => void;
-  /** 迭代动作：触发节点在多选内时按选中顺序带上其余图片节点；sourceLayer（1 起）= 接该图层而非合成结果。 */
-  continueEditing: (nodeId: string, sourceLayer?: number | null) => void;
+  /** 迭代动作：触发节点在多选内时按选中顺序带上其余图片节点；sourceLayer（1 起）= 接该图层而非合成结果；at = 新任务左上角的画布坐标（拖线建节点）。 */
+  continueEditing: (nodeId: string, sourceLayer?: number | null, at?: { x: number; y: number }) => void;
   addAsReference: (resultId: string, sourceLayer?: number | null) => void;
   generateVariant: (resultId: string) => void;
   /** 缺图节点：pick = 选文件，search = 在输出根目录内按身份找。 */
