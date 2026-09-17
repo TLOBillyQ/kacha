@@ -166,10 +166,10 @@ const buildQwenImagesEdits: RequestShape["build"] = (input) => {
  * 参考图为顶层 image 的 data-URL 数组（按序即图N）；负向提示词不支持，不发。
  */
 const buildSeedreamImagesGenerations: RequestShape["build"] = (input) => {
-  const { model, prompt, negativePrompt, size, references } = input;
+  const { model, prompt, size, references } = input;
   const body: Record<string, unknown> = {
     model: model.model_id,
-    prompt: composeSendText({ prompt, negativePrompt, referenceCount: references.length, regionPhrases: input.regionPhrases ?? [], regionNames: input.regionNames ?? [] }),
+    prompt: composeSendText({ prompt, negativePrompt: "", referenceCount: references.length, regionPhrases: input.regionPhrases ?? [], regionNames: input.regionNames ?? [] }),
     size: `${size.width}x${size.height}`,
     response_format: "url",
     ...model.fixed_params,

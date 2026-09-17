@@ -12,6 +12,7 @@ import {
   type FetchLike,
   type GenerationInput,
 } from "./gateway";
+import { overlayPhrases, regionNames, type SlotRef } from "./region";
 
 const FIXTURE_DIRS = [
   "2026-08-17-team-gateway",
@@ -235,19 +236,24 @@ describe("网关适配器：Seedream 请求形态对照夹具", () => {
   it("区域指示：叠加图紧随原图，固定句追加在末尾、「区域N」改写为颜色指代", () => {
     const fixture = loadFixture(SEEDREAM_DIR, "lite-region-overlay-1.json");
     const overlay = { mediaType: "image/png", bytes: new Uint8Array([9]) };
+    const slots: SlotRef[] = [
+      { kind: "image", port: 1, sourcePort: null, regionCount: 0 },
+      { kind: "overlay", port: 2, sourcePort: 1, regionCount: 1 },
+    ];
     const { body } = buildGenerationRequest(
       textInput({
         model: seedreamLite,
         prompt: "把区域1改成红色",
         size: { width: 3456, height: 1152 },
         references: [png, overlay],
-        regionPhrases: ["图2 是图1 的标注版"],
-        regionNames: ["紫色区域"],
+        regionPhrases: overlayPhrases(seedreamLite, slots, "zh"),
+        regionNames: regionNames(slots, "zh"),
       }),
     );
     expectSeedreamBody(body, fixture, 2);
     expect((body.image as string[])[1]).toBe("data:image/png;base64,CQ==");
-    expect(body.prompt).toBe("本次提供 2 张参考图，按顺序为图1、图2。\n把紫色区域改成红色\n图2 是图1 的标注版");
+    const template = seedreamLite.region_hint_phrasing.highlight_overlay!.zh;
+    expect(body.prompt).toBe(`本次提供 2 张参考图，按顺序为图1、图2。\n把紫色区域改成红色\n${template.replaceAll("{overlay}", "2").replaceAll("{source}", "1").replaceAll("{colors}", "紫色")}`);
   });
 
   it("透明背景：pro 打开开关附带 background:transparent；关闭不带", () => {
@@ -259,6 +265,12 @@ describe("网关适配器：Seedream 请求形态对照夹具", () => {
     const ctl = loadFixture(SEEDREAM_DIR, "pro-transparent-ctl.json");
     const off = buildGenerationRequest({ ...input, transparentBackground: false }).body;
     expectSeedreamBody(off, ctl, 1);
+  });
+
+  it("负向提示词不支持：不并入发送文本", () => {
+    const { body } = buildGenerationRequest(textInput({ model: seedreamPro, negativePrompt: "模糊", references: [png] }));
+    expect(body.prompt).not.toContain("模糊");
+    expect(body).not.toHaveProperty("negative_prompt");
   });
 
   it("透明背景：能力表不支持的模型（lite、qwen）即使开关打开也不发 background", () => {
