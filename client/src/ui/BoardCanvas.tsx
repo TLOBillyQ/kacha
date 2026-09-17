@@ -921,27 +921,14 @@ export function BoardCanvas({
       <DragContext.Provider value={drag}>
       {/* 画布内屏蔽 WebView 默认右键菜单；可编辑元素保留原生菜单（复制粘贴）。 */}
       <div
-        className={["canvas", nav.hand ? "hand" : "", drag ? "connecting" : ""].join(" ").trim()}
+        className={["canvas", drag ? "connecting" : ""].join(" ").trim()}
         ref={wrapper}
         onContextMenu={(e) => !isTyping(e.target) && e.preventDefault()}
         onPointerDownCapture={nav.onPointerDownCapture}
         onPointerUpCapture={nav.onPointerUpCapture}
       >
         <div className="toolbar">
-          <button onClick={() => addPrompt()}>＋ 提示词</button>
-          <button onClick={() => addTask()}>＋ 生成任务</button>
-          <button onClick={() => void pickReferences()}>＋ 参考图…</button>
           <button onClick={() => setPresetsOpen(true)}>＋ 从预设…</button>
-          <HoverButton
-            className={nav.hand ? "active" : undefined}
-            onClick={nav.toggleHand}
-            onMouseUp={(e) => e.currentTarget.blur()}
-            aria-pressed={nav.hand}
-            info={textHoverInfo("手形：左键拖动平移画布（H）")}
-            aria-label="手形"
-          >
-            ✋
-          </HoverButton>
           <HoverButton onClick={undo} disabled={!undoLabel} info={textHoverInfo(undoLabel ? `撤销 ${undoLabel}（Ctrl+Z）` : "没有可撤销的操作")} aria-label="撤销">
             ↶
           </HoverButton>

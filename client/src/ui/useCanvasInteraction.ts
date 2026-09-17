@@ -2,7 +2,7 @@
 // 方向键微移、Ctrl+J 原地偏移复制、Alt + 拖复制。React Flow 的相关配置与这些键位收在这里，BoardCanvas 只接线。
 // 撤销 / 重做、复制粘贴的 Ctrl 键仍在 BoardCanvas（#105），两边键位不重叠。
 import { SelectionMode, useReactFlow, useStoreApi, type Node, type ReactFlowProps } from "@xyflow/react";
-import { useCallback, useEffect, useRef, useState, type Dispatch, type MutableRefObject, type RefObject, type SetStateAction } from "react";
+import { useCallback, useEffect, useRef, type Dispatch, type MutableRefObject, type RefObject, type SetStateAction } from "react";
 import type { Board } from "../core/board";
 import { countLabel, MERGE_PAUSE_MS, type UserChange } from "../core/history";
 import { PASTE_OFFSET } from "../core/iterate";
@@ -45,8 +45,6 @@ function idSequence(count: number): () => () => string {
 export function useCanvasInteraction({ wrapper, boardRef, selection, dialogOpen, updateBoard }: Options) {
   const flow = useReactFlow();
   const store = useStoreApi();
-  const [hand, setHand] = useState(false);
-  const toggleHand = useCallback(() => setHand((h) => !h), []);
 
   // Shift + 框选：React Flow 框选开始时会先清空选区，按下时记下原选区并忽略对它的取消选中。
   const keep = useRef(NONE);
@@ -143,7 +141,6 @@ export function useCanvasInteraction({ wrapper, boardRef, selection, dialogOpen,
         selection.setEdges(new Set());
         return;
       }
-      if (e.key.toLowerCase() === "h" && !e.shiftKey) return setHand((h) => !h);
       const delta = nudgeDelta(e.key, e.shiftKey);
       const ids = [...selection.nodes.current].sort();
       if (!delta || !ids.length) return;
@@ -155,12 +152,12 @@ export function useCanvasInteraction({ wrapper, boardRef, selection, dialogOpen,
   }, [wrapper, flow, store, boardRef, selection, dialogOpen, updateBoard]);
 
   const flowProps: Partial<ReactFlowProps> = {
-    selectionOnDrag: !hand,
+    selectionOnDrag: true,
     selectionMode: SelectionMode.Partial,
     // Shift 用于加选；框选靠左键拖空白，不另设框选键（否则 Shift + 点节点会变成框选）。
     selectionKeyCode: null,
     multiSelectionKeyCode: "Shift",
-    panOnDrag: hand ? [0, 1] : [1],
+    panOnDrag: [1],
     panActivationKeyCode: "Space",
     zoomOnScroll: true,
     zoomOnPinch: true,
@@ -170,5 +167,5 @@ export function useCanvasInteraction({ wrapper, boardRef, selection, dialogOpen,
     disableKeyboardA11y: true,
   };
 
-  return { hand, toggleHand, flowProps, selectNodes, selectEdges, startDrag, stopDrag, onPointerDownCapture, onPointerUpCapture };
+  return { flowProps, selectNodes, selectEdges, startDrag, stopDrag, onPointerDownCapture, onPointerUpCapture };
 }

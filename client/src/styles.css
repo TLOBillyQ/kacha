@@ -756,9 +756,6 @@ button.primary[aria-disabled="true"] {
 .react-flow__edge.dimmed {
   opacity: 0.35;
 }
-.canvas.hand .react-flow__pane {
-  cursor: grab;
-}
 
 /* ---- 放大预览 / 区域指示 ---- */
 .modal-preview {
