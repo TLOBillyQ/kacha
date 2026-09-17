@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { Board, TaskNode } from "../core/board";
 import type { CapabilityTable } from "../core/capabilities";
 import { GatewayError } from "../core/gateway";
+import type { Change } from "../core/history";
 import * as Q from "../core/queue";
 import { CancelledError, executeJob, failureLabel, prepareJob, prepareRegenerate, writeJob, type PreparedJob, type RunDeps, type TaskStatus } from "../core/run";
 import { tableDigest, writeOutcome, type TaskOutcome } from "../core/taskDir";
@@ -65,7 +66,7 @@ function errorFields(error: unknown): Record<string, unknown> {
 
 interface RunnerBoards {
   getBoard: (key: string) => Board | null;
-  updateBoard: (key: string, fn: (b: Board) => Board) => void;
+  updateBoard: (key: string, fn: (b: Board) => Board, change: Change) => void;
   boardFileName: (key: string) => string | null;
 }
 
@@ -122,10 +123,11 @@ export function useRunner(boards: RunnerBoards, concurrency: number) {
   );
 
   const setLastSubmitted = useCallback((boardKey: string, taskNodeId: string, value: TaskNode["last_submitted"]) => {
-    boardsRef.current.updateBoard(boardKey, (b) => ({
-      ...b,
-      nodes: b.nodes.map((n) => (n.id === taskNodeId && n.type === "task" ? { ...n, last_submitted: value } : n)),
-    }));
+    boardsRef.current.updateBoard(
+      boardKey,
+      (b) => ({ ...b, nodes: b.nodes.map((n) => (n.id === taskNodeId && n.type === "task" ? { ...n, last_submitted: value } : n)) }),
+      "system",
+    );
   }, []);
 
   /** 任务目录已写的任务没有结果时记下结局，重开时据此区分失败 / 已取消 / 已中断；写不了就算了。 */
@@ -168,7 +170,7 @@ export function useRunner(boards: RunnerBoards, concurrency: number) {
         });
         if (controller.signal.aborted) return;
         logTransition(entry, "running", "succeeded");
-        boardsRef.current.updateBoard(target.boardKey, apply);
+        boardsRef.current.updateBoard(target.boardKey, apply, "system");
         setStatus(job.taskNodeId, null);
         queue.current = Q.complete(queue.current, taskId);
       } catch (e) {

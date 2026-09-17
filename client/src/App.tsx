@@ -5,6 +5,7 @@ import { ReactFlowProvider } from "@xyflow/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { BOARD_EXTENSION, type Board } from "./core/board";
 import { BUILTIN_TABLE, effectiveTable, type CapabilityTable } from "./core/capabilities";
+import { redoLabel, undoLabel, type Change } from "./core/history";
 import { basename } from "./core/paths";
 import { runScope, buildConfirmItems, imageSources, type ConfirmItem } from "./core/submission";
 import { parseUiState, serializeUiState, type UiState } from "./core/uiState";
@@ -37,12 +38,14 @@ export function App() {
   const boards = useBoardSessions(outputRoot);
   const { sessions, activeKey, openPath, createBoard, flushAll } = boards;
 
-  const { updateBoard } = boards;
+  const { updateBoard, undoBoard, redoBoard } = boards;
   const runner = useRunner(boards, settings.settings.concurrency);
   const runnerRef = useRef(runner);
   runnerRef.current = runner;
   const [focus, setFocus] = useState<{ boardKey: string; nodeId: string; nonce: number } | null>(null);
-  const updateActive = useCallback((fn: (b: Board) => Board) => activeKey && updateBoard(activeKey, fn), [activeKey, updateBoard]);
+  const updateActive = useCallback((fn: (b: Board) => Board, change: Change) => activeKey && updateBoard(activeKey, fn, change), [activeKey, updateBoard]);
+  const undoActive = useCallback((locked: ReadonlySet<string>) => activeKey && undoBoard(activeKey, locked), [activeKey, undoBoard]);
+  const redoActive = useCallback((locked: ReadonlySet<string>) => activeKey && redoBoard(activeKey, locked), [activeKey, redoBoard]);
   const openFromCanvas = useCallback((p: string) => void openOrWarnRef.current(p), []);
   const openOrWarnRef = useRef<(p: string) => Promise<void>>(async () => undefined);
 
@@ -354,6 +357,10 @@ export function App() {
               table={table}
               outputRoot={outputRoot}
               update={updateActive}
+              onUndo={undoActive}
+              onRedo={redoActive}
+              undoLabel={undoLabel(active.history)}
+              redoLabel={redoLabel(active.history)}
               openBoardPath={openFromCanvas}
               toast={toast}
               discovery={settings.discovery}

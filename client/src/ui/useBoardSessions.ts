@@ -10,6 +10,7 @@ import {
   uniqueBoardFileName,
   type Board,
 } from "../core/board";
+import { emptyHistory, recordChange, redo, undo, type Change, type History } from "../core/history";
 import { basename, boardsDir, dirname, joinPath } from "../core/paths";
 import { ipc } from "../shell/ipc";
 import { logEvent } from "../shell/log";
@@ -17,7 +18,7 @@ import { logEvent } from "../shell/log";
 export const AUTOSAVE_DEBOUNCE_MS = 1000;
 
 export type Session =
-  | { key: string; path: string; status: "ok"; board: Board; notice: string | null; saveError: string | null }
+  | { key: string; path: string; status: "ok"; board: Board; history: History; notice: string | null; saveError: string | null }
   | { key: string; path: string; status: "newer"; version: number }
   | { key: string; path: string; status: "corrupt"; reason: string };
 
@@ -90,18 +91,33 @@ export function useBoardSessions(outputRoot: string | null) {
     [flush],
   );
 
-  /** 所有图变更的唯一入口：更新内存并排程去抖保存。 */
+  /** 所有图变更的唯一入口：更新内存、记撤销步（系统写入与视口不记）并排程去抖保存。 */
   const updateBoard = useCallback(
-    (key: string, fn: (board: Board) => Board) => {
+    (key: string, fn: (board: Board) => Board, change: Change) => {
       const s = sessionsRef.current.find((x) => x.key === key);
       if (!s || s.status !== "ok") return;
       const board = fn(s.board);
       if (board === s.board) return;
-      patch(key, (x) => ({ ...x, board }));
+      patch(key, (x) => ({ ...x, board, history: recordChange(x.history, s.board, change, Date.now()) }));
       scheduleSave(key);
     },
     [patch, scheduleSave],
   );
+
+  /** 撤销 / 重做一步；locked = 排队 / 执行中的任务节点 id，其参数与输入连线按当前状态保留。 */
+  const travel = useCallback(
+    (key: string, direction: typeof undo, locked: ReadonlySet<string>) => {
+      const s = sessionsRef.current.find((x) => x.key === key);
+      if (!s || s.status !== "ok") return;
+      const r = direction(s.history, s.board, locked);
+      if (!r) return;
+      patch(key, (x) => ({ ...x, board: r.board, history: r.history }));
+      scheduleSave(key);
+    },
+    [patch, scheduleSave],
+  );
+  const undoBoard = useCallback((key: string, locked: ReadonlySet<string>) => travel(key, undo, locked), [travel]);
+  const redoBoard = useCallback((key: string, locked: ReadonlySet<string>) => travel(key, redo, locked), [travel]);
 
   /** 最新的画板内容（不等 React 重渲染）；会话不存在或不可编辑时为 null。 */
   const getBoard = useCallback((key: string): Board | null => {
@@ -145,6 +161,7 @@ export function useBoardSessions(outputRoot: string | null) {
               path,
               status: "ok",
               board: opened.board,
+              history: emptyHistory(),
               notice: opened.recoveredFromBak ? "画板主文件已损坏，已从备份 .bak 恢复；下次保存会写回主文件。" : null,
               saveError: null,
             }
@@ -165,7 +182,7 @@ export function useBoardSessions(outputRoot: string | null) {
     const openHere = sessionsRef.current.filter((s) => samePath(dirname(s.path), dir)).map((s) => basename(s.path));
     const path = joinPath(dir, uniqueBoardFileName(DEFAULT_BOARD_TITLE, [...onDisk, ...openHere]));
     const key = crypto.randomUUID();
-    setSessions([...sessionsRef.current, { key, path, status: "ok", board: newBoard(), notice: null, saveError: null }]);
+    setSessions([...sessionsRef.current, { key, path, status: "ok", board: newBoard(), history: emptyHistory(), notice: null, saveError: null }]);
     setActiveKey(key);
     // 立即落盘占住文件名。
     await flush(key);
@@ -247,6 +264,8 @@ export function useBoardSessions(outputRoot: string | null) {
     renameBoard,
     saveAs,
     updateBoard,
+    undoBoard,
+    redoBoard,
     getBoard,
     boardFileName,
     closeAll,
