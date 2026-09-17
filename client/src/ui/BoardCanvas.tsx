@@ -5,6 +5,8 @@ import {
   Background,
   Controls,
   MiniMap,
+  NodeToolbar,
+  Position,
   ReactFlow,
   useReactFlow,
   type Edge,
@@ -38,10 +40,12 @@ import {
   workflowOf,
   type Connection,
 } from "../core/graph";
-import { menuItems, selectionForMenu, type BoardAction, type MenuTarget } from "../core/contextMenu";
+import { menuItems, selectionForMenu, actionBarItems, type BoardAction, type MenuFacts, type MenuTarget } from "../core/contextMenu";
+import { edgeHoverInfo, textHoverInfo } from "../core/hoverInfo";
 import { countLabel, nodeEditChange, type Change, type UserChange } from "../core/history";
-import { addAsReference, addAsReferenceTarget, continueEditing, copySelection, lineage, LOCKED_HINT, pasteClip, PASTE_OFFSET, producerOf, variantBlocker, type Clip, type Outcome } from "../core/iterate";
+import { addAsReference, addAsReferenceTarget, continueEditing, copySelection, lineage, LOCKED_HINT, pasteClip, PASTE_OFFSET, producerOf, type Clip, type Outcome } from "../core/iterate";
 import { PROMPT_NODE_SIZE, TASK_NODE_SIZE } from "../core/layout";
+import { IMAGE_NODE_WIDTH, imageNodeSize, renderedImageSize } from "../core/nodeSize";
 import { placePreset, type Preset } from "../core/presets";
 import { basename, dirname, joinPath, resolveFromRoot, toRootRelative } from "../core/paths";
 import { effectiveRegionRender, setEdgeRegion } from "../core/region";
@@ -50,10 +54,12 @@ import { defaultSizeSpec } from "../core/size";
 import { imageRefProblems, imageSources, type SnapshotImage } from "../core/submission";
 import { ipc } from "../shell/ipc";
 import { logEvent } from "../shell/log";
+import { ActionBar } from "./ActionBar";
 import { ContextMenu } from "./ContextMenu";
 import { PresetDialog } from "./PresetDialog";
 import { BoardContext, primeImageInfo, useImageInfos, useMissingImages, useStoredStatuses, type BoardActions } from "./context";
 import { edgeTypes } from "./edges";
+import { HoverButton, HoverProvider, useHoverLayer } from "./hoverInfo";
 import { nodeTypes, type ImagePortInfo, type ImageSlotInfo } from "./nodes";
 import { PreviewDialog, type PreviewRequest, type RegionTarget } from "./PreviewDialog";
 import { isTyping, useCanvasInteraction, type Selection } from "./useCanvasInteraction";
@@ -167,9 +173,21 @@ export function BoardCanvas({
   const [focusPrompt, setFocusPrompt] = useState<string | null>(null);
   const missing = useMissingImages(board, outputRoot);
   const [preview, setPreview] = useState<{ req: PreviewRequest; nonce: number } | null>(null);
-  // 预设 / 预览弹窗开着时快捷键不作用于背后的画板。
+  // 上下文菜单：client = 弹出处的窗口坐标，at = 同一点的画布坐标（新建节点落点）。
+  const [menu, setMenu] = useState<{ target: MenuTarget; client: { x: number; y: number }; at: { x: number; y: number } } | null>(null);
+  const closeMenu = useCallback(() => setMenu(null), []);
+  // 预设 / 预览弹窗、上下文菜单开着时快捷键不作用于背后的画板（菜单自己处理 Esc）。
+  const dialogOpen = presetsOpen || preview !== null || menu !== null;
   const dialogOpenRef = useRef(false);
-  dialogOpenRef.current = presetsOpen || preview !== null;
+  dialogOpenRef.current = dialogOpen;
+  /** 设置原地展开的任务节点：只在本地，不存盘。 */
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
+  const hover = useHoverLayer();
+  // 撤销 / 删除后不在画板上的任务不留展开状态。
+  useEffect(() => {
+    const present = new Set(board.nodes.map((n) => n.id));
+    setExpanded((s) => ([...s].every((id) => present.has(id)) ? s : new Set([...s].filter((id) => present.has(id)))));
+  }, [board.nodes]);
   const selection = useMemo<Selection>(() => ({ nodes: selectedRef, edges: selectedEdgesRef, setNodes: setSelectedNodes, setEdges: setSelectedEdges }), []);
   const nav = useCanvasInteraction({ wrapper, boardRef, selection, dialogOpen: dialogOpenRef, updateBoard });
   const previewNonce = useRef(0);
@@ -233,8 +251,11 @@ export function BoardCanvas({
   const lockedRef = useRef(locked);
   lockedRef.current = locked;
 
+  // perform 依赖每次渲染重建的新建类函数，经 ref 取最新一版，actions 保持稳定。
+  const performRef = useRef<BoardActions["perform"]>(() => {});
   const actions = useMemo<BoardActions>(
     () => ({
+      perform: (action, target, at) => performRef.current(action, target, at),
       table,
       outputRoot,
       availableModels: availableModels(table, discovery),
@@ -253,8 +274,6 @@ export function BoardCanvas({
       moveImagePort: (taskId, from, to) =>
         !lockedRef.current.has(taskId) && updateBoard((b) => ({ ...b, edges: moveImagePort(b, taskId, from, to) }), { label: "调整图片顺序" }),
       forkPrompt: (promptId, text) => updateBoard((b) => forkPrompt(b, promptId, { newNodeId: crypto.randomUUID(), text }), { label: "分叉提示词" }),
-      cancelTask: onCancelTask,
-      regenerate: onRegenerate,
       continueEditing: (nodeId, sourceLayer = null) => {
         const selected = selectedRef.current;
         const sources = selected.has(nodeId) ? [...selected] : [nodeId];
@@ -341,9 +360,13 @@ export function BoardCanvas({
   // 选中任一节点即高亮其谱系。
   const highlighted = useMemo(() => lineage(board, [...selectedNodes]), [board, selectedNodes]);
 
+  const menuFacts = useCallback(
+    (selected: ReadonlySet<string>): MenuFacts => ({ board, table, selected, locked, expanded, undoLabel, redoLabel }),
+    [board, table, locked, expanded, undoLabel, redoLabel],
+  );
+
   const nodes = useMemo<Node[]>(() => {
     const fallback = defaultModel(table);
-    const referenceTarget = addAsReferenceTarget(board, [...selectedNodes]);
     const labelOf = (id: string): ImagePortInfo => {
       const src = board.nodes.find((n) => n.id === id);
       if (src?.type === "reference") return { label: src.display_name, absPath: resolveFromRoot(outputRoot, src.path) };
@@ -359,11 +382,16 @@ export function BoardCanvas({
         measured: measured[n.id],
         className: highlighted.nodes.has(n.id) ? "in-lineage" : selectedNodes.size ? "dimmed" : undefined,
       };
+      // 图片节点按存的宽度与图片比例显示（不回写 size）；缺图时高度随占位内容。
+      const imageBox = (path: string) => {
+        const [width, height] = renderedImageSize(n.size, imageInfos.get(resolveFromRoot(outputRoot, path)));
+        return missing.has(n.id) ? { width } : { width, height };
+      };
       switch (n.type) {
         case "prompt":
           return [{ ...base, type: "prompt", data: { node: n, recorded: hasDownstreamRecords(board, n.id), autoFocus: focusPrompt === n.id } }];
         case "result":
-          return [{ ...base, type: "result", data: { node: n, missing: missing.has(n.id), referenceTarget, variantBlocker: variantBlocker(board, n.id, locked) } }];
+          return [{ ...base, ...imageBox(n.path), type: "result", data: { node: n, missing: missing.has(n.id) } }];
         case "reference": {
           const downstream = board.edges.filter((e) => e.from[0] === n.id).map((e) => board.nodes.find((t) => t.id === e.to[0]));
           const modelIds = downstream.flatMap((t) => (t?.type === "task" ? [t.model] : []));
@@ -372,7 +400,7 @@ export function BoardCanvas({
             const rule = findModel(table, id)?.input_image_rule;
             return rule ? [rule] : [];
           });
-          return [{ ...base, type: "reference", data: { node: n, rules, missing: missing.has(n.id) } }];
+          return [{ ...base, ...imageBox(n.path), type: "reference", data: { node: n, rules, missing: missing.has(n.id) } }];
         }
         case "task": {
           const refs = imageRefProblems(board, table, n.id);
@@ -417,13 +445,15 @@ export function BoardCanvas({
                 regionRender: render,
                 hasPositive: board.edges.some((e) => e.to[0] === n.id && e.to[1] === "positive"),
                 status: statusOf(n.id),
+                expanded: expanded.has(n.id),
+                run: menuItems({ kind: "node", nodeId: n.id }, menuFacts(new Set([n.id]))).find((i) => i.action === "run")!,
               },
             },
           ];
         }
       }
     });
-  }, [board, table, outputRoot, selectedNodes, measured, statusOf, locked, discovery, highlighted, missing, focusPrompt, alphaByNode]);
+  }, [board, table, outputRoot, selectedNodes, measured, statusOf, locked, discovery, highlighted, missing, focusPrompt, alphaByNode, imageInfos, expanded, menuFacts]);
 
   const edges = useMemo<Edge[]>(
     () =>
@@ -462,17 +492,45 @@ export function BoardCanvas({
     dragLabel.current = null;
   }, [nav.stopDrag]);
 
+  /** 进行中的拖角缩放编号（0 = 没在缩放）；一次缩放从按下到松开合为一步。 */
+  const activeResize = useRef(0);
+  const resizeCounter = useRef(0);
+
   const onNodesChange = useCallback(
     (changes: NodeChange[]) => {
       const moves = new Map<string, { x: number; y: number }>();
+      const resized = new Map<string, { width: number; height: number }>();
       nav.selectNodes(changes.flatMap((c) => (c.type === "select" ? [c] : [])));
       for (const c of changes) {
         if (c.type === "position" && c.position) moves.set(c.id, c.position);
         else if (c.type === "dimensions" && c.dimensions) {
           const { width, height } = c.dimensions;
           setMeasured((m) => (m[c.id]?.width === width && m[c.id]?.height === height ? m : { ...m, [c.id]: dims(width, height) }));
+          // NodeResizer 拖动中带 resizing: true，松开时报一次 resizing: false；普通测量不带 resizing。
+          if (c.resizing) resized.set(c.id, c.dimensions);
+          else if (c.resizing === false) activeResize.current = 0;
         }
         // remove 由 onBeforeDelete / onDelete 统一处理。
+      }
+      if (resized.size) {
+        // 从左 / 上角缩放时同一批带位置变更：与尺寸一起写，不另算移动。
+        activeResize.current ||= ++resizeCounter.current;
+        const at = new Map([...resized.keys()].flatMap((id) => (moves.has(id) ? [[id, moves.get(id)!] as const] : [])));
+        resized.forEach((_, id) => moves.delete(id));
+        update((b) => {
+          let changed = false;
+          const nodes = b.nodes.map((n) => {
+            const box = resized.get(n.id);
+            if (!box || n.type === "unknown") return n;
+            const p = at.get(n.id);
+            const pos: [number, number] = p ? [Math.round(p.x), Math.round(p.y)] : n.pos;
+            const size = imageNodeSize(box.width, box.height / box.width);
+            if (pos[0] === n.pos[0] && pos[1] === n.pos[1] && size[0] === n.size[0] && size[1] === n.size[1]) return n;
+            changed = true;
+            return { ...n, pos, size };
+          });
+          return changed ? { ...b, nodes } : b;
+        }, { label: countLabel("缩放", resized.size), merge: { key: `resize:${activeResize.current}` } });
       }
       if (moves.size) {
         // 一次拖动（含多选、Alt + 拖复制）从开始到 onNodeDragStop 合为一步；方向键微移不经这里（useCanvasInteraction）。
@@ -667,7 +725,7 @@ export function BoardCanvas({
             type: "reference",
             id: crypto.randomUUID(),
             pos: posOf({ x: at.x + offset, y: at.y + offset }),
-            size: [200, 220],
+            size: imageNodeSize(IMAGE_NODE_WIDTH, info.width > 0 ? info.height / info.width : 1),
             path: toRootRelative(outputRoot, abs),
             sha256: info.sha256,
             display_name: basename(abs),
@@ -706,7 +764,7 @@ export function BoardCanvas({
         else redo();
         return;
       }
-      if (e.shiftKey) return;
+      if (e.shiftKey || dialogOpenRef.current) return;
       if (key === "c" && selectedRef.current.size) {
         clipboard = copySelection(boardRef.current, [...selectedRef.current]);
       } else if (key === "v" && clipboard?.nodes.length) {
@@ -727,9 +785,6 @@ export function BoardCanvas({
     return () => window.removeEventListener("keydown", onKey);
   }, [updateBoard, undo, redo]);
 
-  // 上下文菜单：client = 弹出处的窗口坐标，at = 同一点的画布坐标（新建节点落点）。
-  const [menu, setMenu] = useState<{ target: MenuTarget; client: { x: number; y: number }; at: { x: number; y: number } } | null>(null);
-  const closeMenu = useCallback(() => setMenu(null), []);
   const openMenu = (e: ReactMouseEvent | MouseEvent, target: MenuTarget) => {
     e.preventDefault();
     if (target.kind === "node") {
@@ -741,7 +796,7 @@ export function BoardCanvas({
   };
 
   /** 按 action 执行：与工具栏 / 节点按钮同一套逻辑（删除、断开走 React Flow 删除流程，规则同 Delete 键）。 */
-  const performAction = (action: BoardAction, target: MenuTarget, at: { x: number; y: number }) => {
+  const performAction = (action: BoardAction, target: MenuTarget, at?: { x: number; y: number }) => {
     if (action === "newPrompt") addPrompt(at);
     else if (action === "newTask") addTask(at);
     else if (action === "addReferences") void pickReferences(at);
@@ -756,6 +811,7 @@ export function BoardCanvas({
       else if (action === "run") onRun([id]);
       else if (action === "cancel") onCancelTask(id);
       else if (action === "regenerate") onRegenerate(id);
+      else if (action === "toggleSettings") setExpanded((s) => (s.has(id) ? new Set([...s].filter((x) => x !== id)) : new Set([...s, id])));
       else if (action === "delete") void flow.deleteElements({ nodes: [...selectionForMenu(selectedRef.current, id)].map((n) => ({ id: n })) });
     } else if (target.kind === "edge") {
       const { edge } = target;
@@ -764,9 +820,28 @@ export function BoardCanvas({
     }
   };
 
-  const menuEntries = menu
-    ? menuItems(menu.target, { board, table, selected: menu.target.kind === "node" ? selectionForMenu(selectedNodes, menu.target.nodeId) : selectedNodes, locked, undoLabel, redoLabel })
-    : [];
+  performRef.current = performAction;
+
+  const menuEntries = menu ? menuItems(menu.target, menuFacts(menu.target.kind === "node" ? selectionForMenu(selectedNodes, menu.target.nodeId) : selectedNodes)) : [];
+
+  // 悬浮动作条：光标在图片节点或动作条上时显示；从节点移到动作条之间留一点宽限。
+  const [hovered, setHovered] = useState<string | null>(null);
+  const unhoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** id = 显示该节点的动作条；null = 只取消待收起。 */
+  const showActionBar = (id: string | null) => {
+    if (unhoverTimer.current !== null) clearTimeout(unhoverTimer.current);
+    unhoverTimer.current = null;
+    if (id !== null) setHovered(id);
+  };
+  const hideActionBarSoon = () => {
+    showActionBar(null);
+    unhoverTimer.current = setTimeout(() => setHovered(null), 150);
+  };
+  useEffect(() => () => showActionBar(null), []);
+  const hoveredPresent = hovered !== null && board.nodes.some((n) => n.id === hovered);
+  const barItems = hoveredPresent && !menu ? actionBarItems(hovered, menuFacts(selectedNodes)) : [];
+  // 悬浮在多选内的节点上：选区上方只出一条。
+  const barNodes = hoveredPresent ? (selectedNodes.size > 1 && selectedNodes.has(hovered) ? [...selectedNodes] : [hovered]) : [];
 
   // 从资源管理器拖入：画板文件打开为标签页，其余当参考图导入。
   useEffect(() => {
@@ -792,6 +867,7 @@ export function BoardCanvas({
 
   return (
     <BoardContext.Provider value={actions}>
+      <HoverProvider value={hover.controller}>
       {/* 画布内屏蔽 WebView 默认右键菜单；可编辑元素保留原生菜单（复制粘贴）。 */}
       <div
         className={nav.hand ? "canvas hand" : "canvas"}
@@ -805,18 +881,25 @@ export function BoardCanvas({
           <button onClick={() => addTask()}>＋ 生成任务</button>
           <button onClick={() => void pickReferences()}>＋ 参考图…</button>
           <button onClick={() => setPresetsOpen(true)}>＋ 从预设…</button>
-          <button className={nav.hand ? "active" : undefined} onClick={nav.toggleHand} onMouseUp={(e) => e.currentTarget.blur()} aria-pressed={nav.hand} title="手形：左键拖动平移画布（H）" aria-label="手形">
+          <HoverButton
+            className={nav.hand ? "active" : undefined}
+            onClick={nav.toggleHand}
+            onMouseUp={(e) => e.currentTarget.blur()}
+            aria-pressed={nav.hand}
+            info={textHoverInfo("手形：左键拖动平移画布（H）")}
+            aria-label="手形"
+          >
             ✋
-          </button>
-          <button onClick={undo} disabled={!undoLabel} title={undoLabel ? `撤销 ${undoLabel}（Ctrl+Z）` : "没有可撤销的操作"} aria-label="撤销">
+          </HoverButton>
+          <HoverButton onClick={undo} disabled={!undoLabel} info={textHoverInfo(undoLabel ? `撤销 ${undoLabel}（Ctrl+Z）` : "没有可撤销的操作")} aria-label="撤销">
             ↶
-          </button>
-          <button onClick={redo} disabled={!redoLabel} title={redoLabel ? `重做 ${redoLabel}（Ctrl+Shift+Z）` : "没有可重做的操作"} aria-label="重做">
+          </HoverButton>
+          <HoverButton onClick={redo} disabled={!redoLabel} info={textHoverInfo(redoLabel ? `重做 ${redoLabel}（Ctrl+Shift+Z）` : "没有可重做的操作")} aria-label="重做">
             ↷
-          </button>
-          <button className="primary" onClick={() => onRun([...selectedNodes])} title="有选中时只运行选中子图，否则运行整个画板中需要运行的任务">
+          </HoverButton>
+          <HoverButton className="primary" onClick={() => onRun([...selectedNodes])} info={textHoverInfo("有选中时只运行选中子图，否则运行整个画板中需要运行的任务")}>
             ▶ 运行{selectedNodes.size > 0 ? "选中" : ""}
-          </button>
+          </HoverButton>
         </div>
         <ReactFlow
           nodes={nodes}
@@ -824,6 +907,7 @@ export function BoardCanvas({
           nodeTypes={nodeTypes}
           edgeTypes={edgeTypes}
           {...nav.flowProps}
+          deleteKeyCode={dialogOpen ? null : nav.flowProps.deleteKeyCode}
           defaultViewport={board.viewport}
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
@@ -841,6 +925,13 @@ export function BoardCanvas({
             const target = board.edges.find((be) => edgeId(be) === fe.id);
             if (target) openMenu(e, { kind: "edge", edge: target });
           }}
+          onNodeMouseEnter={(_, n) => (n.type === "reference" || n.type === "result" ? showActionBar(n.id) : undefined)}
+          onNodeMouseLeave={hideActionBarSoon}
+          onEdgeMouseMove={(e, fe) => {
+            const target = board.edges.find((be) => edgeId(be) === fe.id);
+            if (target && e.buttons === 0) hover.controller.move(`edge:${fe.id}`, edgeHoverInfo(target), e.clientX, e.clientY);
+          }}
+          onEdgeMouseLeave={(_, fe) => hover.controller.leave(`edge:${fe.id}`)}
           onNodeDragStart={onDragStart}
           onNodeDragStop={onDragStop}
           onSelectionDragStart={onDragStart}
@@ -850,13 +941,25 @@ export function BoardCanvas({
           <Background />
           <Controls />
           <MiniMap pannable zoomable />
+          {barItems.length > 0 && (
+            <NodeToolbar nodeId={barNodes} isVisible position={Position.Top}>
+              <ActionBar
+                items={barItems}
+                onPick={(action) => performAction(action, { kind: "node", nodeId: hovered! })}
+                onPointerEnter={() => showActionBar(hovered)}
+                onPointerLeave={hideActionBarSoon}
+              />
+            </NodeToolbar>
+          )}
         </ReactFlow>
         {menu && menuEntries.length > 0 && (
           <ContextMenu at={menu.client} items={menuEntries} onPick={(action) => performAction(action, menu.target, menu.at)} onClose={closeMenu} />
         )}
         {presetsOpen && <PresetDialog onUse={applyPreset} onClose={() => setPresetsOpen(false)} />}
         {preview && <PreviewDialog key={preview.nonce} req={preview.req} toast={toast} onClose={() => setPreview(null)} />}
+        {hover.layer}
       </div>
+      </HoverProvider>
     </BoardContext.Provider>
   );
 }

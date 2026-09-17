@@ -171,9 +171,38 @@ textarea {
   min-height: 90px;
   resize: vertical;
 }
-.node-reference,
-.node-result {
-  width: 200px;
+/* 精简图片节点：只有图片、端口与角标；尺寸由 React Flow 节点宽高给出（画布按 size 与图片比例计算）。 */
+.node.node-image {
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  overflow: visible;
+}
+.node-image > .thumb {
+  width: 100%;
+  height: 100%;
+  max-height: none;
+  border-radius: 7px;
+}
+.node-image > .thumb-missing {
+  height: auto;
+}
+/* 参考图警告态：红框，原因进悬浮信息。 */
+.node.node-image.node-warn {
+  border: 2px solid var(--red);
+  background: #fff;
+}
+.image-badges {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  display: flex;
+  gap: 4px;
+  pointer-events: none;
+}
+.image-badges .badge {
+  margin: 0;
+  background: rgb(221 244 255 / 90%);
 }
 .thumb {
   display: block;
@@ -188,17 +217,6 @@ textarea {
   place-items: center;
   color: var(--red);
 }
-.caption {
-  margin-top: 4px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.badges {
-  display: flex;
-  gap: 4px;
-  margin-top: 4px;
-}
 .badge {
   display: inline-block;
   margin-right: 4px;
@@ -206,23 +224,6 @@ textarea {
   border-radius: 4px;
   background: #ddf4ff;
   font-size: 11px;
-}
-.record {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 2px 6px;
-  margin: 6px 0 0;
-  font-size: 11px;
-}
-.record dd {
-  margin: 0;
-  min-width: 0;
-}
-.clamp {
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
 }
 .warn-list,
 .error-list,
@@ -381,7 +382,12 @@ button.primary {
   border-radius: 6px;
   cursor: pointer;
 }
-button.primary:disabled {
+button[aria-disabled="true"] {
+  color: #8c959f;
+  cursor: default;
+}
+button.primary:disabled,
+button.primary[aria-disabled="true"] {
   opacity: 0.5;
   cursor: default;
 }
@@ -609,16 +615,6 @@ button.primary:disabled {
   margin-left: 0;
 }
 
-.image-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  margin-top: 6px;
-}
-.image-actions button {
-  font-size: 12px;
-  padding: 1px 6px;
-}
 .thumb-missing {
   height: auto;
   min-height: 100px;
@@ -918,14 +914,109 @@ button.primary:disabled {
   border: none;
   cursor: pointer;
 }
-.context-menu button:hover:not(:disabled) {
+.context-menu button:hover:not([aria-disabled="true"]) {
   background: #eef1f4;
 }
-.context-menu button:disabled {
+.context-menu button[aria-disabled="true"] {
   color: #8c959f;
   cursor: default;
 }
 .toolbar button.active {
   background: #ddf4ff;
   border-color: #1f8fff;
+}
+
+/* ---- 精简任务节点 ---- */
+.task-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+}
+.task-title .status,
+.task-title .badge-chain {
+  margin-left: 4px;
+}
+.expand-toggle {
+  width: 18px;
+  padding: 0;
+}
+.task-model {
+  margin-bottom: 6px;
+  color: #57606a;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.port-hint {
+  color: #8c959f;
+  font-size: 11px;
+}
+/* 空图片端口 = 虚线空心圆；正向提示词未接 = 红色空心圆。 */
+.port-empty .react-flow__handle {
+  background: #fff;
+  border: 2px dashed #8c959f;
+}
+.port-required .react-flow__handle {
+  background: #fff;
+  border: 2px solid var(--red);
+}
+
+/* ---- 悬浮动作条（NodeToolbar 内，固定屏幕像素） ---- */
+.action-bar {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 2px 8px rgb(0 0 0 / 12%);
+}
+.action-bar button {
+  min-width: 26px;
+  height: 26px;
+  padding: 0 4px;
+  font-size: 15px;
+  border-radius: 4px;
+}
+.action-bar button:hover:not([aria-disabled="true"]) {
+  background: #eef1f4;
+}
+
+/* ---- 悬浮信息（窗口坐标，不随画布缩放） ---- */
+.hover-info {
+  position: fixed;
+  z-index: 1100;
+  max-width: 320px;
+  padding: 6px 8px;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgb(0 0 0 / 15%);
+  font-size: 12px;
+  pointer-events: none;
+}
+.hover-line {
+  display: flex;
+  gap: 6px;
+}
+.hover-label {
+  flex: none;
+  color: #57606a;
+}
+.hover-text {
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.hover-text[data-clamp] {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.hover-error {
+  color: var(--red);
+}
+.hover-warn {
+  color: #7d4e00;
 }

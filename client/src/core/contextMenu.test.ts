@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Board, BoardEdge, BoardNode, TaskNode } from "./board";
 import { BUILTIN_TABLE } from "./capabilities";
 import { LOCKED_HINT } from "./iterate";
-import { clampMenuPosition, menuItems, selectionForMenu, type MenuFacts } from "./contextMenu";
+import { clampMenuPosition, menuItems, selectionForMenu, actionBarItems, type MenuFacts } from "./contextMenu";
 
 const SPEC_2K = { tier: "2K", ratio: "16:9", width: null, height: null };
 
@@ -11,7 +11,7 @@ function board(nodes: BoardNode[] = [], edges: BoardEdge[] = []): Board {
 }
 
 function facts(patch: Partial<MenuFacts> = {}): MenuFacts {
-  return { board: board(), table: BUILTIN_TABLE, selected: new Set(), locked: new Set(), undoLabel: null, redoLabel: null, ...patch };
+  return { board: board(), table: BUILTIN_TABLE, selected: new Set(), locked: new Set(), expanded: new Set(), undoLabel: null, redoLabel: null, ...patch };
 }
 
 const summary = (items: ReturnType<typeof menuItems>) => items.map((i) => [i.action, i.label, i.disabledReason]);
@@ -108,9 +108,10 @@ describe("图片节点菜单", () => {
 describe("任务 / 提示词节点菜单", () => {
   const submitted = { task_id: "20260917-0001" };
 
-  it("空闲任务：运行可用，取消置灰；没提交过时重新生成置灰", () => {
+  it("空闲任务：展开设置在首；运行可用，取消置灰；没提交过时重新生成置灰", () => {
     const b = board([task("t")]);
     expect(summary(menuItems({ kind: "node", nodeId: "t" }, facts({ board: b, selected: new Set(["t"]) })))).toEqual([
+      ["toggleSettings", "展开设置", null],
       ["run", "运行", null],
       ["cancel", "取消", "任务不在排队 / 执行中"],
       ["regenerate", "重新生成", "还没有提交过"],
@@ -121,11 +122,18 @@ describe("任务 / 提示词节点菜单", () => {
   it("排队 / 执行中的任务：只有取消可用（删除走删除规则）", () => {
     const b = board([task("t", { last_submitted: submitted })]);
     expect(summary(menuItems({ kind: "node", nodeId: "t" }, facts({ board: b, selected: new Set(["t"]), locked: new Set(["t"]) })))).toEqual([
+      ["toggleSettings", "展开设置", null],
       ["run", "运行", "任务正在排队 / 执行"],
       ["cancel", "取消", null],
       ["regenerate", "重新生成", "任务正在排队 / 执行"],
       ["delete", "删除", null],
     ]);
+  });
+
+  it("已展开的任务：该项为收起设置", () => {
+    const b = board([task("t")]);
+    const items = menuItems({ kind: "node", nodeId: "t" }, facts({ board: b, selected: new Set(["t"]), expanded: new Set(["t"]) }));
+    expect(summary(items)[0]).toEqual(["toggleSettings", "收起设置", null]);
   });
 
   it("提交过的空闲任务可重新生成", () => {
@@ -173,6 +181,46 @@ describe("右键与选区", () => {
     const b = board([task("t1"), task("t2")]);
     const items = menuItems({ kind: "node", nodeId: "t1" }, facts({ board: b, selected: new Set(["t1", "t2"]) }));
     expect(summary(items)).toEqual([["delete", "删除 2 个节点", null]]);
+  });
+});
+
+describe("悬浮动作条", () => {
+  it("结果：放大预览与迭代动作，不含删除；置灰原因与菜单相同", () => {
+    const b = board([result("res")]);
+    expect(summary(actionBarItems("res", facts({ board: b })))).toEqual([
+      ["preview", "放大预览", null],
+      ["continueEditing", "以此继续编辑", null],
+      ["addAsReference", "加为参考图", "先选一个生成任务"],
+      ["generateVariant", "生成变体", "父任务已删除"],
+    ]);
+  });
+
+  it("参考图：放大预览与以此继续编辑", () => {
+    expect(summary(actionBarItems("r", facts({ board: board([reference("r")]) })))).toEqual([
+      ["preview", "放大预览", null],
+      ["continueEditing", "以此继续编辑", null],
+    ]);
+  });
+
+  it("选中一个任务后悬浮未选中的结果：加为参考图可用（不改选区）", () => {
+    const b = board([result("res"), task("t")]);
+    const items = actionBarItems("res", facts({ board: b, selected: new Set(["t"]) }));
+    expect(items.find((i) => i.action === "addAsReference")?.disabledReason).toBeNull();
+  });
+
+  it("悬浮多选内的图片节点：只含对多选有意义的动作", () => {
+    const b = board([reference("r"), result("res"), task("t")]);
+    expect(summary(actionBarItems("r", facts({ board: b, selected: new Set(["r", "res", "t"]) })))).toEqual([["continueEditing", "以此继续编辑", null]]);
+    expect(summary(actionBarItems("res", facts({ board: b, selected: new Set(["res", "t"]) })))).toEqual([
+      ["continueEditing", "以此继续编辑", null],
+      ["addAsReference", "加为参考图", null],
+    ]);
+  });
+
+  it("任务、提示词节点没有动作条", () => {
+    const b = board([task("t"), { id: "p", type: "prompt", pos: [0, 0], size: [240, 140], extra: {}, text: "" }]);
+    expect(actionBarItems("t", facts({ board: b }))).toEqual([]);
+    expect(actionBarItems("p", facts({ board: b }))).toEqual([]);
   });
 });
 

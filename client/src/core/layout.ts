@@ -1,9 +1,11 @@
 // 自动落位（规格第 4 节「布局」）：任务右侧结果列自上而下累积；迭代动作新建的节点落在触发节点旁。
 // 只找就近空位，不推开、不重排，用户摆过的位置永远不动。
 import type { Board, ResultNode, ResultRecord } from "./board";
+import { IMAGE_NODE_WIDTH, imageNodeSize, sizeSpecAspect } from "./nodeSize";
 import type { LayerRecord } from "./taskDir";
 
-export const RESULT_NODE_SIZE: [number, number] = [220, 300];
+/** 结果节点未知比例时的占位尺寸；实际新建按尺寸设置的比例（addResultNode）。 */
+export const RESULT_NODE_SIZE: [number, number] = [IMAGE_NODE_WIDTH, IMAGE_NODE_WIDTH];
 export const TASK_NODE_SIZE: [number, number] = [280, 260];
 export const PROMPT_NODE_SIZE: [number, number] = [240, 140];
 export const COLUMN_GAP = 60;
@@ -60,13 +62,14 @@ export interface NewResult {
 
 /** 加结果节点与系统连线；任务节点已被删除时原样返回。 */
 export function addResultNode(board: Board, result: NewResult): Board {
-  const pos = placeResult(board, result.taskId);
+  const size = imageNodeSize(IMAGE_NODE_WIDTH, sizeSpecAspect(result.record.size_spec));
+  const pos = placeResult(board, result.taskId, size);
   if (!pos) return board;
   const node: ResultNode = {
     id: result.id,
     type: "result",
     pos,
-    size: RESULT_NODE_SIZE,
+    size,
     extra: {},
     task_id: result.submittedTaskId,
     file: result.file,

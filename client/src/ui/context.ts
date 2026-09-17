@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useState } from "react";
 import type { Board, KnownNode, PortRef, Region } from "../core/board";
 import type { CapabilityTable, ModelCapability } from "../core/capabilities";
+import type { BoardAction, MenuTarget } from "../core/contextMenu";
 import { joinPath, resolveFromRoot } from "../core/paths";
 import type { TaskStatus } from "../core/run";
 import { isInterrupted } from "../core/submission";
@@ -19,8 +20,6 @@ export interface BoardActions {
   moveImagePort: (taskId: string, from: number, to: number) => void;
   /** 编辑已提交过的提示词节点，选「断开并分叉」。 */
   forkPrompt: (promptId: string, text: string) => void;
-  cancelTask: (taskId: string) => void;
-  regenerate: (taskId: string) => void;
   /** 迭代动作：触发节点在多选内时按选中顺序带上其余图片节点；sourceLayer（1 起）= 接该图层而非合成结果。 */
   continueEditing: (nodeId: string, sourceLayer?: number | null) => void;
   addAsReference: (resultId: string, sourceLayer?: number | null) => void;
@@ -33,6 +32,11 @@ export interface BoardActions {
   previewNode: (nodeId: string) => void;
   /** 任务端口行的「指示区域」：直接编辑该条连线的区域。 */
   editRegion: (taskId: string, ref: { from: PortRef; to: PortRef }) => void;
+  /**
+   * 执行一个画板动作：上下文菜单、悬浮动作条、节点上的运行 / 展开按钮共用；条目与置灰原因由 core/contextMenu 给出。
+   * at = 新建类动作的落点（画布坐标），缺省 = 视口中央。
+   */
+  perform: (action: BoardAction, target: MenuTarget, at?: { x: number; y: number }) => void;
 }
 
 export const BoardContext = createContext<BoardActions | null>(null);

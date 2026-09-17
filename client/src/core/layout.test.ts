@@ -72,6 +72,16 @@ describe("结果列落位", () => {
     expect(b.nodes[1]).toMatchObject({ type: "result", task_id: "task-r", file: "result.png", path: "2026-09-16/task-r/result.png", layer_count: 0, size: RESULT_NODE_SIZE });
   });
 
+  it("结果节点默认宽 240px、按尺寸设置的比例等比，累积按实际高度", () => {
+    const wide = (id: string): NewResult => ({ ...result("t", id), record: { ...result("t", id).record, size_spec: { tier: "2K", ratio: "16:9", width: null, height: null } } });
+    let b = addResultNode(board([task("t", [0, 0])]), wide("r1"));
+    b = addResultNode(b, wide("r2"));
+    expect(b.nodes.slice(1).map((n) => n.type !== "unknown" && [n.pos, n.size])).toEqual([
+      [[340, 0], [240, 135]],
+      [[340, 135 + 24], [240, 135]],
+    ]);
+  });
+
   it("任务节点已被删除时不加结果节点", () => {
     const b = board([box("p", [0, 0], [10, 10])]);
     expect(addResultNode(b, result("t"))).toBe(b);

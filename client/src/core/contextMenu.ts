@@ -23,6 +23,7 @@ export type BoardAction =
   | "run"
   | "cancel"
   | "regenerate"
+  | "toggleSettings"
   | "disconnect"
   | "editRegion";
 
@@ -40,6 +41,8 @@ export interface MenuFacts {
   selected: ReadonlySet<string>;
   /** 排队 / 执行中的任务节点。 */
   locked: ReadonlySet<string>;
+  /** 设置已原地展开的任务节点（不存盘）。 */
+  expanded: ReadonlySet<string>;
   undoLabel: string | null;
   redoLabel: string | null;
 }
@@ -87,6 +90,7 @@ export function menuItems(target: MenuTarget, facts: MenuFacts): MenuItem[] {
         case "task": {
           const busy = locked.has(node.id);
           return [
+            item("toggleSettings", facts.expanded.has(node.id) ? "收起设置" : "展开设置"),
             item("run", "运行", busy ? TASK_BUSY : null),
             item("cancel", "取消", busy ? null : "任务不在排队 / 执行中"),
             item("regenerate", "重新生成", busy ? TASK_BUSY : regenerateBlocker(node)),
@@ -108,6 +112,18 @@ export function menuItems(target: MenuTarget, facts: MenuFacts): MenuItem[] {
       return [item("disconnect", "断开", reason), ...(regionable ? [item("editRegion", "框选修改区域", reason)] : [])];
     }
   }
+}
+
+const ACTION_BAR_ACTIONS: ReadonlySet<BoardAction> = new Set(["preview", "continueEditing", "addAsReference", "generateVariant"]);
+
+/**
+ * 悬浮动作条：图片节点的放大预览与迭代动作，取自同一节点的菜单条目（同一组置灰原因）。
+ * 悬浮不改选区：悬浮在多选内的节点上给多选条目，否则按单个节点给（加为参考图仍以当前选中的任务为目标）。
+ */
+export function actionBarItems(nodeId: string, facts: MenuFacts): MenuItem[] {
+  const node = facts.board.nodes.find((n) => n.id === nodeId);
+  if (node?.type !== "reference" && node?.type !== "result") return [];
+  return menuItems({ kind: "node", nodeId }, facts).filter((i) => ACTION_BAR_ACTIONS.has(i.action));
 }
 
 /** 右键落在未选中节点上先把选区换成该节点；落在选区内保持原选区。 */
