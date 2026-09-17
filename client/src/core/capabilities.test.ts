@@ -13,7 +13,7 @@ const qwenPro = () => BUILTIN_TABLE.models.find((m) => m.model_id === "qwen-imag
 describe("内置能力表", () => {
   it("通过自身 schema 校验，顶层整数 format_version", () => {
     expect(BUILTIN_TABLE.format_version).toBe(1);
-    expect(BUILTIN_TABLE.models.length).toBe(6);
+    expect(BUILTIN_TABLE.models.length).toBe(4);
   });
 
   it("只有 qwen 两个模型上架，Seedream 四个不赋档位", () => {
@@ -41,9 +41,6 @@ describe("三态", () => {
   it("列出模型的待测能力供模型说明浮层展示", () => {
     const pro = BUILTIN_TABLE.models.find((m) => m.model_id.startsWith("doubao-seedream-5-0-pro"))!;
     expect(untestedCapabilities(pro)).toEqual([
-      "英文序号措辞",
-      "区域指示：图上标记",
-      "区域指示：坐标标签",
       "透明背景",
       "拆分图层（文生图）",
       "拆分图层（图片编辑）",
@@ -78,7 +75,7 @@ describe("覆盖文件按模型合并", () => {
     override.workflows.image_edit.max_references = 5;
     const added = { ...structuredClone(qwenPro()), model_id: "new-model", tier: null };
     const merged = mergeOverride(BUILTIN_TABLE, { format_version: 1, models: [override, added] });
-    expect(merged.models.length).toBe(7);
+    expect(merged.models.length).toBe(5);
     expect(merged.models.find((m) => m.model_id === "qwen-image-3.0-pro")!.workflows.image_edit.max_references).toBe(5);
     expect(merged.models.find((m) => m.model_id === "qwen-image-3.0")!.workflows.image_edit.max_references).toBe(3);
     expect(merged.models.at(-1)!.model_id).toBe("new-model");

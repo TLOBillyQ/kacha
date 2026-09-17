@@ -125,7 +125,7 @@ describe("以此继续编辑", () => {
   it("源模型不支持图片编辑：换默认编辑模型，尺寸不在其尺寸表内时用默认尺寸", () => {
     const b0 = lineage();
     const src = find<TaskNode>(b0, "src");
-    src.model = "doubao-seedream-4-5-251128";
+    src.model = "doubao-seedream-5-0-lite-260128";
     const t = structuredClone(BUILTIN_TABLE);
     t.models.find((m) => m.model_id === src.model)!.workflows.image_edit.max_references = 0;
     const b = ok(continueEditing(b0, t, NONE, ["res"], "res", ids));

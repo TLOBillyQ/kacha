@@ -200,10 +200,12 @@ describe("二次确认：「图N」校验与提示", () => {
 
   it("英文序号未验证的模型：英文提示词带参考图时提示", () => {
     const b = board(
-      [prompt("p", "Put @图1 on a beach"), reference("r1"), task("t", { model: "doubao-seedream-5-0-pro-260628" })],
+      [prompt("p", "Put @图1 on a beach"), reference("r1"), task("t", { model: "doubao-seedream-5-0-lite-260128" })],
       [edge("p", "t", "positive"), edge("r1", "t", "image:0")],
     );
-    const [item] = buildConfirmItems(b, BUILTIN_TABLE, ["t"], ctx);
+    const t = structuredClone(BUILTIN_TABLE);
+    t.models.find((m) => m.model_id === "doubao-seedream-5-0-lite-260128")!.reference_phrasing.en_verified = "untested";
+    const [item] = buildConfirmItems(b, t, ["t"], ctx);
     expect(item.warnings).toContain("该模型英文序号未验证");
     expect(item.sendText).toBe("This request provides 1 reference image.\nPut Image 1 on a beach");
   });

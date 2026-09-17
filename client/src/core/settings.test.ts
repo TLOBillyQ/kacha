@@ -84,7 +84,7 @@ describe("模型发现", () => {
   });
 
   it("任务节点模型列表 = 发现结果 ∩ 上架清单", () => {
-    const live = { source: "live" as const, ids: ["qwen-image-3.0-pro", "doubao-seedream-4-0-250828"], fetchedAt: "t" };
+    const live = { source: "live" as const, ids: ["qwen-image-3.0-pro", "doubao-seedream-5-0-pro-260628"], fetchedAt: "t" };
     expect(availableModels(BUILTIN_TABLE, live).map((m) => m.model_id)).toEqual(["qwen-image-3.0-pro"]);
   });
 

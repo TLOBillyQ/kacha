@@ -124,7 +124,7 @@
       "display_name": "Seedream 5.0 pro",
       "tier": null,
       "help_url": "https://docs.volcengine.com/docs/82379/1829186?lang=zh",
-      "request_shape": "unconfirmed",
+      "request_shape": "seedream_images_generations",
       "fixed_params": { "watermark": false, "output_format": "png" },
       "input_image_rule": {
         "formats": ["jpeg", "png", "webp", "bmp", "tiff", "gif", "heic", "heif"],
@@ -135,11 +135,11 @@
         "min_aspect_ratio": 0.0625,
         "max_aspect_ratio": 16
       },
-      "reference_phrasing": { "en_verified": "untested" },
+      "reference_phrasing": { "en_verified": "supported" },
       "region_hint": {
-        "highlight_overlay": "unsupported",
-        "marked_image": "untested",
-        "bbox_tag": "untested"
+        "highlight_overlay": "supported",
+        "marked_image": "supported",
+        "bbox_tag": "supported"
       },
       "region_hint_phrasing": {},
       "native_mask": "unsupported",
@@ -168,11 +168,11 @@
       }
     },
     {
-      "model_id": "doubao-seedream-5-0-260128",
+      "model_id": "doubao-seedream-5-0-lite-260128",
       "display_name": "Seedream 5.0 lite",
       "tier": null,
       "help_url": "https://docs.volcengine.com/docs/82379/1829186?lang=zh",
-      "request_shape": "unconfirmed",
+      "request_shape": "seedream_images_generations",
       "fixed_params": { "watermark": false, "output_format": "png", "sequential_image_generation": "disabled" },
       "input_image_rule": {
         "formats": ["jpeg", "png", "webp", "bmp", "tiff", "gif", "heic", "heif"],
@@ -183,10 +183,10 @@
         "min_aspect_ratio": 0.0625,
         "max_aspect_ratio": 16
       },
-      "reference_phrasing": { "en_verified": "untested" },
+      "reference_phrasing": { "en_verified": "supported" },
       "region_hint": {
-        "highlight_overlay": "unsupported",
-        "marked_image": "untested",
+        "highlight_overlay": "supported",
+        "marked_image": "supported",
         "bbox_tag": "unsupported"
       },
       "region_hint_phrasing": {},
@@ -210,102 +210,6 @@
           "size_rule": {
             "tiers": { "2K": { "16:9": [2848, 1600] } },
             "custom": { "min_total_pixels": 3686400, "max_total_pixels": 16777216, "min_aspect_ratio": 0.0625, "max_aspect_ratio": 16 }
-          },
-          "layer_decomposition": "unsupported"
-        }
-      }
-    },
-    {
-      "model_id": "doubao-seedream-4-5-251128",
-      "display_name": "Seedream 4.5",
-      "tier": null,
-      "help_url": "https://docs.volcengine.com/docs/82379/1829186?lang=zh",
-      "request_shape": "unconfirmed",
-      "fixed_params": { "watermark": false, "sequential_image_generation": "disabled" },
-      "input_image_rule": {
-        "formats": ["jpeg", "png", "webp", "bmp", "tiff", "gif", "heic", "heif"],
-        "max_bytes": 31457280,
-        "min_total_pixels": 196,
-        "max_total_pixels": 36000000,
-        "min_short_edge": 15,
-        "min_aspect_ratio": 0.0625,
-        "max_aspect_ratio": 16
-      },
-      "reference_phrasing": { "en_verified": "untested" },
-      "region_hint": {
-        "highlight_overlay": "unsupported",
-        "marked_image": "untested",
-        "bbox_tag": "unsupported"
-      },
-      "region_hint_phrasing": {},
-      "native_mask": "unsupported",
-      "transparent_background": "unsupported",
-      "workflows": {
-        "text_to_image": {
-          "supports_negative_prompt": "unsupported",
-          "min_references": 0,
-          "max_references": 14,
-          "size_rule": {
-            "tiers": {},
-            "custom": { "min_total_pixels": 3686400, "max_total_pixels": 16777216, "min_aspect_ratio": 0.0625, "max_aspect_ratio": 16 }
-          },
-          "layer_decomposition": "unsupported"
-        },
-        "image_edit": {
-          "supports_negative_prompt": "unsupported",
-          "min_references": 0,
-          "max_references": 14,
-          "size_rule": {
-            "tiers": {},
-            "custom": { "min_total_pixels": 3686400, "max_total_pixels": 16777216, "min_aspect_ratio": 0.0625, "max_aspect_ratio": 16 }
-          },
-          "layer_decomposition": "unsupported"
-        }
-      }
-    },
-    {
-      "model_id": "doubao-seedream-4-0-250828",
-      "display_name": "Seedream 4.0",
-      "tier": null,
-      "help_url": "https://docs.volcengine.com/docs/82379/1829186?lang=zh",
-      "request_shape": "unconfirmed",
-      "fixed_params": { "watermark": false, "sequential_image_generation": "disabled" },
-      "input_image_rule": {
-        "formats": ["jpeg", "png", "webp", "bmp", "tiff", "gif", "heic", "heif"],
-        "max_bytes": 31457280,
-        "min_total_pixels": 196,
-        "max_total_pixels": 36000000,
-        "min_short_edge": 15,
-        "min_aspect_ratio": 0.0625,
-        "max_aspect_ratio": 16
-      },
-      "reference_phrasing": { "en_verified": "untested" },
-      "region_hint": {
-        "highlight_overlay": "unsupported",
-        "marked_image": "untested",
-        "bbox_tag": "unsupported"
-      },
-      "region_hint_phrasing": {},
-      "native_mask": "unsupported",
-      "transparent_background": "unsupported",
-      "workflows": {
-        "text_to_image": {
-          "supports_negative_prompt": "unsupported",
-          "min_references": 0,
-          "max_references": 14,
-          "size_rule": {
-            "tiers": { "1K": { "16:9": [1280, 720] } },
-            "custom": { "min_total_pixels": 921600, "max_total_pixels": 16777216, "min_aspect_ratio": 0.0625, "max_aspect_ratio": 16 }
-          },
-          "layer_decomposition": "unsupported"
-        },
-        "image_edit": {
-          "supports_negative_prompt": "unsupported",
-          "min_references": 0,
-          "max_references": 14,
-          "size_rule": {
-            "tiers": { "1K": { "16:9": [1280, 720] } },
-            "custom": { "min_total_pixels": 921600, "max_total_pixels": 16777216, "min_aspect_ratio": 0.0625, "max_aspect_ratio": 16 }
           },
           "layer_decomposition": "unsupported"
         }

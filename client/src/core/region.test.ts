@@ -33,7 +33,7 @@ function board(nodes: BoardNode[], edges: BoardEdge[]): Board {
 }
 
 const qwen = findModel(BUILTIN_TABLE, "qwen-image-3.0-pro")!;
-const doubao = findModel(BUILTIN_TABLE, "doubao-seedream-5-0-260128")!;
+const doubao = { ...findModel(BUILTIN_TABLE, "doubao-seedream-5-0-lite-260128")!, region_hint: { highlight_overlay: "untested" as const, marked_image: "unsupported" as const, bbox_tag: "unsupported" as const } };
 
 const REGION = { rects: [[0.1, 0.1, 0.5, 0.5] as [number, number, number, number]], render: "highlight_overlay" as const };
 

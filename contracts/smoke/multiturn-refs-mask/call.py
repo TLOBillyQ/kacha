@@ -44,6 +44,9 @@ def run(name, body, path="/v1/images/edits"):
         for ch in j.get("metadata",{}).get("output",{}).get("choices",[]):
             for c in ch["message"]["content"]:
                 if "image" in c: imgs.append(c["image"])
+        for d in j.get("data") or []:  # OpenAI 形态（seedream）
+            if d.get("url"): imgs.append(d["url"])
+            elif d.get("b64_json"): imgs.append(d["b64_json"])
         for i,u in enumerate(imgs):
             p=f"out/{name}/img{i}.png"
             if u.startswith("http"): urllib.request.urlretrieve(u,p)

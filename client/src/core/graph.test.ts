@@ -417,10 +417,12 @@ describe("区域指示", () => {
 
   it("模型不支持区域指示：有区域连线标红，区域数据保留", () => {
     const b = board(
-      [node("p", "prompt"), node("r1", "reference"), task("t", "doubao-seedream-5-0-260128")],
+      [node("p", "prompt"), node("r1", "reference"), task("t", "doubao-seedream-5-0-lite-260128")],
       [edge("p", "out", "t", "positive"), { ...edge("r1", "out", "t", "image:0"), region: REGION }],
     );
-    expect(taskIssues(b, table, "t")).toContain("模型不支持框选修改区域");
+    const t = structuredClone(table);
+    t.models.find((m) => m.model_id === "doubao-seedream-5-0-lite-260128")!.region_hint = { highlight_overlay: "unsupported", marked_image: "unsupported", bbox_tag: "untested" };
+    expect(taskIssues(b, t, "t")).toContain("模型不支持框选修改区域");
     expect(b.edges[1].region).toEqual(REGION);
   });
 
