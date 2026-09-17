@@ -16,11 +16,11 @@ describe("内置能力表", () => {
     expect(BUILTIN_TABLE.models.length).toBe(4);
   });
 
-  it("只有 qwen 两个模型上架，Seedream 四个不赋档位", () => {
+  it("pro 为旗舰、非 pro 为经济：qwen 与 Seedream 各两个上架", () => {
     const groups = modelsByTier(BUILTIN_TABLE);
     expect(groups.map((g) => [g.tier, g.models.map((m) => m.model_id)])).toEqual([
-      ["flagship", ["qwen-image-3.0-pro"]],
-      ["economy", ["qwen-image-3.0"]],
+      ["flagship", ["qwen-image-3.0-pro", "doubao-seedream-5-0-pro-260628"]],
+      ["economy", ["qwen-image-3.0", "doubao-seedream-5-0-lite-260128"]],
     ]);
   });
 

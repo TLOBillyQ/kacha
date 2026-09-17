@@ -300,7 +300,9 @@ describe("换模型标红：连线与设置保留、节点不可运行", () => {
     const g2 = board([node("p", "prompt"), task("t", SEEDREAM_PRO, { size_spec: { tier: "2K", ratio: "1:1", width: null, height: null } })], [
       edge("p", "out", "t", "positive"),
     ]);
-    expect(taskIssues(g2, table, "t")).toEqual(["模型 Seedream 5.0 pro 未上架"]);
+    const unshelved = structuredClone(BUILTIN_TABLE);
+    unshelved.models.find((m) => m.model_id === SEEDREAM_PRO)!.tier = null;
+    expect(taskIssues(g2, unshelved, "t")).toEqual(["模型 Seedream 5.0 pro 未上架"]);
   });
 
   it("编辑工作流低于最少参考图数不算问题（文生图 0 张合法）", () => {

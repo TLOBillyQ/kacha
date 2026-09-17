@@ -122,7 +122,7 @@
     {
       "model_id": "doubao-seedream-5-0-pro-260628",
       "display_name": "Seedream 5.0 pro",
-      "tier": null,
+      "tier": "flagship",
       "help_url": "https://docs.volcengine.com/docs/82379/1829186?lang=zh",
       "request_shape": "seedream_images_generations",
       "fixed_params": { "watermark": false, "output_format": "png" },
@@ -170,7 +170,7 @@
     {
       "model_id": "doubao-seedream-5-0-lite-260128",
       "display_name": "Seedream 5.0 lite",
-      "tier": null,
+      "tier": "economy",
       "help_url": "https://docs.volcengine.com/docs/82379/1829186?lang=zh",
       "request_shape": "seedream_images_generations",
       "fixed_params": { "watermark": false, "output_format": "png", "sequential_image_generation": "disabled" },

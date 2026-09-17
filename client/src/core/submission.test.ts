@@ -181,7 +181,7 @@ describe("二次确认清单", () => {
       missingNodes: new Set(["r1"]),
     });
     expect(items[0].issues).toContain("正向提示词未连接");
-    expect(items[1].issues).toEqual(expect.arrayContaining(["正向提示词为空", "模型 Seedream 5.0 pro 未上架", "模型 Seedream 5.0 pro 的请求形态尚未接入"]));
+    expect(items[1].issues).toEqual(expect.arrayContaining(["正向提示词为空", "模型 Seedream 5.0 pro 的请求形态尚未接入"]));
     expect(items[2].issues).toEqual(expect.arrayContaining(["网关未提供模型 qwen-image-3.0-pro", "图1 图片缺失：r1.png"]));
   });
 });

@@ -85,11 +85,11 @@ describe("模型发现", () => {
 
   it("任务节点模型列表 = 发现结果 ∩ 上架清单", () => {
     const live = { source: "live" as const, ids: ["qwen-image-3.0-pro", "doubao-seedream-5-0-pro-260628"], fetchedAt: "t" };
-    expect(availableModels(BUILTIN_TABLE, live).map((m) => m.model_id)).toEqual(["qwen-image-3.0-pro"]);
+    expect(availableModels(BUILTIN_TABLE, live).map((m) => m.model_id)).toEqual(["qwen-image-3.0-pro", "doubao-seedream-5-0-pro-260628"]);
   });
 
   it("从未发现过时列出上架清单", () => {
-    expect(availableModels(BUILTIN_TABLE, { source: "none" }).map((m) => m.model_id)).toEqual(["qwen-image-3.0-pro", "qwen-image-3.0"]);
+    expect(availableModels(BUILTIN_TABLE, { source: "none" }).map((m) => m.model_id)).toEqual(["qwen-image-3.0-pro", "doubao-seedream-5-0-pro-260628", "qwen-image-3.0", "doubao-seedream-5-0-lite-260128"]);
   });
 
   it("已发现但网关没有该模型时，任务标红原因", () => {
@@ -107,7 +107,8 @@ describe("新建任务默认模型", () => {
     expect(defaultTaskModel(BUILTIN_TABLE, { source: "none" }, "qwen-image-3.0")).toBe("qwen-image-3.0");
     expect(defaultTaskModel(BUILTIN_TABLE, { source: "none" }, null)).toBe("qwen-image-3.0-pro");
     expect(defaultTaskModel(BUILTIN_TABLE, live(["qwen-image-3.0"]), "qwen-image-3.0-pro")).toBe("qwen-image-3.0");
-    expect(defaultTaskModel(BUILTIN_TABLE, { source: "none" }, "doubao-seedream-5-0-pro-260628")).toBe("qwen-image-3.0-pro");
+    expect(defaultTaskModel(BUILTIN_TABLE, { source: "none" }, "doubao-seedream-5-0-pro-260628")).toBe("doubao-seedream-5-0-pro-260628");
+    expect(defaultTaskModel(BUILTIN_TABLE, { source: "none" }, "nope")).toBe("qwen-image-3.0-pro");
   });
 
   it("网关一个上架模型都没有时仍给上架清单第一个（节点会标红）", () => {
