@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { Board, BoardEdge, BoardNode, TaskNode } from "./board";
 import { BUILTIN_TABLE } from "./capabilities";
-import { clampMenuPosition, LOCKED_HINT, menuItems, selectionForMenu, type MenuFacts } from "./contextMenu";
+import { LOCKED_HINT } from "./iterate";
+import { clampMenuPosition, menuItems, selectionForMenu, type MenuFacts } from "./contextMenu";
 
 const SPEC_2K = { tier: "2K", ratio: "16:9", width: null, height: null };
 

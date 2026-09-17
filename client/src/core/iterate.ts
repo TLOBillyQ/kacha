@@ -167,3 +167,18 @@ export function pasteClip(board: Board, clip: Clip, newId: () => string): { boar
   }
   return { board: syncImagePorts(next), ids: [...idMap.values()] };
 }
+
+export const LOCKED_HINT = "任务排队 / 执行中：模型、尺寸、开关、图片端口与连线已锁定";
+
+export const TASK_BUSY = "任务正在排队 / 执行";
+
+/** 「重新生成」不可用的原因（锁定之外）；null = 可用。节点按钮与菜单共用。 */
+export function regenerateBlocker(task: TaskNode): string | null {
+  return task.last_submitted === null ? "还没有提交过" : null;
+}
+
+/** 「生成变体」不可用的原因；null = 可用。节点按钮与菜单共用。 */
+export function variantBlocker(board: Board, resultId: string, locked: ReadonlySet<string>): string | null {
+  const parent = producerOf(board, resultId);
+  return !parent ? "父任务已删除" : locked.has(parent.id) ? "父任务正在排队 / 执行" : null;
+}

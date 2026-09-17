@@ -1,11 +1,11 @@
 // 画板上下文菜单：按右键对象给条目（动作 + 文案 + 置灰原因）。执行由画布按 action 分派到与工具栏 / 节点按钮相同的逻辑；
 // 悬浮动作条、拖线建节点的多候选菜单复用同一组 action。
-import type { Board, BoardEdge, TaskNode } from "./board";
+import type { Board, BoardEdge } from "./board";
 import { findModel, type CapabilityTable } from "./capabilities";
 import { imagePortIndex } from "./graph";
 import { countLabel } from "./history";
 import { effectiveRegionRender } from "./region";
-import { addAsReferenceTarget, producerOf } from "./iterate";
+import { addAsReferenceTarget, LOCKED_HINT, regenerateBlocker, TASK_BUSY, variantBlocker } from "./iterate";
 
 export type MenuTarget = { kind: "pane" } | { kind: "node"; nodeId: string } | { kind: "edge"; edge: BoardEdge };
 
@@ -100,21 +100,6 @@ export function menuItems(target: MenuTarget, facts: MenuFacts): MenuItem[] {
       return [item("disconnect", "断开", reason), ...(regionable ? [item("editRegion", "框选修改区域", reason)] : [])];
     }
   }
-}
-
-export const LOCKED_HINT = "任务排队 / 执行中：模型、尺寸、开关、图片端口与连线已锁定";
-
-const TASK_BUSY = "任务正在排队 / 执行";
-
-/** 「重新生成」不可用的原因（锁定之外）；null = 可用。节点按钮与菜单共用。 */
-export function regenerateBlocker(task: TaskNode): string | null {
-  return task.last_submitted === null ? "还没有提交过" : null;
-}
-
-/** 「生成变体」不可用的原因；null = 可用。节点按钮与菜单共用。 */
-export function variantBlocker(board: Board, resultId: string, locked: ReadonlySet<string>): string | null {
-  const parent = producerOf(board, resultId);
-  return !parent ? "父任务已删除" : locked.has(parent.id) ? "父任务正在排队 / 执行" : null;
 }
 
 /** 右键落在未选中节点上先把选区换成该节点；落在选区内保持原选区。 */

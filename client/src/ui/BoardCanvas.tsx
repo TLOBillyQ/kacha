@@ -39,9 +39,9 @@ import {
   workflowOf,
   type Connection,
 } from "../core/graph";
-import { LOCKED_HINT, menuItems, selectionForMenu, variantBlocker, type BoardAction, type MenuTarget } from "../core/contextMenu";
+import { menuItems, selectionForMenu, type BoardAction, type MenuTarget } from "../core/contextMenu";
 import { countLabel, MERGE_PAUSE_MS, nodeEditChange, type Change, type UserChange } from "../core/history";
-import { addAsReference, addAsReferenceTarget, continueEditing, copySelection, lineage, pasteClip, PASTE_OFFSET, producerOf, type Clip, type Outcome } from "../core/iterate";
+import { addAsReference, addAsReferenceTarget, continueEditing, copySelection, lineage, LOCKED_HINT, pasteClip, PASTE_OFFSET, producerOf, variantBlocker, type Clip, type Outcome } from "../core/iterate";
 import { PROMPT_NODE_SIZE, TASK_NODE_SIZE } from "../core/layout";
 import { placePreset, type Preset } from "../core/presets";
 import { basename, dirname, joinPath, resolveFromRoot, toRootRelative } from "../core/paths";
@@ -745,39 +745,25 @@ export function BoardCanvas({
 
   /** 按 action 执行：与工具栏 / 节点按钮同一套逻辑（删除、断开走 React Flow 删除流程，规则同 Delete 键）。 */
   const performAction = (action: BoardAction, target: MenuTarget, at: { x: number; y: number }) => {
-    const nodeId = target.kind === "node" ? target.nodeId : null;
-    const edge = target.kind === "edge" ? target.edge : null;
-    switch (action) {
-      case "newPrompt":
-        return addPrompt(at);
-      case "newTask":
-        return addTask(at);
-      case "addReferences":
-        return void pickReferences(at);
-      case "undo":
-        return undo();
-      case "redo":
-        return redo();
-      case "preview":
-        return nodeId && actions.previewNode(nodeId);
-      case "continueEditing":
-        return nodeId && actions.continueEditing(nodeId);
-      case "addAsReference":
-        return nodeId && actions.addAsReference(nodeId);
-      case "generateVariant":
-        return nodeId && actions.generateVariant(nodeId);
-      case "run":
-        return nodeId && onRun([nodeId]);
-      case "cancel":
-        return nodeId && onCancelTask(nodeId);
-      case "regenerate":
-        return nodeId && onRegenerate(nodeId);
-      case "delete":
-        return nodeId && void flow.deleteElements({ nodes: [...selectionForMenu(selectedRef.current, nodeId)].map((id) => ({ id })) });
-      case "disconnect":
-        return edge && void flow.deleteElements({ edges: [{ id: edgeId(edge) }] });
-      case "editRegion":
-        return edge && actions.editRegion(edge.to[0], { from: edge.from, to: edge.to });
+    if (action === "newPrompt") addPrompt(at);
+    else if (action === "newTask") addTask(at);
+    else if (action === "addReferences") void pickReferences(at);
+    else if (action === "undo") undo();
+    else if (action === "redo") redo();
+    else if (target.kind === "node") {
+      const id = target.nodeId;
+      if (action === "preview") actions.previewNode(id);
+      else if (action === "continueEditing") actions.continueEditing(id);
+      else if (action === "addAsReference") actions.addAsReference(id);
+      else if (action === "generateVariant") actions.generateVariant(id);
+      else if (action === "run") onRun([id]);
+      else if (action === "cancel") onCancelTask(id);
+      else if (action === "regenerate") onRegenerate(id);
+      else if (action === "delete") void flow.deleteElements({ nodes: [...selectionForMenu(selectedRef.current, id)].map((n) => ({ id: n })) });
+    } else if (target.kind === "edge") {
+      const { edge } = target;
+      if (action === "disconnect") void flow.deleteElements({ edges: [{ id: edgeId(edge) }] });
+      else if (action === "editRegion") actions.editRegion(edge.to[0], { from: edge.from, to: edge.to });
     }
   };
 

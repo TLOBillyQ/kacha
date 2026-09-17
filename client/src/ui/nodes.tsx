@@ -20,7 +20,7 @@ import {
   type WorkflowName,
 } from "../core/capabilities";
 import type { TaskStatus } from "../core/run";
-import { regenerateBlocker } from "../core/contextMenu";
+import { regenerateBlocker } from "../core/iterate";
 import { CHAIN_DEPTH_HINT, IMAGE_PORT_PREFIX, imageRuleViolations, type TaskPorts } from "../core/graph";
 import { resolveFromRoot } from "../core/paths";
 import { ratiosForSizeTier, sizeTiersOf } from "../core/size";
