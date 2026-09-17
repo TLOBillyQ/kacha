@@ -64,17 +64,6 @@
     "targets": [
       "app"
     ],
-    "fileAssociations": [
-      {
-        "ext": [
-          "ugcboard.json"
-        ],
-        "name": "UGC 画板",
-        "description": "UGC AI 生图工具画板",
-        "role": "Editor",
-        "mimeType": "application/json"
-      }
-    ],
     "macOS": {
       "minimumSystemVersion": "12.0",
       "signingIdentity": "-"

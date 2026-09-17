@@ -47,7 +47,7 @@ Gitea Release（tag `v<版本>`）只挂三个附件：
 ## 用户侧提示（必须写入发布说明）
 
 - Windows 包未签名：SmartScreen「更多信息 → 仍要运行」；依赖 WebView2（Win10 21H2+/Win11 预装）。
-- Windows 无安装器：`.ugcboard.json` 双击关联需用户手动「打开方式」设置。
+- 打开画板：在应用内画板列表中打开，或把 `.ugcboard.json` 文件拖到应用窗口 / exe 图标上。不登记双击关联：系统按最后一段扩展名识别文件，`.ugcboard.json` 会被当作 `.json`，登记即抢占所有 JSON 文件。
 - macOS 包仅 ad-hoc 签名、未公证、只支持 Apple Silicon：首次右键「打开」。
 
 完整验收流程见 `docs/release/release-checklist.md`。

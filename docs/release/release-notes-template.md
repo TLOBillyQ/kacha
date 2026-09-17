@@ -46,9 +46,8 @@ shasum -a 256 -c SHA256SUMS --ignore-missing
 3. **SmartScreen**：本软件未做代码签名，首次运行可能提示“Windows 已保护你的电脑 / 未知发布者”，
    点「更多信息」→「仍要运行」。若压缩包是从浏览器下载的，也可以在解压前右键压缩包 →「属性」→
    勾选「解除锁定」→「确定」，再解压运行。
-4. **双击打开 `.ugcboard.json` 画板文件**：Windows 版没有安装器，不会自动登记文件关联。需要时右键任意
-   `.ugcboard.json` 文件 →「打开方式」→「选择其他应用」→ 浏览选中 `ugc-image-tool.exe` → 勾选
-   「始终使用此应用打开 .json 文件」。之后若移动了 exe 的位置，需要重新设置一次。
+4. **打开画板**：在应用内的画板列表中打开，或把 `.ugcboard.json` 文件拖到应用窗口 / `ugc-image-tool.exe` 图标上。
+   不支持双击画板文件打开（系统会把它当作普通 `.json` 文件）。
 
 ## macOS（仅 Apple Silicon）
 
@@ -62,7 +61,7 @@ shasum -a 256 -c SHA256SUMS --ignore-missing
      ```sh
      xattr -dr com.apple.quarantine "/Applications/UGC AI 生图工具.app"
      ```
-3. `.app` 已声明 `.ugcboard.json` 文件关联，首次打开应用后即可在访达中双击画板文件直接打开。
+3. **打开画板**：在应用内的画板列表中打开，或把 `.ugcboard.json` 文件拖到应用窗口 / 程序坞图标上。不支持双击画板文件打开。
 
 ## 数据位置与问题反馈
 

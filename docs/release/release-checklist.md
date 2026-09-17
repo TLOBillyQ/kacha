@@ -43,7 +43,7 @@ Tauri 不能交叉构建，Windows 包在 Windows x64 机器上构建，macOS �
 - [ ] 复制 `docs/release/release-notes-template.md` 为 `docs/release/release-notes-<版本>.md`，
       替换 `{{版本}}`、填写本版变化，删除模板头部注释；随版本提交合入。
 - [ ] 内容包含：下载表（三个附件）、SHA256 校验命令、WebView2 说明与官方链接、
-      SmartScreen「更多信息 → 仍要运行」、macOS Gatekeeper 放行方式、Windows 文件关联手动设置、
+      SmartScreen「更多信息 → 仍要运行」、macOS Gatekeeper 放行方式、打开画板方式（不登记双击关联）、
       数据位置与诊断导出入口。
 
 ## 5. 发布（每台构建机各一次）
@@ -72,8 +72,8 @@ Tauri 不能交叉构建，Windows 包在 Windows x64 机器上构建，macOS �
 - [ ] 中文路径下解压运行正常；非管理员账户可运行。
 - [ ] **WebView2 缺失提示**：在未装 WebView2 的机器（或卸载运行时的虚拟机）上启动，弹窗说明并给出
       <https://developer.microsoft.com/microsoft-edge/webview2/> 链接，不闪退、不白屏。
-- [ ] **文件关联**：按发布说明「打开方式 → 选择 exe → 始终使用」后，双击 `.ugcboard.json` 打开对应画板；
-      应用已在运行时再次双击的行为符合预期。
+- [ ] **打开画板**：把 `.ugcboard.json` 拖到 exe 图标上可启动并打开该画板；应用运行时拖到窗口、
+      或拖到 exe 图标上（转交已运行实例）都能打开。
 - [ ] 文生图、图片编辑、画板保存/重新打开各跑通一次。
 - [ ] 覆盖升级：用新 exe 覆盖旧 exe 后，设置、API 密钥与最近画板仍在。
 
@@ -81,8 +81,8 @@ Tauri 不能交叉构建，Windows 包在 Windows x64 机器上构建，macOS �
 
 - [ ] 访达解压并拖入「应用程序」；右键「打开」或「隐私与安全性 → 仍要打开」可放行。
 - [ ] `xattr -dr com.apple.quarantine "/Applications/UGC AI 生图工具.app"` 方式同样有效。
-- [ ] **双击打开画板**：应用未运行时在访达双击 `.ugcboard.json`，应用启动并打开该画板
-      （走 `RunEvent::Opened`，前端就绪前到达的路径不丢）；应用已运行时再双击另一个文件也能打开。
+- [ ] **打开画板**：把 `.ugcboard.json` 拖到窗口可打开；拖到程序坞图标上时应用启动并打开该画板
+      （走 `RunEvent::Opened`，前端就绪前到达的路径不丢）。
 - [ ] 文生图、图片编辑、画板保存/重新打开各跑通一次。
 
 ### 双端
