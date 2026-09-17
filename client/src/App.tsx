@@ -5,6 +5,7 @@ import { ReactFlowProvider } from "@xyflow/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { BOARD_EXTENSION, type Board } from "./core/board";
 import { BUILTIN_TABLE, effectiveTable, type CapabilityTable } from "./core/capabilities";
+import { basename } from "./core/paths";
 import { runScope, buildConfirmItems, imageSources, type ConfirmItem } from "./core/submission";
 import { parseUiState, serializeUiState, type UiState } from "./core/uiState";
 import { ipc } from "./shell/ipc";
@@ -349,6 +350,7 @@ export function App() {
           <ReactFlowProvider key={active.key}>
             <BoardCanvas
               board={active.board}
+              boardFile={basename(active.path)}
               table={table}
               outputRoot={outputRoot}
               update={updateActive}
@@ -370,6 +372,7 @@ export function App() {
           settings={settings}
           outputRoot={outputRoot}
           defaultOutputRoot={defaultRoot}
+          openBoards={sessions.map((s) => s.path)}
           busy={runner.busy}
           onOutputRootChange={switchOutputRoot}
           onClose={() => setSettingsOpen(false)}

@@ -8,6 +8,7 @@ import * as Q from "../core/queue";
 import { CancelledError, executeJob, failureLabel, prepareJob, prepareRegenerate, writeJob, type PreparedJob, type RunDeps, type TaskStatus } from "../core/run";
 import { tableDigest, writeOutcome, type TaskOutcome } from "../core/taskDir";
 import { httpFetch, ipc } from "../shell/ipc";
+import { logEvent } from "../shell/log";
 import { composeOverlay } from "../shell/overlay";
 
 const deps: RunDeps = {
@@ -56,7 +57,19 @@ export function isActive(status: TaskStatus | null | undefined): boolean {
   return status?.kind === "queued" || status?.kind === "running" || status?.kind === "backoff";
 }
 
-export function useRunner(boards: { getBoard: (key: string) => Board | null; updateBoard: (key: string, fn: (b: Board) => Board) => void }, concurrency: number) {
+/** 日志里的错误字段：只带类别、状态码、网关请求编号与脱敏说明。 */
+function errorFields(error: unknown): Record<string, unknown> {
+  if (error instanceof GatewayError) return { category: error.category, status_code: error.status, gateway_request_id: error.requestId, message: failureLabel(error) };
+  return { category: "local", message: failureLabel(error) };
+}
+
+interface RunnerBoards {
+  getBoard: (key: string) => Board | null;
+  updateBoard: (key: string, fn: (b: Board) => Board) => void;
+  boardFileName: (key: string) => string | null;
+}
+
+export function useRunner(boards: RunnerBoards, concurrency: number) {
   const [statuses, setStatuses] = useState<ReadonlyMap<string, TaskStatus>>(new Map());
   const [active, setActive] = useState<ActiveTask[]>([]);
   const queue = useRef(Q.emptyQueue());
@@ -91,6 +104,23 @@ export function useRunner(boards: { getBoard: (key: string) => Board | null; upd
 
   const pumpRef = useRef<() => void>(() => undefined);
 
+  /** 任务迁移事件带画板文件名 + 任务节点 id（规格第 12 节）。 */
+  const taskFields = useCallback(
+    (entry: QueuedSubmission) => ({
+      task_id: entry.job.taskId,
+      board_file: boardsRef.current.boardFileName(entry.target.boardKey),
+      task_node_id: entry.job.taskNodeId,
+      model: entry.job.plan.model,
+      workflow: entry.job.plan.references.length ? "image_edit" : "text_to_image",
+    }),
+    [],
+  );
+  const logTransition = useCallback(
+    (entry: QueuedSubmission, from: string | null, to: string, extra: Record<string, unknown> = {}) =>
+      logEvent("task", { ...taskFields(entry), from_status: from, to_status: to, ...extra }),
+    [taskFields],
+  );
+
   const setLastSubmitted = useCallback((boardKey: string, taskNodeId: string, value: TaskNode["last_submitted"]) => {
     boardsRef.current.updateBoard(boardKey, (b) => ({
       ...b,
@@ -104,6 +134,7 @@ export function useRunner(boards: { getBoard: (key: string) => Board | null; upd
   }, []);
 
   const fail = (entry: QueuedSubmission, error: unknown) => {
+    logTransition(entry, "running", "failed", errorFields(error));
     const failed = { kind: "failed" as const, label: failureLabel(error) };
     setStatus(entry.job.taskNodeId, failed);
     recordOutcome(entry, failed);
@@ -113,6 +144,7 @@ export function useRunner(boards: { getBoard: (key: string) => Board | null; upd
     async (taskId: string) => {
       const entry = entries.current.get(taskId)!;
       const { job, controller, target } = entry;
+      logTransition(entry, queue.current.retries[taskId] ? "backoff" : "queued", "running");
       setStatus(job.taskNodeId, { kind: "running", startedAt: Date.now() });
       let retrying = false;
       try {
@@ -131,17 +163,28 @@ export function useRunner(boards: { getBoard: (key: string) => Board | null; upd
           apiKey: target.apiKey,
           newNodeId: crypto.randomUUID(),
           signal: controller.signal,
+          onDownload: (result) =>
+            logEvent("download", { task_id: job.taskId, model: job.plan.model, ...(result.ok ? { ok: true, images: result.images } : { ok: false, ...errorFields(result.error) }) }),
         });
         if (controller.signal.aborted) return;
+        logTransition(entry, "running", "succeeded");
         boardsRef.current.updateBoard(target.boardKey, apply);
         setStatus(job.taskNodeId, null);
         queue.current = Q.complete(queue.current, taskId);
       } catch (e) {
         if (controller.signal.aborted || e instanceof CancelledError) return;
         if (e instanceof GatewayError && e.category === "rate_limited") {
+          const attempt = (queue.current.retries[taskId] ?? 0) + 1;
           const { queue: next, outcome } = Q.rateLimited(queue.current, taskId, Date.now());
           queue.current = next;
           retrying = outcome.kind === "retry";
+          logEvent("rate_limit", {
+            ...taskFields(entry),
+            attempt,
+            outcome: outcome.kind,
+            ...(outcome.kind === "retry" ? { retry_at: new Date(outcome.retryAt).toISOString(), queue_paused_until: new Date(next.pausedUntil).toISOString() } : {}),
+          });
+          if (outcome.kind === "retry") logTransition(entry, "running", "backoff");
           if (outcome.kind === "retry") setStatus(job.taskNodeId, { kind: "backoff", retryAt: outcome.retryAt });
           else fail(entry, e);
         } else {
@@ -153,7 +196,7 @@ export function useRunner(boards: { getBoard: (key: string) => Board | null; upd
         pumpRef.current();
       }
     },
-    [setStatus, setLastSubmitted, recordOutcome],
+    [setStatus, setLastSubmitted, recordOutcome, logTransition, taskFields],
   );
 
   const pump = useCallback(() => {
@@ -161,10 +204,14 @@ export function useRunner(boards: { getBoard: (key: string) => Board | null; upd
     const now = Date.now();
     const { queue: next, started } = Q.dispatch(queue.current, now, limit.current);
     queue.current = next;
-    for (const id of started) void execute(id);
+    for (const id of started) {
+      const entry = entries.current.get(id);
+      if (entry) logEvent("queue_dispatch", { ...taskFields(entry), running: next.running.length, waiting: next.waiting.length, limit: limit.current });
+      void execute(id);
+    }
     if (next.waiting.length && now < next.pausedUntil) timer.current = setTimeout(pump, next.pausedUntil - now);
     publish();
-  }, [execute, publish]);
+  }, [execute, publish, taskFields]);
   pumpRef.current = pump;
 
   // 并发上限调大后立即补派发。
@@ -184,9 +231,10 @@ export function useRunner(boards: { getBoard: (key: string) => Board | null; upd
         controller: new AbortController(),
       });
       queue.current = Q.enqueue(queue.current, [job.taskId]);
+      logTransition(entries.current.get(job.taskId)!, null, "queued");
       pump();
     },
-    [pump],
+    [pump, logTransition],
   );
 
   const occupied = (boardKey: string, taskNodeId: string) =>
@@ -254,15 +302,20 @@ export function useRunner(boards: { getBoard: (key: string) => Board | null; upd
       for (const taskId of taskIds) {
         const entry = entries.current.get(taskId);
         if (!entry) continue;
+        // 在等待里且已重试过 = 限流退避中。
+        const inBackoff = queue.current.retries[taskId] !== undefined;
         const { queue: next, was } = Q.cancel(queue.current, taskId);
         queue.current = next;
         entries.current.delete(taskId);
+        const from = was === "running" ? "running" : inBackoff ? "backoff" : "queued";
         if (was === "waiting" && !entry.written) {
+          logTransition(entry, from, "cancelled", { gateway_may_continue: false });
           // 从未派发：画板与任务目录都没动过，不留痕迹。
           setStatus(entry.job.taskNodeId, null);
         } else {
           // 执行中：请求可能已发出；限流退避中：网关没接这次请求。
           const cancelled = { kind: "cancelled" as const, gatewayMayContinue: was === "running" && entry.written };
+          logTransition(entry, from, "cancelled", { gateway_may_continue: cancelled.gatewayMayContinue });
           entry.controller.abort();
           setStatus(entry.job.taskNodeId, cancelled);
           recordOutcome(entry, cancelled);
@@ -270,7 +323,7 @@ export function useRunner(boards: { getBoard: (key: string) => Board | null; upd
       }
       pump();
     },
-    [pump, setStatus, recordOutcome],
+    [pump, setStatus, recordOutcome, logTransition],
   );
 
   /** 取消还在读参考图的提交。 */

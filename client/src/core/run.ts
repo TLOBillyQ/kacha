@@ -240,19 +240,34 @@ export async function writeJob(deps: RunDeps, outputRoot: string, job: PreparedJ
 /** 调网关并存结果图；返回把结果节点加到画板上的更新函数。生成请求只发一次。 */
 export async function executeJob(
   deps: RunDeps,
-  args: { job: PreparedJob; outputRoot: string; baseUrl: string; apiKey: string; newNodeId: string; signal?: AbortSignal },
+  args: {
+    job: PreparedJob;
+    outputRoot: string;
+    baseUrl: string;
+    apiKey: string;
+    newNodeId: string;
+    signal?: AbortSignal;
+    /** 结果图下载结束（日志用）；取消不回调。 */
+    onDownload?: (result: { ok: true; images: number } | { ok: false; error: unknown }) => void;
+  },
 ): Promise<(board: Board) => Board> {
   const { job, signal } = args;
   // 网关侧的计算停不下来；取消只是不再等待、不落结果。
   const { images } = await generate({ baseUrl: args.baseUrl, apiKey: args.apiKey, fetch: deps.fetch }, job.input);
   if (signal?.aborted) throw new CancelledError();
   const fetched: { bytes: Uint8Array; layer?: { z_index: number; bounding_box: number[] } }[] = [];
-  for (const image of images) {
-    const bytes = await fetchResultImage(deps.fetch, image);
-    if (signal?.aborted) throw new CancelledError();
-    if (!sniffImage(bytes)) throw new GatewayError("invalid_response", "结果不是可识别的图片");
-    fetched.push({ bytes, layer: image.layer });
+  try {
+    for (const image of images) {
+      const bytes = await fetchResultImage(deps.fetch, image);
+      if (signal?.aborted) throw new CancelledError();
+      if (!sniffImage(bytes)) throw new GatewayError("invalid_response", "结果不是可识别的图片");
+      fetched.push({ bytes, layer: image.layer });
+    }
+  } catch (e) {
+    if (!(e instanceof CancelledError)) args.onDownload?.({ ok: false, error: e });
+    throw e;
   }
+  args.onDownload?.({ ok: true, images: fetched.length });
   let saved: { file: string; path: string };
   let layers: LayerRecord[] | undefined;
   try {

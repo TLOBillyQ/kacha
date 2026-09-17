@@ -1,8 +1,13 @@
-//! Tauri 壳：只承担单实例、文件系统原子写与系统对话框等原生职责；业务逻辑在前端 TypeScript（规格第 2 节）。
+//! Tauri 壳：只承担日志器、凭据库、单实例、文件系统原子写与系统对话框等原生职责；业务逻辑在前端 TypeScript（规格第 2 节）。
 
+mod diagnostics;
 mod image_info;
+mod logger;
+mod redact;
 mod secret;
 mod store;
+#[cfg(windows)]
+mod webview2;
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -11,9 +16,10 @@ use serde::Serialize;
 use tauri::{Emitter, Manager};
 
 const UI_STATE_FILE: &str = "ui-state.json";
-const CAPABILITY_OVERRIDE_FILE: &str = "capabilities.override.json";
-const SETTINGS_FILE: &str = "settings.json";
+pub(crate) const CAPABILITY_OVERRIDE_FILE: &str = "capabilities.override.json";
+pub(crate) const SETTINGS_FILE: &str = "settings.json";
 const MODELS_CACHE_FILE: &str = "models-cache.json";
+const PRESETS_FILE: &str = "presets.json";
 /// 与 v1 保持一致的默认输出根目录名（图片目录下）。
 const DEFAULT_OUTPUT_DIR_NAME: &str = "UGC AI 生图工具";
 
@@ -108,6 +114,51 @@ fn write_models_cache(app: tauri::AppHandle, text: String) -> Result<(), String>
 }
 
 #[tauri::command]
+fn read_presets(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    store::read_text(&app_data_dir(&app)?.join(PRESETS_FILE)).map_err(err)
+}
+
+#[tauri::command]
+fn write_presets(app: tauri::AppHandle, text: String) -> Result<(), String> {
+    store::atomic_write(&app_data_dir(&app)?.join(PRESETS_FILE), text.as_bytes()).map_err(err)
+}
+
+/// 前端写日志的唯一入口；日志器未就绪（app-data 目录不可用）时静默丢弃。
+#[tauri::command]
+fn log_event(logger: tauri::State<Option<logger::Logger>>, kind: String, fields: serde_json::Map<String, serde_json::Value>) -> Result<(), String> {
+    match logger.inner() {
+        Some(l) => l.log(&kind, &fields),
+        None => Ok(()),
+    }
+}
+
+fn diagnostic_sources(app: &tauri::AppHandle, output_root: Option<String>, open_boards: Vec<String>) -> Result<diagnostics::Sources, String> {
+    Ok(diagnostics::Sources {
+        app_data_dir: app_data_dir(app)?,
+        output_root: output_root.map(PathBuf::from),
+        open_boards: open_boards.into_iter().map(PathBuf::from).collect(),
+    })
+}
+
+#[tauri::command]
+fn diagnostics_preview(app: tauri::AppHandle, output_root: Option<String>, open_boards: Vec<String>) -> Result<Vec<diagnostics::PackageEntry>, String> {
+    Ok(diagnostics::preview(&diagnostic_sources(&app, output_root, open_boards)?))
+}
+
+/// 导出诊断包；include = 用户勾选的可选条目名。返回实际打包的条目。
+#[tauri::command]
+fn diagnostics_export(
+    app: tauri::AppHandle,
+    output_root: Option<String>,
+    open_boards: Vec<String>,
+    target: String,
+    include: Vec<String>,
+) -> Result<Vec<diagnostics::PackageEntry>, String> {
+    let version = app.package_info().version.to_string();
+    diagnostics::export(&diagnostic_sources(&app, output_root, open_boards)?, Path::new(&target), &include, &version).map_err(err)
+}
+
+#[tauri::command]
 fn secret_get() -> Result<Option<String>, String> {
     secret::get()
 }
@@ -169,6 +220,11 @@ fn inspect_image(path: String) -> Result<image_info::ImageInfo, String> {
 }
 
 pub fn run() {
+    #[cfg(windows)]
+    if tauri::webview_version().is_err() {
+        webview2::explain_missing();
+        return;
+    }
     tauri::Builder::default()
         .manage(OpenedPaths::default())
         // 单实例必须最先注册：第二实例把参数转交第一实例后直接退出，不用锁文件。
@@ -183,6 +239,15 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_http::init())
+        .setup(|app| {
+            let version = app.package_info().version.to_string();
+            let logger = app.path().app_data_dir().ok().map(|dir| logger::Logger::new(dir, version));
+            if let Some(l) = &logger {
+                let _ = l.log("system", &serde_json::json!({"message": "启动", "os": std::env::consts::OS, "arch": std::env::consts::ARCH}).as_object().cloned().unwrap_or_default());
+            }
+            app.manage(logger);
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             app_paths,
             startup_args,
@@ -198,6 +263,11 @@ pub fn run() {
             write_settings,
             read_models_cache,
             write_models_cache,
+            read_presets,
+            write_presets,
+            log_event,
+            diagnostics_preview,
+            diagnostics_export,
             secret_get,
             secret_set,
             secret_delete,

@@ -15,6 +15,7 @@ import {
   type Settings,
 } from "../core/settings";
 import { httpFetch, ipc } from "../shell/ipc";
+import { logEvent } from "../shell/log";
 
 /** persisted = 已存入系统凭据库；session = 凭据库不可用，只在本次运行的内存里。 */
 export type KeyPersistence = "persisted" | "session";
@@ -53,9 +54,12 @@ export function useSettings() {
       cacheRef.current = cache;
       await ipc.writeModelsCache(serializeModelsCache(cache)).catch(() => undefined);
       setState((s) => ({ ...s, discovery: { source: "live", ids, fetchedAt: cache.fetched_at } }));
+      logEvent("connection", { stage: "list_models", ok: true, models: ids.length });
       return { ok: true, count: ids.length };
     } catch (e) {
       setState((s) => ({ ...s, discovery: discoveryFromCache(cacheRef.current, baseUrl) }));
+      const gateway = e instanceof GatewayError ? e : null;
+      logEvent("connection", { stage: "list_models", ok: false, category: gateway?.category ?? "unknown", status_code: gateway?.status, message: gateway?.message ?? String(e) });
       return { ok: false, message: e instanceof GatewayError ? e.message : "连接测试失败" };
     }
   }, []);

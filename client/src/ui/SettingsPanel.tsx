@@ -1,6 +1,7 @@
-// 高级设置模态面板（规格第 12 节）：网关地址、API 密钥、连接测试、输出根目录、并发上限。
+// 高级设置模态面板（规格第 12 节）：网关地址、API 密钥、连接测试、输出根目录、并发上限、诊断包导出。
+import { getVersion } from "@tauri-apps/api/app";
 import { open } from "@tauri-apps/plugin-dialog";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   DEFAULT_SETTINGS,
   isPlainHttp,
@@ -10,6 +11,7 @@ import {
   validateBaseUrl,
   type Settings,
 } from "../core/settings";
+import { DiagnosticsSection } from "./DiagnosticsSection";
 import type { ConnectionResult, useSettings } from "./useSettings";
 
 interface Props {
@@ -17,6 +19,8 @@ interface Props {
   /** 当前生效的输出根目录（含默认值）。 */
   outputRoot: string;
   defaultOutputRoot: string;
+  /** 当前打开的画板路径，诊断包可勾选带上。 */
+  openBoards: string[];
   /** 有排队 / 执行中的任务时不允许切换输出根目录。 */
   busy: boolean;
   /** 输出根目录变了：由调用方关闭标签页并切换。 */
@@ -24,7 +28,7 @@ interface Props {
   onClose: () => void;
 }
 
-export function SettingsPanel({ settings, outputRoot, defaultOutputRoot, busy, onOutputRootChange, onClose }: Props) {
+export function SettingsPanel({ settings, outputRoot, defaultOutputRoot, openBoards, busy, onOutputRootChange, onClose }: Props) {
   const [baseUrl, setBaseUrl] = useState(settings.settings.base_url);
   const [apiKey, setApiKey] = useState(settings.apiKey);
   const [showKey, setShowKey] = useState(false);
@@ -34,6 +38,11 @@ export function SettingsPanel({ settings, outputRoot, defaultOutputRoot, busy, o
   const [testResult, setTestResult] = useState<ConnectionResult | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 版本号唯一来源是 Cargo.toml（tauri.conf.json 不写 version 即沿用），经 Tauri 读出。
+  const [version, setVersion] = useState<string | null>(null);
+  useEffect(() => {
+    void getVersion().then(setVersion, () => undefined);
+  }, []);
 
   const urlError = validateBaseUrl(baseUrl);
   const rootChanged = root !== outputRoot;
@@ -78,6 +87,7 @@ export function SettingsPanel({ settings, outputRoot, defaultOutputRoot, busy, o
       <div className="modal" role="dialog" aria-label="高级设置">
         <div className="modal-head">
           <strong>高级设置</strong>
+          {version && <span className="muted small">版本 {version}</span>}
           <button className="link" onClick={onClose}>
             关闭
           </button>
@@ -151,6 +161,8 @@ export function SettingsPanel({ settings, outputRoot, defaultOutputRoot, busy, o
           />
           <span className="muted small">1～5，默认 3</span>
         </label>
+
+        <DiagnosticsSection outputRoot={outputRoot} openBoards={openBoards} />
 
         {error && <div className="form-error">{error}</div>}
         <div className="modal-foot">

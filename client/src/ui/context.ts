@@ -6,6 +6,7 @@ import type { TaskStatus } from "../core/run";
 import { isInterrupted } from "../core/submission";
 import { OUTCOME_FILE, parseOutcome, taskDirOfTaskId, type TaskOutcome } from "../core/taskDir";
 import { ipc, type ImageInfo } from "../shell/ipc";
+import { logEvent } from "../shell/log";
 
 export interface BoardActions {
   table: CapabilityTable;
@@ -128,7 +129,10 @@ function readOutcome(outputRoot: string, taskId: string): Promise<TaskOutcome | 
  * 本次运行没经手过、提交过却没有结果的任务：按任务目录的 outcome.json 推导失败 / 已取消，没有记录 = 已中断。
  * 读完之前不显示徽标。
  */
-export function useStoredStatuses(board: Board, outputRoot: string, handled: ReadonlySet<string>): ReadonlyMap<string, TaskStatus> {
+/** 已中断只在本次运行里首次发现时记一次日志。 */
+const loggedInterrupted = new Set<string>();
+
+export function useStoredStatuses(board: Board, boardFile: string, outputRoot: string, handled: ReadonlySet<string>): ReadonlyMap<string, TaskStatus> {
   const [statuses, setStatuses] = useState<ReadonlyMap<string, TaskStatus>>(new Map());
   const candidates = board.nodes.flatMap((n) =>
     n.type === "task" && typeof n.last_submitted?.task_id === "string" && isInterrupted(board, n.id, handled) ? [[n.id, n.last_submitted.task_id] as const] : [],
@@ -139,6 +143,10 @@ export function useStoredStatuses(board: Board, outputRoot: string, handled: Rea
     void Promise.all(
       candidates.map(async ([nodeId, taskId]) => {
         const outcome = await readOutcome(outputRoot, taskId);
+        if (!outcome && !loggedInterrupted.has(taskId)) {
+          loggedInterrupted.add(taskId);
+          logEvent("task", { task_id: taskId, board_file: boardFile, task_node_id: nodeId, from_status: "running", to_status: "interrupted" });
+        }
         return [nodeId, outcome ?? { kind: "interrupted" }] as const;
       }),
     ).then((entries) => alive && setStatuses(new Map(entries)));

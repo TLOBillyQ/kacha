@@ -23,6 +23,14 @@ export interface ImageInfo {
   has_alpha: boolean;
 }
 
+export interface PackageEntry {
+  name: string;
+  description: string;
+  size: number;
+  optional: boolean;
+  contains_prompt: boolean;
+}
+
 export const ipc = {
   appPaths: () => invoke<AppPaths>("app_paths"),
   startupArgs: () => invoke<string[]>("startup_args"),
@@ -38,6 +46,12 @@ export const ipc = {
   writeSettings: (text: string) => invoke<void>("write_settings", { text }),
   readModelsCache: () => invoke<string | null>("read_models_cache"),
   writeModelsCache: (text: string) => invoke<void>("write_models_cache", { text }),
+  readPresets: () => invoke<string | null>("read_presets"),
+  writePresets: (text: string) => invoke<void>("write_presets", { text }),
+  logEvent: (kind: string, fields: Record<string, unknown>) => invoke<void>("log_event", { kind, fields }),
+  diagnosticsPreview: (outputRoot: string | null, openBoards: string[]) => invoke<PackageEntry[]>("diagnostics_preview", { outputRoot, openBoards }),
+  diagnosticsExport: (outputRoot: string | null, openBoards: string[], target: string, include: string[]) =>
+    invoke<PackageEntry[]>("diagnostics_export", { outputRoot, openBoards, target, include }),
   /** 系统凭据库；不可用时 reject（调用方退回会话内存）。 */
   secretGet: () => invoke<string | null>("secret_get"),
   secretSet: (key: string) => invoke<void>("secret_set", { key }),
