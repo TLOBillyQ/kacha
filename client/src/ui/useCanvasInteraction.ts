@@ -1,4 +1,4 @@
-// 画板选取、编辑键与导航（规格 4.1「导航」「选取与编辑键」）：左键拖平移 / Ctrl + 拖框选 / Shift 加选、平移缩放、Esc 清选区、
+// 画板选取、编辑键与导航（规格 4.1「导航」「选取与编辑键」）：左键拖框选 / Shift 加选、右键 / 中键拖平移、平移缩放、Esc 清选区、
 // 方向键微移、Ctrl+J 原地偏移复制、Alt + 拖复制。React Flow 的相关配置与这些键位收在这里，BoardCanvas 只接线。
 // 撤销 / 重做、复制粘贴的 Ctrl 键仍在 BoardCanvas（#105），两边键位不重叠。
 import { SelectionMode, useReactFlow, useStoreApi, type Node, type ReactFlowProps } from "@xyflow/react";
@@ -46,7 +46,7 @@ export function useCanvasInteraction({ wrapper, boardRef, selection, dialogOpen,
   const flow = useReactFlow();
   const store = useStoreApi();
 
-  // Ctrl + Shift + 框选：React Flow 框选开始时会先清空选区，按下时记下原选区并忽略对它的取消选中。
+  // Shift + 框选：React Flow 框选开始时会先清空选区，按下时记下原选区并忽略对它的取消选中。
   const keep = useRef(NONE);
   const onPointerDownCapture = useCallback(
     (e: React.PointerEvent) => {
@@ -152,13 +152,13 @@ export function useCanvasInteraction({ wrapper, boardRef, selection, dialogOpen,
   }, [wrapper, flow, store, boardRef, selection, dialogOpen, updateBoard]);
 
   const flowProps: Partial<ReactFlowProps> = {
-    // ComfyUI 式：左键 / 中键拖空白平移，按住 Ctrl 拖框选。
-    selectionOnDrag: false,
+    selectionOnDrag: true,
     selectionMode: SelectionMode.Partial,
-    // 框选键不能用 Shift：按住框选键时 React Flow 在节点上也起框，Shift + 点节点加选会失效。
-    selectionKeyCode: "Control",
+    // Shift 用于加选；框选靠左键拖空白，不另设框选键（按住框选键时 React Flow 在节点上也起框，Shift + 点节点会变成框选）。
+    selectionKeyCode: null,
     multiSelectionKeyCode: "Shift",
-    panOnDrag: [0, 1],
+    // 右键 / 中键拖平移。右键没拖动时 React Flow 在松手时才触发空白处上下文菜单，拖动过则不弹。
+    panOnDrag: [1, 2],
     panActivationKeyCode: "Space",
     zoomOnScroll: true,
     zoomOnPinch: true,
