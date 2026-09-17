@@ -1,7 +1,7 @@
 // 节点四型的渲染。节点数据只来自画板文件模型；派生信息（露出端口、标红原因、校验规则）由画布计算后传入。
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { Handle, Position, useUpdateNodeInternals, type Node, type NodeProps } from "@xyflow/react";
-import { memo, useEffect, useState, type ReactNode } from "react";
+import { memo, useEffect, useRef, useState, type ReactNode } from "react";
 import type { PromptNode as PromptModel, ReferenceNode as ReferenceModel, ResultNode as ResultModel, TaskNode as TaskModel } from "../core/board";
 import {
   findModel,
@@ -19,10 +19,21 @@ import { ratiosForSizeTier, sizeTiersOf } from "../core/size";
 import { fileUrl } from "../shell/ipc";
 import { useBoardActions, useImageInfo } from "./context";
 
-/** recorded：直接下游有已提交过的任务，编辑时三选。 */
-export type PromptFlowNode = Node<{ node: PromptModel; recorded: boolean }, "prompt">;
-export type ReferenceFlowNode = Node<{ node: ReferenceModel; rules: InputImageRule[] }, "reference">;
-export type ResultFlowNode = Node<{ node: ResultModel }, "result">;
+/** recorded：直接下游有已提交过的任务，编辑时三选；autoFocus：「以此继续编辑」刚新建的空提示词。 */
+export type PromptFlowNode = Node<{ node: PromptModel; recorded: boolean; autoFocus: boolean }, "prompt">;
+/** missing：图片文件读不到，显示占位与「重新定位」。 */
+export type ReferenceFlowNode = Node<{ node: ReferenceModel; rules: InputImageRule[]; missing: boolean }, "reference">;
+export type ResultFlowNode = Node<
+  {
+    node: ResultModel;
+    missing: boolean;
+    /** 「加为参考图」的目标：恰好选中一个生成任务节点，否则给出置灰原因。 */
+    referenceTarget: { ok: true; taskId: string } | { ok: false; reason: string };
+    /** 非空 = 「生成变体」不可用的原因。 */
+    variantBlocker: string | null;
+  },
+  "result"
+>;
 export interface ImagePortInfo {
   label: string;
   /** 源图片绝对路径，用于判断透明背景前提（是否带 alpha）。 */
@@ -67,9 +78,41 @@ function Thumb({ absPath, alt }: { absPath: string; alt: string }) {
   );
 }
 
+/** 缺图占位：文件名 + 「重新定位」（选文件，或在输出根目录内按身份找）。 */
+function MissingImage({ nodeId, name }: { nodeId: string; name: string }) {
+  const { relocate } = useBoardActions();
+  return (
+    <div className="thumb thumb-missing nodrag" onClick={(e) => e.stopPropagation()}>
+      <div>图片缺失</div>
+      <div className="mono small" title={name}>
+        {name}
+      </div>
+      <div className="relocate">
+        <button onClick={() => relocate(nodeId, "search")} title="在输出根目录内按任务编号 / 文件哈希查找，不扫描整个磁盘">
+          重新定位
+        </button>
+        <button onClick={() => relocate(nodeId, "pick")}>选文件…</button>
+      </div>
+    </div>
+  );
+}
+
+/** 图片节点上的迭代动作；点按钮不改变选中（「加为参考图」依赖当前选中的任务节点）。 */
+function ImageActions({ children }: { children: ReactNode }) {
+  return (
+    <div className="image-actions nodrag" onClick={(e) => e.stopPropagation()}>
+      {children}
+    </div>
+  );
+}
+
 export const PromptNodeView = memo(function PromptNodeView({ data }: NodeProps<PromptFlowNode>) {
   const { updateNode, forkPrompt } = useBoardActions();
-  const { node, recorded } = data;
+  const { node, recorded, autoFocus } = data;
+  const textarea = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    if (autoFocus) textarea.current?.focus();
+  }, [autoFocus]);
   // 下游有执行记录时，本次聚焦内第一次改动先三选；选「不断开」后到失焦前不再问。
   const [pending, setPending] = useState<string | null>(null);
   const [keep, setKeep] = useState(false);
@@ -86,6 +129,7 @@ export const PromptNodeView = memo(function PromptNodeView({ data }: NodeProps<P
   return (
     <Shell kind="prompt" title="提示词">
       <textarea
+        ref={textarea}
         className="nodrag nowheel prompt-text"
         value={pending ?? node.text}
         placeholder="输入提示词…"
@@ -122,14 +166,14 @@ export const PromptNodeView = memo(function PromptNodeView({ data }: NodeProps<P
 });
 
 export const ReferenceNodeView = memo(function ReferenceNodeView({ data }: NodeProps<ReferenceFlowNode>) {
-  const { outputRoot } = useBoardActions();
-  const { node, rules } = data;
+  const { outputRoot, continueEditing } = useBoardActions();
+  const { node, rules, missing } = data;
   const abs = resolveFromRoot(outputRoot, node.path);
   const info = useImageInfo(abs);
   const warnings = info ? [...new Set(rules.flatMap((rule) => imageRuleViolations(info, rule)))] : [];
   return (
     <Shell kind="reference" title="参考图" className={warnings.length ? "node-warn" : ""}>
-      <Thumb absPath={abs} alt={node.display_name} />
+      {missing ? <MissingImage nodeId={node.id} name={node.display_name} /> : <Thumb absPath={abs} alt={node.display_name} />}
       <div className="caption" title={node.path}>
         {info?.has_alpha && <span className="badge">透明</span>}
         {node.display_name}
@@ -141,14 +185,19 @@ export const ReferenceNodeView = memo(function ReferenceNodeView({ data }: NodeP
           ))}
         </ul>
       )}
+      <ImageActions>
+        <button onClick={() => continueEditing(node.id)} title="新建生成任务，以这张图为图1（多选时按选中顺序接入）">
+          以此继续编辑
+        </button>
+      </ImageActions>
       <Handle type="source" position={Position.Right} id="out" />
     </Shell>
   );
 });
 
 export const ResultNodeView = memo(function ResultNodeView({ data }: NodeProps<ResultFlowNode>) {
-  const { outputRoot, table } = useBoardActions();
-  const { node } = data;
+  const { outputRoot, table, continueEditing, addAsReference, generateVariant } = useBoardActions();
+  const { node, missing, referenceTarget, variantBlocker } = data;
   const abs = resolveFromRoot(outputRoot, node.path);
   const info = useImageInfo(abs);
   const { record } = node;
@@ -157,7 +206,7 @@ export const ResultNodeView = memo(function ResultNodeView({ data }: NodeProps<R
   return (
     <Shell kind="result" title="结果">
       <Handle type="target" position={Position.Left} id="in" isConnectable={false} />
-      <Thumb absPath={abs} alt={node.file} />
+      {missing ? <MissingImage nodeId={node.id} name={node.file} /> : <Thumb absPath={abs} alt={node.file} />}
       <div className="badges">
         {info?.has_alpha && <span className="badge">透明</span>}
         {node.layer_count > 0 && <span className="badge">{node.layer_count} 图层</span>}
@@ -178,6 +227,21 @@ export const ResultNodeView = memo(function ResultNodeView({ data }: NodeProps<R
           {node.task_id}
         </dd>
       </dl>
+      <ImageActions>
+        <button onClick={() => continueEditing(node.id)} title="新建生成任务，以这张图为图1（多选时按选中顺序接入）">
+          以此继续编辑
+        </button>
+        <button
+          onClick={() => addAsReference(node.id)}
+          disabled={!referenceTarget.ok}
+          title={referenceTarget.ok ? "接到选中生成任务的下一个空图片端口" : referenceTarget.reason}
+        >
+          加为参考图
+        </button>
+        <button onClick={() => generateVariant(node.id)} disabled={variantBlocker !== null} title={variantBlocker ?? "父任务按这张图的参数再生成一张"}>
+          生成变体
+        </button>
+      </ImageActions>
       <Handle type="source" position={Position.Right} id="out" />
     </Shell>
   );

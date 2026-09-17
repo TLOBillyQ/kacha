@@ -608,3 +608,42 @@ button.primary:disabled {
 .run-list .status {
   margin-left: 0;
 }
+
+.image-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+.image-actions button {
+  font-size: 12px;
+  padding: 1px 6px;
+}
+.thumb-missing {
+  height: auto;
+  min-height: 100px;
+  align-content: center;
+  gap: 4px;
+  padding: 8px;
+  text-align: center;
+  overflow: hidden;
+}
+.thumb-missing .mono {
+  color: #57606a;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.relocate {
+  display: flex;
+  gap: 4px;
+  justify-content: center;
+}
+.react-flow__node.in-lineage .node {
+  box-shadow: 0 0 0 3px rgba(9, 105, 218, 0.35);
+}
+.react-flow__edge.edge-lineage path {
+  stroke: #0969da;
+  stroke-width: 3;
+}

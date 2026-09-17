@@ -150,3 +150,9 @@ export function defaultTaskModel(table: CapabilityTable, discovery: Discovery, l
   if (lastModel && available.some((m) => m.model_id === lastModel)) return lastModel;
   return available[0]?.model_id ?? shelved(table)[0]?.model_id ?? null;
 }
+
+/** 迭代动作用的默认编辑模型：可用列表里第一个支持图片编辑的 → 上架清单里第一个；都没有为 null。 */
+export function defaultEditModel(table: CapabilityTable, discovery: Discovery): ModelCapability | null {
+  const canEdit = (m: ModelCapability) => m.workflows.image_edit.max_references > 0;
+  return availableModels(table, discovery).find(canEdit) ?? shelved(table).find(canEdit) ?? null;
+}

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Board, BoardNode, ResultNode, TaskNode } from "./board";
-import { addResultNode, placeResult, RESULT_NODE_SIZE, type NewResult } from "./layout";
+import { addResultNode, placeNear, placeResult, RESULT_NODE_SIZE, type NewResult } from "./layout";
 
 function task(id: string, pos: [number, number], size: [number, number] = [280, 260]): TaskNode {
   return {
@@ -75,5 +75,22 @@ describe("结果列落位", () => {
   it("任务节点已被删除时不加结果节点", () => {
     const b = board([box("p", [0, 0], [10, 10])]);
     expect(addResultNode(b, result("t"))).toBe(b);
+  });
+});
+
+describe("就近空位", () => {
+  it("期望位置空着就原样用", () => {
+    const b = board([box("a", [0, 0], [100, 100])]);
+    expect(placeNear(b, [200, 0], [100, 100])).toEqual([200, 0]);
+  });
+
+  it("被占住就往下让到挡路节点下方，不动别的节点", () => {
+    const b = board([box("a", [200, -20], [100, 100]), box("b", [200, 104], [100, 50])]);
+    expect(placeNear(b, [200, 0], [100, 100])).toEqual([200, 104 + 50 + 24]);
+  });
+
+  it("额外障碍（同一动作里刚放下的节点）也要避开", () => {
+    const b = board([]);
+    expect(placeNear(b, [0, 0], [100, 100], [{ pos: [0, 50], size: [100, 100] }])).toEqual([0, 50 + 100 + 24]);
   });
 });
