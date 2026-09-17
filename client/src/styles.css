@@ -802,3 +802,66 @@ button.primary:disabled {
   color: #656d76;
   background: #f6f8fa;
 }
+.badge-warn {
+  padding: 0 4px;
+  border-radius: 4px;
+  background: #fff8c5;
+  border: 1px solid var(--yellow);
+}
+.diagnostics {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+.diagnostics-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 200px;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+}
+.diagnostics-list li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.preset-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.preset-row {
+  display: flex;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.preset-main {
+  flex: 1;
+  min-width: 0;
+}
+.preset-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.preset-actions {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+}
+.preset-editor,
+.form-col {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}

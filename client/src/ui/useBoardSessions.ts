@@ -12,6 +12,7 @@ import {
 } from "../core/board";
 import { basename, boardsDir, dirname, joinPath } from "../core/paths";
 import { ipc } from "../shell/ipc";
+import { logEvent } from "../shell/log";
 
 export const AUTOSAVE_DEBOUNCE_MS = 1000;
 
@@ -71,6 +72,7 @@ export function useBoardSessions(outputRoot: string | null) {
           await ipc.writeBoard(s.path, serializeBoard(s.board));
           if (s.saveError) patch(key, (x) => ({ ...x, saveError: null }));
         } catch (e) {
+          logEvent("board_save_failed", { board_file: basename(s.path), reason: "autosave", message: errorText(e) });
           patch(key, (x) => ({ ...x, saveError: `未能保存到 ${s.path}：${errorText(e)}` }));
         }
       });
@@ -105,6 +107,12 @@ export function useBoardSessions(outputRoot: string | null) {
   const getBoard = useCallback((key: string): Board | null => {
     const s = sessionsRef.current.find((x) => x.key === key);
     return s?.status === "ok" ? s.board : null;
+  }, []);
+
+  /** 画板文件名（日志用，不带目录）；会话不存在时为 null。 */
+  const boardFileName = useCallback((key: string): string | null => {
+    const s = sessionsRef.current.find((x) => x.key === key);
+    return s ? basename(s.path) : null;
   }, []);
 
   /** 关闭全部标签页（切换输出根目录时用）；先落盘。 */
@@ -220,6 +228,7 @@ export function useBoardSessions(outputRoot: string | null) {
         await ipc.writeBoard(path, serializeBoard(s.board));
         patch(key, (x) => ({ ...x, path, saveError: null }));
       } catch (e) {
+        logEvent("board_save_failed", { board_file: basename(path), reason: "save_as", message: errorText(e) });
         patch(key, (x) => ({ ...x, saveError: `未能保存到 ${path}：${errorText(e)}` }));
       }
     },
@@ -239,6 +248,7 @@ export function useBoardSessions(outputRoot: string | null) {
     saveAs,
     updateBoard,
     getBoard,
+    boardFileName,
     closeAll,
     flushAll,
     dismissNotice,

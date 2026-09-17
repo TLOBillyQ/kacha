@@ -41,12 +41,15 @@ import {
 } from "../core/graph";
 import { addAsReference, addAsReferenceTarget, continueEditing, copySelection, lineage, pasteClip, PASTE_OFFSET, producerOf, type Clip, type Outcome } from "../core/iterate";
 import { PROMPT_NODE_SIZE, TASK_NODE_SIZE } from "../core/layout";
+import { placePreset, type Preset } from "../core/presets";
 import { basename, dirname, joinPath, resolveFromRoot, toRootRelative } from "../core/paths";
 import { effectiveRegionRender, setEdgeRegion } from "../core/region";
 import { findReferenceFile, findResultFile, IMAGE_EXTENSIONS, type RelocateFs } from "../core/relocate";
 import { defaultSizeSpec } from "../core/size";
 import { imageRefProblems, imageSources, type SnapshotImage } from "../core/submission";
 import { ipc } from "../shell/ipc";
+import { logEvent } from "../shell/log";
+import { PresetDialog } from "./PresetDialog";
 import { BoardContext, primeImageInfo, useImageInfos, useMissingImages, useStoredStatuses, type BoardActions } from "./context";
 import { nodeTypes, type ImagePortInfo, type ImageSlotInfo } from "./nodes";
 import { PreviewDialog, type PreviewRequest, type RegionTarget } from "./PreviewDialog";
@@ -66,6 +69,8 @@ const isTyping = (target: EventTarget | null) =>
 
 interface Props {
   board: Board;
+  /** 画板文件名，只用于日志。 */
+  boardFile: string;
   table: CapabilityTable;
   outputRoot: string;
   update: (fn: (board: Board) => Board) => void;
@@ -93,11 +98,12 @@ function defaultModel(table: CapabilityTable): string | null {
   return modelsByTier(table)[0]?.models[0]?.model_id ?? null;
 }
 
-export function BoardCanvas({ board, table, outputRoot, update, openBoardPath, toast, discovery, statuses, handled, onRun, onCancelTask, onRegenerate, focus }: Props) {
+export function BoardCanvas({ board, boardFile, table, outputRoot, update, openBoardPath, toast, discovery, statuses, handled, onRun, onCancelTask, onRegenerate, focus }: Props) {
   const flow = useReactFlow();
   const wrapper = useRef<HTMLDivElement>(null);
   const [selectedNodes, setSelectedNodes] = useState<Set<string>>(new Set());
   const [selectedEdges, setSelectedEdges] = useState<Set<string>>(new Set());
+  const [presetsOpen, setPresetsOpen] = useState(false);
   const [measured, setMeasured] = useState<Record<string, { width?: number; height?: number }>>({});
 
   const updateBoard = useCallback((fn: (b: Board) => Board) => update((b) => syncImagePorts(fn(b))), [update]);
@@ -183,7 +189,7 @@ export function BoardCanvas({ board, table, outputRoot, update, openBoardPath, t
     [outputRoot, regionTargetsOf],
   );
 
-  const stored = useStoredStatuses(board, outputRoot, handled);
+  const stored = useStoredStatuses(board, boardFile, outputRoot, handled);
   const statusOf = useCallback((taskId: string): TaskStatus | null => statuses.get(taskId) ?? stored.get(taskId) ?? null, [statuses, stored]);
   // 排队 / 执行中的任务节点：参数与连线锁定，上游提示词仍可编辑（经三选）。
   const locked = useMemo(() => new Set([...statuses].filter(([, st]) => isActive(st)).map(([id]) => id)), [statuses]);
@@ -254,6 +260,8 @@ export function BoardCanvas({ board, table, outputRoot, update, openBoardPath, t
         void (async () => {
           const node = boardRef.current.nodes.find((n) => n.id === nodeId);
           if (node?.type !== "reference" && node?.type !== "result") return;
+          const logRelocate = (outcome: { ok: true } | { ok: false; reason: "not_found" | "unreadable" }) =>
+            logEvent("relocate", { board_file: boardFile, node_id: nodeId, node_type: node.type, mode, ...outcome });
           let abs: string | null;
           if (mode === "pick") {
             const picked = await open({ multiple: false, filters: [{ name: "图片", extensions: IMAGE_EXTENSIONS }] });
@@ -264,7 +272,10 @@ export function BoardCanvas({ board, table, outputRoot, update, openBoardPath, t
               node.type === "result"
                 ? await findResultFile(relocateFs, outputRoot, { task_id: node.task_id, file: node.file })
                 : await findReferenceFile(relocateFs, outputRoot, { sha256: node.sha256, display_name: node.display_name });
-            if (!abs) return toast(`在输出根目录内没有找到 ${node.type === "result" ? node.file : node.display_name}，可改为手动选择文件`);
+            if (!abs) {
+              logRelocate({ ok: false, reason: "not_found" });
+              return toast(`在输出根目录内没有找到 ${node.type === "result" ? node.file : node.display_name}，可改为手动选择文件`);
+            }
           }
           const found = abs;
           try {
@@ -274,12 +285,14 @@ export function BoardCanvas({ board, table, outputRoot, update, openBoardPath, t
             // 参考图换了文件即换了身份（哈希变了，下游任务随之变脏）；结果的身份是 task_id + 文件名，只改路径。
             const patch = node.type === "reference" ? { path, sha256: info.sha256, display_name: mode === "pick" ? basename(found) : node.display_name } : { path };
             update((b) => ({ ...b, nodes: b.nodes.map((n) => (n.id === nodeId && n.type === node.type ? ({ ...n, ...patch } as KnownNode) : n)) }));
+            logRelocate({ ok: true });
           } catch (e) {
+            logRelocate({ ok: false, reason: "unreadable" });
             toast(`无法读取 ${basename(found)}：${e instanceof Error ? e.message : String(e)}`);
           }
         })(),
     }),
-    [table, outputRoot, discovery, update, updateBoard, applyOutcome, onCancelTask, onRegenerate, toast, openNodePreview, regionTargetsOf],
+    [table, boardFile, outputRoot, discovery, update, updateBoard, applyOutcome, onCancelTask, onRegenerate, toast, openNodePreview, regionTargetsOf],
   );
 
   // 选中任一节点即高亮其谱系。
@@ -556,6 +569,14 @@ export function BoardCanvas({ board, table, outputRoot, update, openBoardPath, t
   const addPrompt = () =>
     addNode({ type: "prompt", id: crypto.randomUUID(), pos: posOf(centerPosition()), size: PROMPT_NODE_SIZE, text: "", extra: {} });
 
+  const applyPreset = (preset: Preset) => {
+    // 先在空画板上落好节点再并入：更新函数可能延后执行，选中的 id 要先定下来。
+    const { board: placed, nodeIds } = placePreset({ ...board, nodes: [] }, preset, posOf(centerPosition()), () => crypto.randomUUID());
+    update((b) => ({ ...b, nodes: [...b.nodes, ...placed.nodes] }));
+    setSelectedNodes(new Set(nodeIds));
+    setPresetsOpen(false);
+  };
+
   const addTask = () => {
     const modelId = defaultTaskModel(table, discovery, board.last_model);
     const model = modelId ? findModel(table, modelId) : undefined;
@@ -662,6 +683,7 @@ export function BoardCanvas({ board, table, outputRoot, update, openBoardPath, t
           <button onClick={addPrompt}>＋ 提示词</button>
           <button onClick={addTask}>＋ 生成任务</button>
           <button onClick={() => void pickReferences()}>＋ 参考图…</button>
+          <button onClick={() => setPresetsOpen(true)}>＋ 从预设…</button>
           <button className="primary" onClick={() => onRun([...selectedNodes])} title="有选中时只运行选中子图，否则运行整个画板中需要运行的任务">
             ▶ 运行{selectedNodes.size > 0 ? "选中" : ""}
           </button>
@@ -686,6 +708,7 @@ export function BoardCanvas({ board, table, outputRoot, update, openBoardPath, t
           <Controls />
           <MiniMap pannable zoomable />
         </ReactFlow>
+        {presetsOpen && <PresetDialog onUse={applyPreset} onClose={() => setPresetsOpen(false)} />}
         {preview && <PreviewDialog key={preview.nonce} req={preview.req} toast={toast} onClose={() => setPreview(null)} />}
       </div>
     </BoardContext.Provider>

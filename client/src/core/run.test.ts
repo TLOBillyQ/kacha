@@ -70,6 +70,20 @@ describe("单任务端到端", () => {
     expect(b2.edges.at(-1)).toMatchObject({ from: ["t", "result"], to: ["res", "in"], system: true });
   });
 
+  it("结果图下载成功 / 失败都回调下载事件，失败带网关错误", async () => {
+    const byUrl = (url: string) =>
+      url.startsWith("https://oss") ? { status: 403, body: "denied" } : { status: 200, body: JSON.stringify({ metadata: { output: { choices: [{ message: { content: [{ image: "https://oss/x.png?sig=1" }] } }] } } }) };
+    for (const [respond, expected] of [[ok, { ok: true, images: 1 }], [byUrl, { ok: false }]] as const) {
+      const { d } = deps(respond);
+      const { job: prepared } = await prepareJob(d, { board: board(false), table: BUILTIN_TABLE, tableSha256: "x", outputRoot: "/root", taskNodeId: "t" });
+      const job = await writeJob(d, "/root", prepared);
+      const events: { ok: boolean; error?: unknown }[] = [];
+      await executeJob(d, { job, outputRoot: "/root", baseUrl: "http://gw", apiKey: "k", newNodeId: "res", onDownload: (e) => events.push(e) }).catch(() => undefined);
+      expect(events).toEqual([expect.objectContaining(expected)]);
+      if (!expected.ok) expect(events[0].error).toMatchObject({ status: 403 });
+    }
+  });
+
   it("执行中取消：网关返回后不存结果图", async () => {
     const { d, files } = deps(ok);
     const controller = new AbortController();

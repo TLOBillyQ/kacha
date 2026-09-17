@@ -1,7 +1,6 @@
 {
   "name": "ugc-image-tool-client",
   "private": true,
-  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
