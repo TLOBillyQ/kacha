@@ -1,8 +1,27 @@
 """One gateway call: raw response + downloaded images to out/<name>/, sanitized fixture to fixtures/<name>.json."""
-import base64, json, sys, time, urllib.request, urllib.error, os
-sys.path.insert(0, "../../../src")
-from ugc_image_tool.contracts.recorder import _sanitize_headers, _decode_and_sanitize
+import base64, json, re, sys, time, urllib.request, urllib.error, os
 from datetime import UTC, datetime
+# Sanitizers copied from the v1 recorder (removed in fa27402).
+SENSITIVE_HEADERS = {"authorization","cookie","set-cookie","x-api-key","x-dashscope-apikeyid","x-dashscope-bwid","x-dashscope-uid","x-dashscope-workspace"}
+SENSITIVE_FIELDS = {"prompt","text","negative_prompt","image","images","b64_json","input_image","reference_image"}
+URL_RE = re.compile(r"https?://[^\s\"']+")
+def _sanitize_text(v): return URL_RE.sub("https://example.invalid/redacted", v)
+def _sanitize_value(v, key=""):
+    k = key.lower().replace("-","_")
+    if k in SENSITIVE_FIELDS: return "[REDACTED_PROMPT]" if k in {"prompt","text","negative_prompt"} else "[REDACTED_IMAGE]"
+    if isinstance(v, dict): return {ck: _sanitize_value(c, ck) for ck, c in v.items()}
+    if isinstance(v, list): return [_sanitize_value(c) for c in v]
+    if isinstance(v, str): return _sanitize_text(v)
+    return v
+def _sanitize_headers(h): return {n: "[REDACTED]" if n.lower() in SENSITIVE_HEADERS else _sanitize_text(v) for n, v in h.items()}
+def _decode_and_sanitize(body, content_type):
+    if body is None: return None
+    ct = content_type.lower()
+    if "json" in ct:
+        try: return _sanitize_value(json.loads(body.decode("utf-8")))
+        except (UnicodeDecodeError, json.JSONDecodeError): return "[REDACTED_INVALID_JSON_BODY]"
+    if "multipart/" in ct: return "[REDACTED_MULTIPART_BODY]"
+    return "[REDACTED_NON_JSON_BODY]"
 BASE = "http://lzxsvn:3001"
 KEY = os.environ.get("UGC_IMAGE_TOOL_GATEWAY_API_KEY") or open(os.path.expanduser(os.environ.get("UGC_IMAGE_TOOL_GATEWAY_KEY_FILE", "../../../.scratch/gateway.key"))).read().strip()
 def durl(p):
