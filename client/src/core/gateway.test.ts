@@ -19,6 +19,7 @@ const FIXTURE_DIRS = [
   "2026-08-31-team-gateway-edit-boundaries",
   "2026-09-16-team-gateway-multiturn-refs-mask",
 ];
+const SEEDREAM_DIR = "2026-09-17-team-gateway-seedream";
 
 interface Exchange {
   request: { method: string; path: string; headers: Record<string, string>; body: unknown };
@@ -31,7 +32,7 @@ function loadFixture(dir: string, file: string): Exchange {
   return JSON.parse(readFileSync(fixtureUrl(dir, file), "utf8"));
 }
 
-const allExchanges = FIXTURE_DIRS.flatMap((dir) =>
+const allExchanges = [...FIXTURE_DIRS, SEEDREAM_DIR].flatMap((dir) =>
   readdirSync(fixtureUrl(dir))
     .filter((f) => f.endsWith(".json") && f !== "manifest.json")
     .map((file) => ({ name: `${dir}/${file}`, exchange: loadFixture(dir, file) })),
@@ -99,6 +100,8 @@ function replay(exchange: Exchange, images: (url: string) => Uint8Array | undefi
 }
 
 const qwenPro = findModel(BUILTIN_TABLE, "qwen-image-3.0-pro")!;
+const seedreamPro = findModel(BUILTIN_TABLE, "doubao-seedream-5-0-pro-260628")!;
+const seedreamLite = findModel(BUILTIN_TABLE, "doubao-seedream-5-0-lite-260128")!;
 const png = { mediaType: "image/png", bytes: PNG_BYTES };
 
 const textInput = (patch: Partial<GenerationInput> = {}): GenerationInput => ({
@@ -176,9 +179,9 @@ describe("网关适配器：请求载荷对照夹具", () => {
     expect(composeSendText({ prompt: "Make @图1 blue", negativePrompt: "", referenceCount: 1 })).toBe("This request provides 1 reference image.\nMake Image 1 blue");
   });
 
-  it("request_shape 未实现的模型拒绝构造请求（Seedream 形态留接口）", () => {
-    const seedream = findModel(BUILTIN_TABLE, "doubao-seedream-5-0-pro-260628")!;
-    expect(() => buildGenerationRequest(textInput({ model: seedream }))).toThrow(GatewayError);
+  it("request_shape 未实现的模型拒绝构造请求", () => {
+    const unknown = { ...qwenPro, request_shape: "unknown_shape" };
+    expect(() => buildGenerationRequest(textInput({ model: unknown }))).toThrow(GatewayError);
   });
 
   it("模型发现 GET /v1/models 取 data[].id", async () => {
@@ -192,6 +195,103 @@ describe("网关适配器：请求载荷对照夹具", () => {
   });
 });
 
+describe("网关适配器：Seedream 请求形态对照夹具", () => {
+  /** 夹具的 image 整体脱敏成一个占位串；客户端发 data-URL 数组，单独断言。 */
+  function expectSeedreamBody(actual: Record<string, unknown>, fixture: Exchange, imageCount: number): void {
+    const { image: expectedImage, ...expected } = fixture.request.body as Record<string, unknown>;
+    const { image, ...rest } = actual;
+    expectMatchesFixture(rest, expected);
+    if (expectedImage === undefined) {
+      expect(image).toBeUndefined();
+      return;
+    }
+    expect(Array.isArray(image)).toBe(true);
+    expect((image as string[]).length).toBe(imageCount);
+  }
+
+  it("纯文生图 POST /v1/images/generations：顶层 model / prompt / size(WxH) / response_format:url + fixed_params，不带 image", async () => {
+    const fixture = loadFixture(SEEDREAM_DIR, "lite-burst10-0.json");
+    const { fetch, calls } = replay(fixture);
+    await generate({ baseUrl: BASE, apiKey: "sk-test", fetch }, textInput({ model: seedreamLite, size: { width: 2048, height: 2048 } }));
+    expect(calls[0].url).toBe(`${BASE}/v1/images/generations`);
+    expectMatchesFixture(calls[0].headers, fixture.request.headers, "headers");
+    expectSeedreamBody(calls[0].body as Record<string, unknown>, fixture, 0);
+    expect(calls[0].body).toMatchObject({ prompt: "一只橘猫", size: "2048x2048", sequential_image_generation: "disabled" });
+  });
+
+  it("参考图按序进顶层 image（data-URL 数组），提示词注入数量顺序前缀", () => {
+    const fixture = loadFixture(SEEDREAM_DIR, "pro-refs-tu-3.json");
+    const refs = [png, { mediaType: "image/jpeg", bytes: new Uint8Array([1]) }, { mediaType: "image/webp", bytes: new Uint8Array([2]) }];
+    const { path, body } = buildGenerationRequest(textInput({ model: seedreamPro, prompt: "把@图3的帽子戴到@图1头上", size: { width: 2048, height: 2048 }, references: refs }));
+    expect(path).toBe("/v1/images/generations");
+    expectSeedreamBody(body, fixture, 3);
+    expect((body.image as string[])[0].startsWith("data:image/png;base64,")).toBe(true);
+    expect((body.image as string[]).slice(1)).toEqual(["data:image/jpeg;base64,AQ==", "data:image/webp;base64,Ag=="]);
+    expect(body.prompt).toBe("本次提供 3 张参考图，按顺序为图1、图2、图3。\n把图3的帽子戴到图1头上");
+    expect(body).not.toHaveProperty("input");
+    expect(body).not.toHaveProperty("parameters");
+  });
+
+  it("区域指示：叠加图紧随原图，固定句追加在末尾、「区域N」改写为颜色指代", () => {
+    const fixture = loadFixture(SEEDREAM_DIR, "lite-region-overlay-1.json");
+    const overlay = { mediaType: "image/png", bytes: new Uint8Array([9]) };
+    const { body } = buildGenerationRequest(
+      textInput({
+        model: seedreamLite,
+        prompt: "把区域1改成红色",
+        size: { width: 3456, height: 1152 },
+        references: [png, overlay],
+        regionPhrases: ["图2 是图1 的标注版"],
+        regionNames: ["紫色区域"],
+      }),
+    );
+    expectSeedreamBody(body, fixture, 2);
+    expect((body.image as string[])[1]).toBe("data:image/png;base64,CQ==");
+    expect(body.prompt).toBe("本次提供 2 张参考图，按顺序为图1、图2。\n把紫色区域改成红色\n图2 是图1 的标注版");
+  });
+
+  it("透明背景：pro 打开开关附带 background:transparent；关闭不带", () => {
+    const fixture = loadFixture(SEEDREAM_DIR, "pro-transparent-1.json");
+    const input = textInput({ model: seedreamPro, size: { width: 2048, height: 2048 }, references: [png], transparentBackground: true });
+    const { body } = buildGenerationRequest(input);
+    expectSeedreamBody(body, fixture, 1);
+    expect(body.background).toBe("transparent");
+    const ctl = loadFixture(SEEDREAM_DIR, "pro-transparent-ctl.json");
+    const off = buildGenerationRequest({ ...input, transparentBackground: false }).body;
+    expectSeedreamBody(off, ctl, 1);
+  });
+
+  it("透明背景：能力表不支持的模型（lite、qwen）即使开关打开也不发 background", () => {
+    expect(buildGenerationRequest(textInput({ model: seedreamLite, references: [png], transparentBackground: true })).body).not.toHaveProperty("background");
+    expect(JSON.stringify(buildGenerationRequest(textInput({ references: [png], transparentBackground: true })).body)).not.toContain("transparent");
+  });
+
+  it("出图取顶层 data[].url，不看 metadata.output.choices", async () => {
+    const fixture = loadFixture(SEEDREAM_DIR, "pro-region-overlay-1.json");
+    const { fetch } = replay(fixture);
+    const { images, requestId } = await generate({ baseUrl: BASE, apiKey: "k", fetch }, textInput({ model: seedreamPro, references: [png, png] }));
+    expect(images).toEqual([{ kind: "url", url: "https://example.invalid/redacted" }]);
+    expect(requestId).toBe(fixture.response.headers["X-Oneapi-Request-Id"]);
+  });
+
+  it("超参考图上限 HTTP 400 → 网关拒绝，带网关原文", async () => {
+    const fixture = loadFixture(SEEDREAM_DIR, "pro-limit-11.json");
+    const { fetch } = replay(fixture);
+    const error = await generate({ baseUrl: BASE, apiKey: "k", fetch }, textInput({ model: seedreamPro, references: Array(11).fill(png) })).catch((e) => e);
+    expect(error).toMatchObject({ category: "rejected", status: 400 });
+    expect(error.message).toContain("number of reference images cannot exceed 10");
+  });
+});
+
+/** 回放用输入：Seedream 夹具按文件名前缀选模型（响应按请求形态解析），其余按 qwen。 */
+function replayInput(name: string, exchange: Exchange): GenerationInput {
+  const body = exchange.request.body as Record<string, unknown>;
+  if (name.startsWith(`${SEEDREAM_DIR}/`)) {
+    return textInput({ model: name.includes("/lite-") ? seedreamLite : seedreamPro, references: "image" in body ? [png] : [] });
+  }
+  return textInput({ references: exchange.request.path === "/v1/images/edits" ? [png] : [] });
+}
+
 describe("网关适配器：夹具响应回放", () => {
   const expectations: Record<number, string> = { 400: "rejected", 401: "auth", 503: "server" };
 
@@ -202,7 +302,7 @@ describe("网关适配器：夹具响应回放", () => {
       const run =
         exchange.request.path === "/v1/models"
           ? listModels(config)
-          : generate(config, textInput({ references: exchange.request.path === "/v1/images/edits" ? [png] : [] }));
+          : generate(config, replayInput(name, exchange));
       if (exchange.response.status === 200) {
         const outcome = await run;
         if (exchange.request.path === "/v1/models") expect(outcome).toContain("qwen-image-3.0-pro");

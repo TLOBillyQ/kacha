@@ -176,13 +176,21 @@ describe("二次确认清单", () => {
       [prompt("p", "  "), reference("r1"), task("t1"), task("t2", { model: "doubao-seedream-5-0-pro-260628" }), task("t3")],
       [edge("p", "t2", "positive"), edge("p", "t3", "positive"), edge("r1", "t3", "image:0")],
     );
-    const items = buildConfirmItems(b, BUILTIN_TABLE, ["t1", "t2", "t3"], {
+    const table = structuredClone(BUILTIN_TABLE);
+    table.models.find((m) => m.model_id === "doubao-seedream-5-0-pro-260628")!.request_shape = "unknown_shape";
+    const items = buildConfirmItems(b, table, ["t1", "t2", "t3"], {
       discovery: { source: "cached", ids: ["qwen-image-3.0"], fetchedAt: "t" },
       missingNodes: new Set(["r1"]),
     });
     expect(items[0].issues).toContain("正向提示词未连接");
     expect(items[1].issues).toEqual(expect.arrayContaining(["正向提示词为空", "模型 Seedream 5.0 pro 的请求形态尚未接入"]));
     expect(items[2].issues).toEqual(expect.arrayContaining(["网关未提供模型 qwen-image-3.0-pro", "图1 图片缺失：r1.png"]));
+  });
+
+  it("Seedream 请求形态已接入，不因请求形态标红", () => {
+    const b = board([prompt("p", "一只橘猫"), task("t", { model: "doubao-seedream-5-0-lite-260128" })], [edge("p", "t", "positive")]);
+    const [item] = buildConfirmItems(b, BUILTIN_TABLE, ["t"], { discovery: { source: "none" }, missingNodes: new Set() });
+    expect(item.issues.join()).not.toContain("请求形态");
   });
 });
 

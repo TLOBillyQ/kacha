@@ -153,7 +153,7 @@ function jobOf(taskNodeId: string, plan: SubmissionPlan, model: ModelCapability)
     taskId: plan.taskId,
     relDir: taskDirOf(plan.submittedAt, plan.taskId),
     plan,
-    input: { model, prompt: plan.prompt, negativePrompt: plan.negativePrompt, size: plan.size, references: [], regionPhrases: plan.regionPhrases, regionNames: plan.regionNames },
+    input: { model, prompt: plan.prompt, negativePrompt: plan.negativePrompt, size: plan.size, references: [], regionPhrases: plan.regionPhrases, regionNames: plan.regionNames, transparentBackground: plan.transparentBackground },
     record: {
       model: plan.model,
       prompt: plan.prompt,

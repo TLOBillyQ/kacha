@@ -1,7 +1,7 @@
 // 团队网关适配器（规格第 5 节，契约 docs/contracts/team-gateway-contract.md）。
 // 路径、载荷与出图解析全部来自 contracts/fixtures 实测夹具；生成请求只发一次，不重发、不用幂等键、不查任务。
 // HTTP 由调用方注入（壳里是 tauri-plugin-http 的 fetch，测试里是夹具回放）。
-import type { ModelCapability } from "./capabilities";
+import { isSupported, type ModelCapability } from "./capabilities";
 import { promptLanguage, rewriteImageRefs, type PromptLanguage } from "./imageRefs";
 import { rewriteRegionRefs } from "./region";
 
@@ -71,6 +71,8 @@ export interface GenerationInput {
   regionPhrases?: string[];
   /** 区域编号的颜色指代（区域N 取第 N 个），改写提示词里的「区域N」。 */
   regionNames?: string[];
+  /** 透明背景开关；只对能力表支持透明背景的模型生效。 */
+  transparentBackground?: boolean;
 }
 
 export type GeneratedImage = ({ kind: "url"; url: string } | { kind: "bytes"; bytes: Uint8Array }) & {
@@ -127,10 +129,16 @@ function toBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
-type RequestShape = (input: GenerationInput) => { path: string; body: Record<string, unknown> };
+/** 请求形态：怎么构造请求、怎么从响应里取出图。 */
+interface RequestShape {
+  build(input: GenerationInput): { path: string; body: Record<string, unknown> };
+  parse(body: unknown): GeneratedImage[];
+}
+
+const dataUrl = (r: ReferenceImage) => `data:${r.mediaType};base64,${toBase64(r.bytes)}`;
 
 /** qwen 系列：文生图顶层字段；图片编辑 JSON 透传（ADR 0006）。 */
-const qwenImagesEdits: RequestShape = (input) => {
+const buildQwenImagesEdits: RequestShape["build"] = (input) => {
   const { model, prompt, negativePrompt, size, references } = input;
   if (references.length === 0) {
     const body: Record<string, unknown> = { model: model.model_id, prompt: composeSendText({ prompt, negativePrompt, referenceCount: 0 }) };
@@ -139,7 +147,7 @@ const qwenImagesEdits: RequestShape = (input) => {
     return { path: TEXT_TO_IMAGE_PATH, body };
   }
   const text = composeSendText({ prompt, negativePrompt, referenceCount: references.length, regionPhrases: input.regionPhrases ?? [], regionNames: input.regionNames ?? [] });
-  const content = [...references.map((r) => ({ image: `data:${r.mediaType};base64,${toBase64(r.bytes)}` })), { text }];
+  const content = [...references.map((r) => ({ image: dataUrl(r) })), { text }];
   return {
     path: IMAGE_EDIT_PATH,
     body: {
@@ -153,19 +161,42 @@ const qwenImagesEdits: RequestShape = (input) => {
   };
 };
 
-/** 按能力表 request_shape 选择请求形态；Seedream 形态待 #83 确认后在此登记。 */
+/**
+ * Seedream 系列（#83 实测）：文生图与图片编辑都走 /v1/images/generations 顶层字段，
+ * 参考图为顶层 image 的 data-URL 数组（按序即图N）；负向提示词不支持，不发。
+ */
+const buildSeedreamImagesGenerations: RequestShape["build"] = (input) => {
+  const { model, prompt, negativePrompt, size, references } = input;
+  const body: Record<string, unknown> = {
+    model: model.model_id,
+    prompt: composeSendText({ prompt, negativePrompt, referenceCount: references.length, regionPhrases: input.regionPhrases ?? [], regionNames: input.regionNames ?? [] }),
+    size: `${size.width}x${size.height}`,
+    response_format: "url",
+    ...model.fixed_params,
+  };
+  if (input.transparentBackground && isSupported(model.transparent_background)) body.background = "transparent";
+  if (references.length) body.image = references.map(dataUrl);
+  return { path: TEXT_TO_IMAGE_PATH, body };
+};
+
+/** 按能力表 request_shape 选择请求形态。 */
 const REQUEST_SHAPES: Record<string, RequestShape> = {
-  qwen_images_edits: qwenImagesEdits,
+  qwen_images_edits: { build: buildQwenImagesEdits, parse: parseGeneratedImages },
+  seedream_images_generations: { build: buildSeedreamImagesGenerations, parse: parseImageUrls },
 };
 
 export function isRequestShapeImplemented(model: ModelCapability): boolean {
   return model.request_shape in REQUEST_SHAPES;
 }
 
+function requestShapeOf(model: ModelCapability): RequestShape {
+  const shape = REQUEST_SHAPES[model.request_shape];
+  if (!shape) throw new GatewayError("config", `模型 ${model.display_name} 的请求形态（${model.request_shape}）尚未实现`);
+  return shape;
+}
+
 export function buildGenerationRequest(input: GenerationInput): { path: string; body: Record<string, unknown> } {
-  const shape = REQUEST_SHAPES[input.model.request_shape];
-  if (!shape) throw new GatewayError("config", `模型 ${input.model.display_name} 的请求形态（${input.model.request_shape}）尚未实现`);
-  return shape(input);
+  return requestShapeOf(input.model).build(input);
 }
 
 // ---- 发送与错误映射 ----
@@ -252,11 +283,19 @@ export function parseGeneratedImages(body: unknown): GeneratedImage[] {
   return out;
 }
 
+/** OpenAI 形态出图：顶层 data[].url（Seedream，契约 2026-09-17）。 */
+export function parseImageUrls(body: unknown): GeneratedImage[] {
+  const data = (body as { data?: unknown })?.data;
+  if (!Array.isArray(data)) return [];
+  return data.flatMap((item): GeneratedImage[] => (typeof item?.url === "string" && /^https?:\/\//i.test(item.url) ? [{ kind: "url", url: item.url }] : []));
+}
+
 /** 提交一个生成任务；图层拆分时可能返回多张（首张为合成结果）。 */
 export async function generate(config: GatewayConfig, input: GenerationInput): Promise<{ images: GeneratedImage[]; requestId: string | null }> {
-  const { path, body } = buildGenerationRequest(input);
+  const shape = requestShapeOf(input.model);
+  const { path, body } = shape.build(input);
   const response = await send(config, "POST", path, body);
-  const images = parseGeneratedImages(response.body);
+  const images = shape.parse(response.body);
   if (!images.length) throw new GatewayError("invalid_response", "网关没有返回图片", 200, response.requestId);
   return { images, requestId: response.requestId };
 }

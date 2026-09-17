@@ -168,6 +168,36 @@ describe("单任务端到端", () => {
   });
 });
 
+describe("Seedream：执行", () => {
+  function seedreamBoard(): Board {
+    const b = board(true);
+    b.nodes = b.nodes.map((n) =>
+      n.type === "task" ? { ...n, model: "doubao-seedream-5-0-pro-260628", size_spec: { tier: "2K", ratio: "1:1", width: null, height: null }, transparent_background: true } : n,
+    );
+    return b;
+  }
+  const respond = (url: string) =>
+    url.startsWith("https://oss/") ? { status: 200, body: "" } : { status: 200, body: JSON.stringify({ data: [{ url: "https://oss/r.png", size: "2048x2048" }] }) };
+
+  it("走 generations 顶层 image，透明背景开关带 background；下载 data[].url 落盘；重新生成沿用开关", async () => {
+    const { d, files, requests } = deps(respond);
+    d.fetch = ((inner) => async (url, init) => {
+      const r = await inner(url, init);
+      return url.startsWith("https://oss/") ? { ...r, arrayBuffer: async () => PNG.slice().buffer } : r;
+    })(d.fetch);
+    const { job: prepared, board: b1 } = await prepareJob(d, { board: seedreamBoard(), table: BUILTIN_TABLE, tableSha256: "x", outputRoot: "/root", taskNodeId: "t" });
+    const job = await writeJob(d, "/root", prepared);
+    await executeJob(d, { job, outputRoot: "/root", baseUrl: "http://gw", apiKey: "k", newNodeId: "res" });
+    expect(requests.map((r) => r.url)).toEqual(["http://gw/v1/images/generations", "https://oss/r.png"]);
+    const body = JSON.parse(requests[0].init.body!);
+    expect(body).toMatchObject({ model: "doubao-seedream-5-0-pro-260628", size: "2048x2048", response_format: "url", background: "transparent", image: [`data:image/png;base64,${PNG_B64}`] });
+    expect(files.get(`/root/${job.relDir}/result.png`)).toEqual(PNG);
+
+    const { job: again } = await prepareRegenerate(d, { board: b1, table: BUILTIN_TABLE, tableSha256: "x", outputRoot: "/root", taskNodeId: "t" });
+    expect(again.input.transparentBackground).toBe(true);
+  });
+});
+
 describe("区域指示：提交链路", () => {
   const REGION = { rects: [[0.1, 0.1, 0.5, 0.5] as [number, number, number, number]], render: "highlight_overlay" as const };
 
