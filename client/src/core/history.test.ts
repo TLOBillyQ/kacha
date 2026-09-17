@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Board, BoardEdge, BoardNode, PromptNode, ResultNode, TaskNode } from "./board";
-import { countLabel, emptyHistory, HISTORY_LIMIT, mergeSystemState, recordChange, redo, redoLabel, undo, undoLabel, type History } from "./history";
+import { countLabel, emptyHistory, HISTORY_LIMIT, MERGE_PAUSE_MS, mergeSystemState, nodeEditChange, recordChange, redo, redoLabel, undo, undoLabel, type History } from "./history";
 
 const SPEC = { tier: "1K", ratio: "1:1", width: null, height: null };
 const NONE: ReadonlySet<string> = new Set();
@@ -153,12 +153,12 @@ describe("步合并", () => {
     expect(after.undo).toHaveLength(undone.history.undo.length + 1);
   });
 
-  it("合并后的步描述取最后一次（如导入到第几张）", () => {
-    const merge = { key: "import:x" };
-    let h = recordChange(emptyHistory(), board([]), { label: "添加 1 张参考图", merge }, 0);
-    h = recordChange(h, board([]), { label: "添加 2 张参考图", merge }, 10);
+  it("合并后的步描述取最后一次", () => {
+    const merge = { key: "k" };
+    let h = recordChange(emptyHistory(), board([]), { label: "一", merge }, 0);
+    h = recordChange(h, board([]), { label: "二", merge }, 10);
     expect(h.undo).toHaveLength(1);
-    expect(undoLabel(h)).toBe("添加 2 张参考图");
+    expect(undoLabel(h)).toBe("二");
   });
 
   it("系统写入不打断正在合并的输入", () => {
@@ -275,5 +275,21 @@ describe("用户删除的结果节点", () => {
 describe("步描述", () => {
   it("按数量生成文案", () => {
     expect(countLabel("删除", 3, "个节点")).toBe("删除 3 个节点");
+  });
+});
+
+describe("节点字段编辑的步描述", () => {
+  it("提示词文本按节点合并连续输入", () => {
+    expect(nodeEditChange("p", { text: "猫" })).toEqual({ label: "编辑提示词", merge: { key: "text:p", windowMs: MERGE_PAUSE_MS } });
+  });
+
+  it("单个开关字段用对应描述", () => {
+    expect(nodeEditChange("t", { layer_decomposition: true })).toEqual({ label: "切换图层拆分" });
+  });
+
+  it("多个字段各自描述相同时沿用，不同或含未知字段时退为「修改节点」且不合并", () => {
+    expect(nodeEditChange("t", { size_spec: {}, layer_decomposition: true })).toEqual({ label: "修改节点" });
+    expect(nodeEditChange("p", { text: "猫", pos: [0, 0] })).toEqual({ label: "修改节点" });
+    expect(nodeEditChange("t", { transparent_background: true, extra: {} })).toEqual({ label: "修改节点" });
   });
 });

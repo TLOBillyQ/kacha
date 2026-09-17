@@ -39,7 +39,7 @@ import {
   workflowOf,
   type Connection,
 } from "../core/graph";
-import { countLabel, MERGE_PAUSE_MS, type Change, type UserChange } from "../core/history";
+import { countLabel, MERGE_PAUSE_MS, nodeEditChange, type Change, type UserChange } from "../core/history";
 import { addAsReference, addAsReferenceTarget, continueEditing, copySelection, lineage, pasteClip, PASTE_OFFSET, producerOf, type Clip, type Outcome } from "../core/iterate";
 import { PROMPT_NODE_SIZE, TASK_NODE_SIZE } from "../core/layout";
 import { placePreset, type Preset } from "../core/presets";
@@ -244,7 +244,7 @@ export function BoardCanvas({
           { label: "切换模型" },
         ),
       updateNode: (id, patch) =>
-        updateBoard((b) => ({ ...b, nodes: b.nodes.map((n) => (n.id === id && n.type !== "unknown" ? ({ ...n, ...patch } as KnownNode) : n)) }), patchChange(id, patch)),
+        updateBoard((b) => ({ ...b, nodes: b.nodes.map((n) => (n.id === id && n.type !== "unknown" ? ({ ...n, ...patch } as KnownNode) : n)) }), nodeEditChange(id, patch)),
       moveImagePort: (taskId, from, to) =>
         !lockedRef.current.has(taskId) && updateBoard((b) => ({ ...b, edges: moveImagePort(b, taskId, from, to) }), { label: "调整图片顺序" }),
       forkPrompt: (promptId, text) => updateBoard((b) => forkPrompt(b, promptId, { newNodeId: crypto.randomUUID(), text }), { label: "分叉提示词" }),
@@ -658,15 +658,14 @@ export function BoardCanvas({
 
   const importReferences = useCallback(
     async (paths: string[], at: { x: number; y: number }) => {
-      let offset = 0;
-      // 一次导入的多张参考图合为一步；合并时步描述取最后一次，张数只算导入成功的。
-      const merge = { key: `import:${crypto.randomUUID()}` };
-      let added = 0;
+      // 先逐张读取，再一次加到画板：一次导入是一步，张数只算读取成功的，读取期间的其他操作不会把它拆开。
+      const nodes: KnownNode[] = [];
       for (const abs of paths) {
         try {
           const info = await ipc.inspectImage(abs);
           primeImageInfo(abs, info);
-          addNode({
+          const offset = 32 * nodes.length;
+          nodes.push({
             type: "reference",
             id: crypto.randomUUID(),
             pos: posOf({ x: at.x + offset, y: at.y + offset }),
@@ -675,14 +674,16 @@ export function BoardCanvas({
             sha256: info.sha256,
             display_name: basename(abs),
             extra: {},
-          }, { label: countLabel("添加", ++added, "张参考图"), merge });
-          offset += 32;
+          });
         } catch (e) {
           toast(`无法导入 ${basename(abs)}：${e instanceof Error ? e.message : String(e)}`);
         }
       }
+      if (!nodes.length) return;
+      update((b) => ({ ...b, nodes: [...b.nodes, ...nodes] }), { label: countLabel("添加", nodes.length, "张参考图") });
+      setSelectedNodes(new Set([nodes[nodes.length - 1].id]));
     },
-    [addNode, outputRoot, toast],
+    [update, outputRoot, toast],
   );
 
   const pickReferences = async () => {
@@ -800,19 +801,6 @@ export function BoardCanvas({
       </div>
     </BoardContext.Provider>
   );
-}
-
-const TOGGLE_LABELS: Partial<Record<string, string>> = {
-  size_spec: "修改尺寸",
-  layer_decomposition: "切换图层拆分",
-  transparent_background: "切换透明背景",
-};
-
-/** 节点字段编辑的步描述；提示词连续输入停顿不超过 MERGE_PAUSE_MS 合为一步。 */
-function patchChange(id: string, patch: Partial<KnownNode>): UserChange {
-  if ("text" in patch) return { label: "编辑提示词", merge: { key: `text:${id}`, windowMs: MERGE_PAUSE_MS } };
-  const field = Object.keys(patch)[0];
-  return { label: TOGGLE_LABELS[field] ?? "修改节点" };
 }
 
 function withAvailability(issues: string[], unavailable: string | null): string[] {
