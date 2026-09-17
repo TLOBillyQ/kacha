@@ -1,14 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { newBoard, serializeBoard, uniqueBoardFileName, type Board, type ReferenceNode, type ResultNode } from "./board";
+import { newBoard, parseBoard, serializeBoard, uniqueBoardFileName, type Board, type ReferenceNode, type ResultNode } from "./board";
 import {
   PACK_FORMAT_VERSION,
+  PACK_MANIFEST,
+  buildExportSpec,
   buildManifest,
   checkPack,
   importSummary,
-  packBoardEntry,
+  inspectPack,
   planExport,
+  type MergeUnit,
   type PackFs,
 } from "./boardPack";
+import { resolveFromRoot } from "./paths";
 
 const ROOT = "C:\\Users\\Lzx_8\\Pictures\\UGC AI 生图工具";
 
@@ -59,13 +63,6 @@ describe("导出计划", () => {
     expect(plan.board.nodes[0]).toEqual(board.nodes[0]);
   });
 
-  it("根目录内其他位置的参考图按原相对路径带上", async () => {
-    const board = boardWith(reference("a", "素材/猫.png"));
-    const plan = await planExport(board, ROOT, memoryFs({ [abs("素材/猫.png")]: "x" }));
-    expect(plan.files).toEqual([{ source: abs("素材/猫.png"), entry: "素材/猫.png" }]);
-    expect(plan.taskDirs).toEqual([]);
-  });
-
   it("根目录外参考图按 sha256 去重放进导入参考图，画板路径改写为相对路径", async () => {
     const board = boardWith(reference("a", "D:\\素材\\猫.PNG"), reference("b", "E:\\别处\\同一只猫.png"), reference("c", "D:\\素材\\狗.jpg"));
     const plan = await planExport(board, ROOT, memoryFs({ "D:\\素材\\猫.PNG": "aa", "E:\\别处\\同一只猫.png": "aa", "D:\\素材\\狗.jpg": "bb" }));
@@ -83,34 +80,50 @@ describe("导出计划", () => {
     expect((board.nodes[0] as ReferenceNode).path).toBe("D:\\素材\\猫.PNG");
   });
 
-  it("写成绝对路径但位于根目录内的参考图按相对路径处理", async () => {
-    const board = boardWith(reference("a", abs("素材/猫.png")));
-    const plan = await planExport(board, ROOT, memoryFs({ [abs("素材/猫.png")]: "x" }));
-    expect(plan.files).toEqual([{ source: abs("素材/猫.png"), entry: "素材/猫.png" }]);
-    expect((plan.board.nodes[0] as ReferenceNode).path).toBe("素材/猫.png");
+  it("根目录内但不在任务目录里的参考图（含写成绝对路径的）也放进导入参考图", async () => {
+    const board = boardWith(reference("a", "素材/猫.png"), reference("b", abs("素材/狗.png")));
+    const plan = await planExport(board, ROOT, memoryFs({ [abs("素材/猫.png")]: "aa", [abs("素材/狗.png")]: "bb" }));
+    expect(plan.files).toEqual([
+      { source: abs("素材/猫.png"), entry: "导入参考图/aa.png" },
+      { source: abs("素材/狗.png"), entry: "导入参考图/bb.png" },
+    ]);
+    expect((plan.board.nodes as ReferenceNode[]).map((n) => n.path)).toEqual(["导入参考图/aa.png", "导入参考图/bb.png"]);
+  });
+
+  it("Windows 根目录外的参考图改写后，在 macOS 根目录下解析到导入参考图", async () => {
+    const plan = await planExport(boardWith(reference("a", "D:\\素材\\猫.png")), ROOT, memoryFs({ "D:\\素材\\猫.png": "aa" }));
+    const imported = parseBoard(serializeBoard(plan.board));
+    if (imported.kind !== "ok") throw new Error(imported.kind);
+    const path = (imported.board.nodes[0] as ReferenceNode).path;
+    expect(resolveFromRoot("/Users/art/Pictures/UGC AI 生图工具", path)).toBe("/Users/art/Pictures/UGC AI 生图工具/导入参考图/aa.png");
   });
 
   it("缺图节点列出，照常导出且路径不改写", async () => {
-    const board = boardWith(result("r", "20260916T010000Z-00000001"), reference("a", "D:\\素材\\没了.png"));
+    const board = boardWith(result("r", "20260916T010000Z-00000001"), reference("a", "D:\\素材\\没了.png"), reference("b", "素材/也没了.png"));
     const plan = await planExport(board, ROOT, memoryFs({}));
     expect(plan.missing).toEqual([
       { nodeId: "r", path: "2026-09-16/20260916T010000Z-00000001/result.png" },
       { nodeId: "a", path: "D:\\素材\\没了.png" },
+      { nodeId: "b", path: "素材/也没了.png" },
     ]);
     expect(plan.taskDirs).toEqual(["2026-09-16/20260916T010000Z-00000001"]);
     expect(plan.files).toEqual([]);
     expect(plan.board).toEqual(board);
   });
+
+  it("导出规格：清单与画板作为文本条目，任务目录与参考图原样传给壳", async () => {
+    const plan = await planExport(boardWith(reference("a", "D:\\猫.png")), ROOT, memoryFs({ "D:\\猫.png": "aa" }));
+    const spec = buildExportSpec("0.2.0", "千问测试.ugcboard.json", plan);
+    expect(spec.texts.map((t) => t.entry)).toEqual([PACK_MANIFEST, "画板/千问测试.ugcboard.json"]);
+    expect(JSON.parse(spec.texts[0].text)).toEqual({ pack_format_version: PACK_FORMAT_VERSION, app_version: "0.2.0", boards: ["画板/千问测试.ugcboard.json"] });
+    expect(spec.texts[1].text).toBe(serializeBoard(plan.board));
+    expect(spec.task_dirs).toEqual([]);
+    expect(spec.files).toEqual(plan.files);
+  });
 });
 
 describe("包清单与版本判定", () => {
   const boardText = serializeBoard(newBoard("豆包测试"));
-
-  it("清单记包格式版本、应用版本与画板列表；画板放在画板目录下", () => {
-    const entry = packBoardEntry("豆包测试.ugcboard.json");
-    expect(entry).toBe("画板/豆包测试.ugcboard.json");
-    expect(JSON.parse(buildManifest("0.2.0", [entry]))).toEqual({ pack_format_version: PACK_FORMAT_VERSION, app_version: "0.2.0", boards: [entry] });
-  });
 
   it("版本不高于本机时通过，返回解析后的画板", () => {
     const manifest = buildManifest("0.2.0", ["画板/豆包测试.ugcboard.json"]);
@@ -140,16 +153,76 @@ describe("包清单与版本判定", () => {
   });
 });
 
+describe("导入前检查包内容", () => {
+  const TASK = "2026-09-16/20260916T010000Z-0000000a";
+  const boardEntry = "画板/千问测试.ugcboard.json";
+  const texts: Record<string, string> = { [PACK_MANIFEST]: buildManifest("0.2.0", [boardEntry]), [boardEntry]: serializeBoard(newBoard("千问测试")) };
+
+  /** 只读被请求的文本，记录读了哪些。 */
+  function reader(source: Record<string, string>) {
+    const read: string[][] = [];
+    return {
+      read,
+      readTexts: async (names: string[]) => {
+        read.push(names);
+        return Object.fromEntries(names.filter((n) => n in source).map((n) => [n, source[n]]));
+      },
+    };
+  }
+
+  it("只读清单与画板；任务目录按 task.json 比对、参考图按整文件比对", async () => {
+    const entries = [PACK_MANIFEST, boardEntry, `${TASK}/task.json`, `${TASK}/result.png`, `${TASK}/layers/01.png`, "导入参考图/aa.png"];
+    const r = reader(texts);
+    const check = await inspectPack(entries, r.readTexts);
+    expect(r.read).toEqual([[PACK_MANIFEST, boardEntry]]);
+    expect(check.kind).toBe("ok");
+    if (check.kind !== "ok") return;
+    expect(check.boards.map((b) => b.entry)).toEqual([boardEntry]);
+    expect(check.units).toEqual<MergeUnit[]>([
+      { path: TASK, identity: "task.json" },
+      { path: "导入参考图/aa.png", identity: null },
+    ]);
+  });
+
+  it("版本更高时先于布局判定拒绝（新格式可能有新布局）", async () => {
+    const newer = { ...texts, [PACK_MANIFEST]: JSON.stringify({ pack_format_version: PACK_FORMAT_VERSION + 1, app_version: "9", boards: [] }) };
+    expect((await inspectPack([PACK_MANIFEST, "新目录/x.bin"], reader(newer).readTexts)).kind).toBe("newer");
+  });
+
+  it("任务目录与导入参考图以外的路径、缺 task.json 的任务目录、不安全路径判为损坏", async () => {
+    const ok = [PACK_MANIFEST, boardEntry];
+    for (const extra of [["素材/猫.png"], [`${TASK}/result.png`], ["导入参考图/子目录/aa.png"], [`${TASK}/../../evil.png`, `${TASK}/task.json`], ["manifest.json/x"]]) {
+      const check = await inspectPack([...ok, ...extra], reader(texts).readTexts);
+      expect(check.kind, extra.join()).toBe("corrupt");
+    }
+  });
+});
+
 describe("导入结果", () => {
   it("同名画板沿用 (2) 自动改名", () => {
     expect(uniqueBoardFileName("千问测试", ["千问测试.ugcboard.json"])).toBe("千问测试 (2).ugcboard.json");
   });
 
-  it("提示导入与跳过数，有冲突时列出", () => {
-    expect(importSummary({ imported: 14, skipped: 0, conflicts: [] })).toEqual({ message: "导入 14 个任务，跳过 0 个", conflicts: [] });
-    expect(importSummary({ imported: 0, skipped: 3, conflicts: ["2026-09-16/x"] })).toEqual({
-      message: "导入 0 个任务，跳过 3 个，1 项冲突未覆盖",
-      conflicts: ["2026-09-16/x"],
-    });
+  const units: MergeUnit[] = [
+    { path: "2026-09-16/a", identity: "task.json" },
+    { path: "2026-09-16/b", identity: "task.json" },
+    { path: "2026-09-16/c", identity: "task.json" },
+    { path: "导入参考图/aa.png", identity: null },
+    { path: "导入参考图/bb.png", identity: null },
+  ];
+
+  it("只按任务目录计导入与跳过数；参考图冲突也列出", () => {
+    const summary = importSummary(units, [
+      { path: "2026-09-16/a", outcome: "moved" },
+      { path: "2026-09-16/b", outcome: "identical" },
+      { path: "2026-09-16/c", outcome: "conflict" },
+      { path: "导入参考图/aa.png", outcome: "identical" },
+      { path: "导入参考图/bb.png", outcome: "conflict" },
+    ]);
+    expect(summary).toEqual({ imported: 1, skipped: 1, conflicts: ["2026-09-16/c", "导入参考图/bb.png"], message: "导入 1 个任务，跳过 1 个，2 项冲突未覆盖" });
+  });
+
+  it("无冲突时不附冲突数", () => {
+    expect(importSummary(units.slice(0, 1), [{ path: "2026-09-16/a", outcome: "moved" }]).message).toBe("导入 1 个任务，跳过 0 个");
   });
 });

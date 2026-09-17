@@ -1,19 +1,16 @@
-import { getVersion } from "@tauri-apps/api/app";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
-import { ask, message, open, save } from "@tauri-apps/plugin-dialog";
+import { ask } from "@tauri-apps/plugin-dialog";
 import { ReactFlowProvider } from "@xyflow/react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { BOARD_EXTENSION, serializeBoard, type Board } from "./core/board";
-import { buildManifest, checkPack, importSummary, PACK_EXTENSION, packBoardEntry, planExport, type ExportPlan, type PackFs } from "./core/boardPack";
+import { BOARD_EXTENSION, type Board } from "./core/board";
 import { BUILTIN_TABLE, effectiveTable, type CapabilityTable } from "./core/capabilities";
 import { redoLabel, undoLabel, type Change } from "./core/history";
 import { basename } from "./core/paths";
 import { runScope, buildConfirmItems, imageSources, type ConfirmItem } from "./core/submission";
 import { parseUiState, serializeUiState, type UiState } from "./core/uiState";
-import { ipc, PACK_CANCELLED } from "./shell/ipc";
-import { logEvent } from "./shell/log";
-import { BoardPackDialog, type PackDialogState } from "./ui/BoardPackDialog";
+import { ipc } from "./shell/ipc";
+import { BoardPackDialog } from "./ui/BoardPackDialog";
 import { BoardCanvas } from "./ui/BoardCanvas";
 import { RunConfirmDialog } from "./ui/RunConfirmDialog";
 import { RunIndicator } from "./ui/RunIndicator";
@@ -21,12 +18,10 @@ import { SettingsPanel } from "./ui/SettingsPanel";
 import { isActive, useRunner, type RunTarget } from "./ui/useRunner";
 import { useSettings } from "./ui/useSettings";
 import { TabBar } from "./ui/TabBar";
+import { useBoardPack } from "./ui/useBoardPack";
 import { useBoardSessions } from "./ui/useBoardSessions";
 
 const isBoardPath = (p: string) => p.toLowerCase().endsWith(BOARD_EXTENSION);
-
-const packFs: PackFs = { isFile: ipc.isFile, sha256: async (path) => (await ipc.inspectImage(path)).sha256 };
-const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 export function App() {
   const [outputRoot, setOutputRoot] = useState<string | null>(null);
@@ -39,7 +34,6 @@ export function App() {
   const [fatal, setFatal] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
   const [toastText, setToastText] = useState<string | null>(null);
-  const [pack, setPack] = useState<PackDialogState | null>(null);
   const started = useRef(false);
   const initialUi = useRef<UiState | null>(null);
   const windowSize = useRef<UiState["window"]>(null);
@@ -58,6 +52,7 @@ export function App() {
   const openOrWarnRef = useRef<(p: string) => Promise<void>>(async () => undefined);
 
   const toast = useCallback((message: string) => setToastText(message), []);
+  const pack = useBoardPack(outputRoot, boards, toast);
   useEffect(() => {
     if (!toastText) return;
     const timer = setTimeout(() => setToastText(null), 4000);
@@ -199,108 +194,6 @@ export function App() {
     [boards],
   );
 
-  /** 导出画板包第一步：落盘后列出要带的任务目录与缺图，弹确认（提示含完整提示词）。 */
-  const prepareExportPack = useCallback(
-    async (key: string) => {
-      if (!outputRoot) return;
-      await boards.flushAll();
-      const board = boards.getBoard(key);
-      const boardFile = boards.boardFileName(key);
-      if (!board || !boardFile) return;
-      try {
-        const plan = await planExport(board, outputRoot, packFs);
-        setPack({ stage: "confirmExport", boardFile, plan });
-      } catch (e) {
-        toast(`无法导出画板包：${errorText(e)}`);
-      }
-    },
-    [outputRoot, boards, toast],
-  );
-
-  const exportPack = useCallback(
-    async (boardFile: string, plan: ExportPlan) => {
-      if (!outputRoot) return;
-      const stem = boardFile.slice(0, -BOARD_EXTENSION.length);
-      const picked = await save({ defaultPath: `${stem}${PACK_EXTENSION}`, filters: [{ name: "画板包", extensions: [PACK_EXTENSION.slice(1)] }] });
-      if (!picked) return;
-      const target = picked.toLowerCase().endsWith(PACK_EXTENSION) ? picked : `${picked}${PACK_EXTENSION}`;
-      await ipc.boardPackCancel(false);
-      setPack({ stage: "progress", title: `正在导出画板包：${stem}` });
-      const entry = packBoardEntry(boardFile);
-      const fields = { action: "export", board_file: boardFile, task_dirs: plan.taskDirs.length, missing: plan.missing.length };
-      try {
-        const report = await ipc.boardPackExport(outputRoot, target, {
-          manifest: buildManifest(await getVersion(), [entry]),
-          board_entry: entry,
-          board_text: serializeBoard(plan.board),
-          task_dirs: plan.taskDirs,
-          files: plan.files,
-        });
-        logEvent("board_pack", { ...fields, task_dirs: report.task_dirs, bytes: report.bytes, result: "ok" });
-        toast(`已导出画板包到 ${target}`);
-      } catch (e) {
-        const cancelled = errorText(e) === PACK_CANCELLED;
-        logEvent("board_pack", { ...fields, result: cancelled ? "cancelled" : "failed" });
-        toast(cancelled ? "已取消导出画板包" : `导出画板包失败：${errorText(e)}`);
-      } finally {
-        setPack(null);
-      }
-    },
-    [outputRoot, toast],
-  );
-
-  /** 导入画板包：先判版本（更高则不写任何文件），再解压合并任务目录，最后写画板并在新标签页打开。 */
-  const importPack = useCallback(async () => {
-    if (!outputRoot) return;
-    const picked = await open({ multiple: false, directory: false, filters: [{ name: "画板包", extensions: [PACK_EXTENSION.slice(1)] }] });
-    if (typeof picked !== "string") return;
-    const fields = { action: "import", pack_file: basename(picked) };
-    let check;
-    try {
-      const inspected = await ipc.boardPackInspect(picked);
-      check = checkPack(inspected.manifest, inspected.boards);
-    } catch (e) {
-      check = { kind: "corrupt" as const, reason: errorText(e) };
-    }
-    if (check.kind !== "ok") {
-      logEvent("board_pack", { ...fields, result: check.kind });
-      if (check.kind === "newer") await message(check.message, { title: "无法导入画板包", kind: "warning" });
-      else toast(`无法导入画板包：${check.reason}`);
-      return;
-    }
-    let board_file = check.boards.map((b) => basename(b.entry)).join(", ");
-    await ipc.boardPackCancel(false);
-    setPack({ stage: "progress", title: `正在导入画板包：${basename(picked)}` });
-    let report;
-    try {
-      report = await ipc.boardPackImport(picked, outputRoot);
-    } catch (e) {
-      const cancelled = errorText(e) === PACK_CANCELLED;
-      logEvent("board_pack", { ...fields, board_file, result: cancelled ? "cancelled" : "failed" });
-      toast(cancelled ? "已取消导入；已移入的任务目录保留" : `导入画板包失败：${errorText(e)}`);
-      setPack(null);
-      return;
-    }
-    const logged = { ...fields, board_file, task_dirs: report.imported, skipped: report.skipped, conflicts: report.conflicts.length, bytes: report.bytes };
-    try {
-      const written: string[] = [];
-      for (const { board } of check.boards) written.push(basename(await boards.addImportedBoard(board)));
-      board_file = written.join(", ");
-    } catch (e) {
-      logEvent("board_pack", { ...logged, result: "board_write_failed" });
-      toast(`任务目录已导入，但写画板失败：${errorText(e)}`);
-      setPack(null);
-      return;
-    }
-    logEvent("board_pack", { ...logged, board_file, result: "ok" });
-    const summary = importSummary(report);
-    if (summary.conflicts.length) setPack({ stage: "importDone", ...summary });
-    else {
-      setPack(null);
-      toast(summary.message);
-    }
-  }, [outputRoot, boards, toast]);
-
   // 第二阶段：恢复标签页，再打开启动参数里的画板；一个都没有就新建。
   useEffect(() => {
     if (!outputRoot || started.current) return;
@@ -417,8 +310,8 @@ export function App() {
           onClose={(key) => void closeBoard(key)}
           onRename={(key, title) => void boards.renameBoard(key, title)}
           onCreate={() => void createBoard()}
-          onExportPack={(key) => void prepareExportPack(key)}
-          onImportPack={() => void importPack()}
+          onExportPack={(key) => void pack.prepareExport(key)}
+          onImportPack={() => void pack.importPack()}
         />
         <RunIndicator
           active={runner.active}
@@ -481,7 +374,7 @@ export function App() {
               onRun={(ids) => void openRunConfirm(ids)}
               onCancelTask={cancelTask}
               onRegenerate={regenerate}
-              onExportPack={() => void prepareExportPack(active.key)}
+              onExportPack={() => void pack.prepareExport(active.key)}
               focus={focus?.boardKey === active.key ? focus : null}
             />
           </ReactFlowProvider>
@@ -506,14 +399,7 @@ export function App() {
           onConfirm={(ids) => void startRun(confirm.boardKey, confirm.board, ids)}
         />
       )}
-      {pack && (
-        <BoardPackDialog
-          state={pack}
-          onExport={() => pack.stage === "confirmExport" && void exportPack(pack.boardFile, pack.plan)}
-          onCancelProgress={() => void ipc.boardPackCancel(true)}
-          onClose={() => setPack(null)}
-        />
-      )}
+      {pack.dialog && <BoardPackDialog {...pack.dialog} />}
       {toastText && <div className="toast">{toastText}</div>}
     </div>
   );

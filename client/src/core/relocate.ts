@@ -33,13 +33,14 @@ export async function findResultFile(fs: RelocateFs, root: string, ref: { task_i
   return null;
 }
 
-/** 递归遍历根目录（跳过画板目录）：返回名字符合的目录，或 dirs 为 false 时返回名字符合的文件。 */
+/** 递归遍历根目录（跳过画板目录与隐藏条目——未清理的导入临时目录、原子写临时文件都以 `.` 开头）：返回名字符合的目录，或 dirs 为 false 时返回名字符合的文件。 */
 async function walk(fs: RelocateFs, root: string, match: (name: string) => boolean, dirs = true): Promise<string[]> {
   const found: string[] = [];
   const stack = [root];
   while (stack.length) {
     const dir = stack.pop()!;
     for (const entry of await quiet(fs.listDir(dir), [])) {
+      if (entry.name.startsWith(".")) continue;
       const path = joinPath(dir, entry.name);
       if (entry.is_dir) {
         if (dir === root && entry.name === BOARDS_DIR_NAME) continue;

@@ -188,13 +188,29 @@ fn board_pack_export(
 }
 
 #[tauri::command(async)]
-fn board_pack_inspect(pack: String) -> Result<board_pack::Inspected, String> {
-    board_pack::inspect(Path::new(&pack)).map_err(err)
+fn board_pack_entries(pack: String) -> Result<Vec<String>, String> {
+    board_pack::entries(Path::new(&pack)).map_err(err)
 }
 
 #[tauri::command(async)]
-fn board_pack_import(app: tauri::AppHandle, cancel: tauri::State<'_, PackCancel>, pack: String, output_root: String) -> Result<board_pack::ImportReport, String> {
-    board_pack::import(Path::new(&pack), Path::new(&output_root), &emit_pack_progress(&app), &cancel.0).map_err(err)
+fn board_pack_read_texts(pack: String, names: Vec<String>) -> Result<std::collections::BTreeMap<String, String>, String> {
+    board_pack::read_texts(Path::new(&pack), &names).map_err(err)
+}
+
+#[tauri::command(async)]
+fn board_pack_import(
+    app: tauri::AppHandle,
+    cancel: tauri::State<'_, PackCancel>,
+    pack: String,
+    output_root: String,
+    units: Vec<board_pack::MergeUnit>,
+) -> Result<board_pack::ImportReport, String> {
+    board_pack::import(Path::new(&pack), Path::new(&output_root), &units, &emit_pack_progress(&app), &cancel.0).map_err(err)
+}
+
+#[tauri::command(async)]
+fn file_sha256(path: String) -> Result<String, String> {
+    board_pack::sha256_file(Path::new(&path)).map_err(err)
 }
 
 #[tauri::command]
@@ -314,9 +330,11 @@ pub fn run() {
             diagnostics_preview,
             diagnostics_export,
             board_pack_export,
-            board_pack_inspect,
+            board_pack_entries,
+            board_pack_read_texts,
             board_pack_import,
             board_pack_cancel,
+            file_sha256,
             secret_get,
             secret_set,
             secret_delete,

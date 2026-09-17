@@ -2,6 +2,7 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import type { FetchLike } from "../core/gateway";
+import type { MergeOutcome, MergeUnit, PackExportSpec } from "../core/boardPack";
 import type { DirEntry } from "../core/relocate";
 
 export interface AppPaths {
@@ -31,19 +32,6 @@ export interface PackageEntry {
   contains_prompt: boolean;
 }
 
-export interface PackExportSpec {
-  manifest: string;
-  board_entry: string;
-  board_text: string;
-  task_dirs: string[];
-  files: { source: string; entry: string }[];
-}
-
-export interface PackInspected {
-  manifest: string | null;
-  boards: Record<string, string>;
-}
-
 /** 与 src-tauri/src/board_pack.rs 的 CANCELLED 一致：取消时命令以此 reject。 */
 export const PACK_CANCELLED = "已取消";
 
@@ -70,9 +58,10 @@ export const ipc = {
     invoke<PackageEntry[]>("diagnostics_export", { outputRoot, openBoards, target, include }),
   boardPackExport: (outputRoot: string, target: string, spec: PackExportSpec) =>
     invoke<{ task_dirs: number; bytes: number }>("board_pack_export", { outputRoot, target, spec }),
-  boardPackInspect: (pack: string) => invoke<PackInspected>("board_pack_inspect", { pack }),
-  boardPackImport: (pack: string, outputRoot: string) =>
-    invoke<{ imported: number; skipped: number; conflicts: string[]; bytes: number }>("board_pack_import", { pack, outputRoot }),
+  boardPackEntries: (pack: string) => invoke<string[]>("board_pack_entries", { pack }),
+  boardPackReadTexts: (pack: string, names: string[]) => invoke<Record<string, string>>("board_pack_read_texts", { pack, names }),
+  boardPackImport: (pack: string, outputRoot: string, units: MergeUnit[]) =>
+    invoke<{ outcomes: { path: string; outcome: MergeOutcome }[]; bytes: number }>("board_pack_import", { pack, outputRoot, units }),
   /** 置取消标记；开始导出 / 导入前先以 false 复位。 */
   boardPackCancel: (cancelled: boolean) => invoke<void>("board_pack_cancel", { cancelled }),
   /** 系统凭据库；不可用时 reject（调用方退回会话内存）。 */
@@ -80,6 +69,8 @@ export const ipc = {
   secretSet: (key: string) => invoke<void>("secret_set", { key }),
   secretDelete: () => invoke<void>("secret_delete"),
   listDir: (path: string) => invoke<DirEntry[]>("list_dir", { path }),
+  /** 任意文件的 sha256（流式，不要求是图片）。 */
+  fileSha256: (path: string) => invoke<string>("file_sha256", { path }),
   isFile: (path: string) => invoke<boolean>("is_file", { path }),
   readFileBytes: async (path: string) => new Uint8Array(await invoke<ArrayBuffer>("read_file_bytes", { path })),
   /** 只新建不覆盖：目标已存在时 reject。 */

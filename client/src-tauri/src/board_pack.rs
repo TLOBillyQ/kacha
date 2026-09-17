@@ -1,25 +1,33 @@
-//! 画板包（ADR 0013）的 zip 读写与合并导入。包格式（清单、画板路径改写、版本判定）由前端 core/boardPack.ts 决定，
-//! 这里只按路径约定搬字节：包内结构照搬输出根目录，`<日期>/<task_id>/` 为任务目录，`画板/` 下是画板文件。
+//! 画板包（ADR 0013）的 zip 读写与合并搬运。包格式的规则（带哪些条目、布局是否合法、合并单元怎么比对、
+//! 结果怎么计数）全部在前端 core/boardPack.ts；这里只按给定条目与合并单元搬字节，并守住路径安全。
 //!
-//! 导出：流式写同目录临时文件，图片 store、JSON deflate，完成后 rename 覆盖目标。
-//! 导入：先整包解压到输出根目录下的临时目录并校验，再逐个任务目录原子 rename 移入；已存在的任务目录
-//! task.json 一致则跳过、不一致记冲突，均不覆盖。失败 / 取消时清理临时目录，已移入的保留。
+//! 导出：流式写同目录临时文件，JSON deflate、其余 store，完成后 rename 覆盖目标。
+//! 导入：只解压属于给定合并单元的条目到输出根目录下的临时目录，校验后逐个单元原子 rename 移入；
+//! 目标已存在时按单元的身份文件（或整文件）比对，一致为跳过、不一致为冲突，均不覆盖。
+//! 失败 / 取消时清理临时目录，已移入的保留；进程被杀留下的临时目录在下次导入开始时清理。
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use zip::write::SimpleFileOptions;
 
 use crate::store;
 
-pub const MANIFEST_NAME: &str = "manifest.json";
-pub const BOARDS_DIR: &str = "画板";
 pub const CANCELLED: &str = "已取消";
-const TASK_RECORD: &str = "task.json";
 const CHUNK: usize = 1 << 20;
+/// 导入临时目录名 `.ugcpack-import.<pid>-<纳秒>-<序号>.tmp`（由 store::temp_path_for 生成）。
+const IMPORT_TEMP_STEM: &str = "ugcpack-import";
+
+#[derive(Debug, Deserialize)]
+pub struct PackText {
+    pub entry: String,
+    pub text: String,
+}
 
 #[derive(Debug, Deserialize)]
 pub struct PackFile {
@@ -31,11 +39,9 @@ pub struct PackFile {
 
 #[derive(Debug, Deserialize)]
 pub struct ExportSpec {
-    pub manifest: String,
-    /// 包内画板路径（`画板/<文件名>`）与内容。
-    pub board_entry: String,
-    pub board_text: String,
-    /// 相对输出根目录的任务目录；本机不存在的跳过。
+    /// 直接写入的文本条目（清单、画板）。
+    pub texts: Vec<PackText>,
+    /// 相对输出根目录的目录，整目录写入；本机不存在的跳过。
     pub task_dirs: Vec<String>,
     pub files: Vec<PackFile>,
 }
@@ -46,18 +52,30 @@ pub struct ExportReport {
     pub bytes: u64,
 }
 
+/// 合并单元：`identity` 为目录内判定「同一份」的相对文件；为 None 时单元本身是文件，按整文件比对。
+#[derive(Debug, Deserialize)]
+pub struct MergeUnit {
+    pub path: String,
+    pub identity: Option<String>,
+}
+
+#[derive(Debug, Serialize, PartialEq, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+pub enum MergeOutcome {
+    Moved,
+    Identical,
+    Conflict,
+}
+
 #[derive(Debug, Serialize, PartialEq)]
-pub struct Inspected {
-    pub manifest: Option<String>,
-    /// 包内画板路径 → 内容。
-    pub boards: std::collections::BTreeMap<String, String>,
+pub struct UnitOutcome {
+    pub path: String,
+    pub outcome: MergeOutcome,
 }
 
 #[derive(Debug, Serialize, PartialEq)]
 pub struct ImportReport {
-    pub imported: usize,
-    pub skipped: usize,
-    pub conflicts: Vec<String>,
+    pub outcomes: Vec<UnitOutcome>,
     pub bytes: u64,
 }
 
@@ -65,37 +83,28 @@ fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
 }
 
-fn cancelled() -> io::Error {
-    io::Error::new(io::ErrorKind::Interrupted, CANCELLED)
+fn zip_err(e: zip::result::ZipError) -> io::Error {
+    invalid(e.to_string())
 }
 
 fn check_cancel(cancel: &AtomicBool) -> io::Result<()> {
     if cancel.load(Ordering::Relaxed) {
-        Err(cancelled())
+        Err(io::Error::new(io::ErrorKind::Interrupted, CANCELLED))
     } else {
         Ok(())
     }
 }
 
 /// 包内路径只允许正斜杠分隔的普通相对段：不含 `..`、`.`、空段、反斜杠、盘符与控制字符。
-fn safe_segments(name: &str) -> Option<Vec<&str>> {
-    let segments: Vec<&str> = name.split('/').collect();
-    let ok = !segments.is_empty()
-        && segments.iter().all(|s| !s.is_empty() && *s != "." && *s != ".." && !s.chars().any(|c| c == '\\' || c == ':' || c.is_control()));
-    ok.then_some(segments)
+fn safe_join(base: &Path, name: &str) -> io::Result<PathBuf> {
+    let ok = name.split('/').all(|s| !s.is_empty() && s != "." && s != ".." && !s.chars().any(|c| c == '\\' || c == ':' || c.is_control()));
+    if !ok {
+        return Err(invalid(format!("包内路径无效：{name}")));
+    }
+    Ok(name.split('/').fold(base.to_path_buf(), |p, s| p.join(s)))
 }
 
-fn join_segments(base: &Path, name: &str) -> io::Result<PathBuf> {
-    let segments = safe_segments(name).ok_or_else(|| invalid(format!("包内路径无效：{name}")))?;
-    Ok(segments.iter().fold(base.to_path_buf(), |p, s| p.join(s)))
-}
-
-fn is_date_dir(name: &str) -> bool {
-    let b = name.as_bytes();
-    b.len() == 10 && b[4] == b'-' && b[7] == b'-' && b.iter().enumerate().all(|(i, c)| i == 4 || i == 7 || c.is_ascii_digit())
-}
-
-/// 任务目录内全部文件（相对任务目录，正斜杠，排序）；不跟随符号链接。
+/// 目录内全部文件（相对该目录，正斜杠，排序）；不跟随符号链接。
 fn files_under(dir: &Path) -> io::Result<Vec<(String, PathBuf)>> {
     let mut out = Vec::new();
     let mut stack = vec![(String::new(), dir.to_path_buf())];
@@ -129,22 +138,39 @@ fn copy_chunks(reader: &mut impl Read, writer: &mut impl Write, done: &mut u64, 
     }
 }
 
+/// 流式 sha256：导出时给任务目录外的文件算包内名，不要求是可解码的图片。
+pub fn sha256_file(path: &Path) -> io::Result<String> {
+    let mut file = File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0u8; CHUNK];
+    loop {
+        let n = file.read(&mut buf)?;
+        if n == 0 {
+            return Ok(format!("{:x}", hasher.finalize()));
+        }
+        hasher.update(&buf[..n]);
+    }
+}
+
 pub fn export(root: &Path, spec: &ExportSpec, target: &Path, progress: &dyn Fn(u64, u64), cancel: &AtomicBool) -> io::Result<ExportReport> {
     let mut sources: Vec<(String, PathBuf)> = Vec::new();
     let mut task_dirs = 0;
     for dir in &spec.task_dirs {
-        let path = join_segments(root, dir)?;
+        let path = safe_join(root, dir)?;
         if !path.is_dir() {
             continue;
         }
         task_dirs += 1;
         sources.extend(files_under(&path)?.into_iter().map(|(name, p)| (format!("{dir}/{name}"), p)));
     }
-    for file in &spec.files {
-        safe_segments(&file.entry).ok_or_else(|| invalid(format!("包内路径无效：{}", file.entry)))?;
-        sources.push((file.entry.clone(), PathBuf::from(&file.source)));
+    sources.extend(spec.files.iter().map(|f| (f.entry.clone(), PathBuf::from(&f.source))));
+    let mut names = BTreeSet::new();
+    for name in spec.texts.iter().map(|t| &t.entry).chain(sources.iter().map(|(n, _)| n)) {
+        safe_join(Path::new(""), name)?;
+        if !names.insert(name.as_str()) {
+            return Err(invalid(format!("包内路径重复：{name}")));
+        }
     }
-    safe_segments(&spec.board_entry).ok_or_else(|| invalid(format!("包内路径无效：{}", spec.board_entry)))?;
     let total = sources.iter().map(|(_, p)| fs::metadata(p).map(|m| m.len()).unwrap_or(0)).sum::<u64>();
 
     if let Some(dir) = target.parent() {
@@ -153,12 +179,11 @@ pub fn export(root: &Path, spec: &ExportSpec, target: &Path, progress: &dyn Fn(u
     let tmp = store::temp_path_for(target);
     let result = (|| {
         let mut zip = zip::ZipWriter::new(File::create_new(&tmp)?);
-        let zip_err = |e: zip::result::ZipError| io::Error::other(e.to_string());
         let deflate = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
         let store = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
-        for (name, text) in [(MANIFEST_NAME, &spec.manifest), (spec.board_entry.as_str(), &spec.board_text)] {
-            zip.start_file(name, deflate).map_err(zip_err)?;
-            zip.write_all(text.as_bytes())?;
+        for text in &spec.texts {
+            zip.start_file(text.entry.as_str(), deflate).map_err(zip_err)?;
+            zip.write_all(text.text.as_bytes())?;
         }
         let mut done = 0;
         for (name, path) in &sources {
@@ -184,45 +209,30 @@ fn open_archive(pack: &Path) -> io::Result<zip::ZipArchive<File>> {
     zip::ZipArchive::new(File::open(pack)?).map_err(|e| invalid(format!("不是有效的画板包：{e}")))
 }
 
-fn read_entry_text(file: &mut impl Read) -> io::Result<String> {
-    let mut text = String::new();
-    file.read_to_string(&mut text).map_err(|_| invalid("包内 JSON 不是 UTF-8"))?;
-    Ok(text)
+/// 包内全部文件条目名（不含目录条目）。
+pub fn entries(pack: &Path) -> io::Result<Vec<String>> {
+    let archive = open_archive(pack)?;
+    Ok(archive.file_names().filter(|n| !n.ends_with('/')).map(str::to_string).collect())
 }
 
-/// 只读清单与画板，不写任何文件；版本判定由前端做。
-pub fn inspect(pack: &Path) -> io::Result<Inspected> {
+/// 读指定条目的 UTF-8 文本；包内没有的条目不出现在结果里。
+pub fn read_texts(pack: &Path, names: &[String]) -> io::Result<BTreeMap<String, String>> {
     let mut archive = open_archive(pack)?;
-    let mut inspected = Inspected { manifest: None, boards: Default::default() };
-    for i in 0..archive.len() {
-        let mut file = archive.by_index(i).map_err(|e| invalid(e.to_string()))?;
-        let name = file.name().to_string();
-        if name == MANIFEST_NAME {
-            inspected.manifest = Some(read_entry_text(&mut file)?);
-        } else if name.starts_with(&format!("{BOARDS_DIR}/")) && !file.is_dir() {
-            inspected.boards.insert(name, read_entry_text(&mut file)?);
-        }
+    let mut texts = BTreeMap::new();
+    for name in names {
+        let mut file = match archive.by_name(name) {
+            Ok(file) => file,
+            Err(zip::result::ZipError::FileNotFound) => continue,
+            Err(e) => return Err(zip_err(e)),
+        };
+        let mut text = String::new();
+        file.read_to_string(&mut text).map_err(|_| invalid(format!("包内 {name} 不是 UTF-8 文本")))?;
+        texts.insert(name.clone(), text);
     }
-    Ok(inspected)
+    Ok(texts)
 }
 
-/// 合并单元：任务目录整目录移入，其余文件逐个移入。
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
-enum Unit {
-    TaskDir(String),
-    File(String),
-}
-
-fn unit_of(name: &str) -> Unit {
-    let segments: Vec<&str> = name.split('/').collect();
-    if segments.len() >= 3 && is_date_dir(segments[0]) {
-        Unit::TaskDir(format!("{}/{}", segments[0], segments[1]))
-    } else {
-        Unit::File(name.to_string())
-    }
-}
-
-/// 临时目录守卫：离开作用域时删除（成功时里面已空）。
+/// 临时目录守卫：离开作用域时删除（成功时里面只剩未移入的单元）。
 struct TempDir(PathBuf);
 
 impl Drop for TempDir {
@@ -231,35 +241,72 @@ impl Drop for TempDir {
     }
 }
 
-fn same_bytes(a: &Path, b: &Path) -> bool {
-    match (fs::read(a), fs::read(b)) {
-        (Ok(x), Ok(y)) => x == y,
-        _ => false,
+/// 清理进程被杀时留下的导入临时目录。单实例应用、导入是模态的，开始导入时不会有别的导入在进行。
+fn sweep_stale_imports(root: &Path) {
+    let prefix = format!(".{IMPORT_TEMP_STEM}.");
+    for entry in fs::read_dir(root).into_iter().flatten().flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with(&prefix) && name.ends_with(".tmp") && entry.file_type().is_ok_and(|t| t.is_dir()) {
+            let _ = fs::remove_dir_all(entry.path());
+        }
     }
 }
 
-pub fn import(pack: &Path, root: &Path, progress: &dyn Fn(u64, u64), cancel: &AtomicBool) -> io::Result<ImportReport> {
+/// 逐块比对两个文件；任一读不了视为不同。
+fn same_file(a: &Path, b: &Path) -> bool {
+    let compare = || -> io::Result<bool> {
+        let (mut x, mut y) = (File::open(a)?, File::open(b)?);
+        if x.metadata()?.len() != y.metadata()?.len() {
+            return Ok(false);
+        }
+        let (mut bx, mut by) = (vec![0u8; CHUNK], vec![0u8; CHUNK]);
+        loop {
+            let n = x.read(&mut bx)?;
+            if n == 0 {
+                return Ok(true);
+            }
+            y.read_exact(&mut by[..n])?;
+            if bx[..n] != by[..n] {
+                return Ok(false);
+            }
+        }
+    };
+    compare().unwrap_or(false)
+}
+
+fn belongs_to_unit(units: &[MergeUnit], name: &str) -> bool {
+    units.iter().any(|u| name == u.path || name.strip_prefix(u.path.as_str()).is_some_and(|rest| rest.starts_with('/')))
+}
+
+pub fn import(pack: &Path, root: &Path, units: &[MergeUnit], progress: &dyn Fn(u64, u64), cancel: &AtomicBool) -> io::Result<ImportReport> {
+    for unit in units {
+        safe_join(root, &unit.path)?;
+        if let Some(identity) = &unit.identity {
+            safe_join(root, identity)?;
+        }
+    }
     let mut archive = open_archive(pack)?;
-    let mut entries = Vec::new();
+    let mut extract = Vec::new();
     let mut total = 0;
     for i in 0..archive.len() {
-        let file = archive.by_index(i).map_err(|e| invalid(e.to_string()))?;
+        let file = archive.by_index(i).map_err(zip_err)?;
         let name = file.name().to_string();
-        if file.is_dir() || name == MANIFEST_NAME || name.starts_with(&format!("{BOARDS_DIR}/")) {
+        if file.is_dir() || !belongs_to_unit(units, &name) {
             continue;
         }
-        safe_segments(&name).ok_or_else(|| invalid(format!("包内路径无效：{name}")))?;
+        safe_join(root, &name)?;
         total += file.size();
-        entries.push((i, name));
+        extract.push((i, name));
     }
 
     fs::create_dir_all(root)?;
-    let temp = TempDir(store::temp_path_for(&root.join(".ugcpack-import")));
+    sweep_stale_imports(root);
+    let temp = TempDir(store::temp_path_for(&root.join(IMPORT_TEMP_STEM)));
     fs::create_dir(&temp.0)?;
     let mut done = 0;
-    for (index, name) in &entries {
-        let mut file = archive.by_index(*index).map_err(|e| invalid(e.to_string()))?;
-        let dest = join_segments(&temp.0, name)?;
+    for (index, name) in &extract {
+        let mut file = archive.by_index(*index).map_err(zip_err)?;
+        let dest = safe_join(&temp.0, name)?;
         if let Some(parent) = dest.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -267,45 +314,43 @@ pub fn import(pack: &Path, root: &Path, progress: &dyn Fn(u64, u64), cancel: &At
         copy_chunks(&mut file, &mut out, &mut done, total, progress, cancel)?;
     }
 
-    let mut units: Vec<Unit> = entries.iter().map(|(_, name)| unit_of(name)).collect();
-    units.sort();
-    units.dedup();
-    // 校验：每个任务目录都要有 task.json；不合格时一个都不移入。
-    for unit in &units {
-        if let Unit::TaskDir(dir) = unit {
-            if !join_segments(&temp.0, dir)?.join(TASK_RECORD).is_file() {
-                return Err(invalid(format!("任务目录 {dir} 缺少 {TASK_RECORD}")));
-            }
+    // 校验：每个单元都在包里（目录单元还要有身份文件）；不合格时一个都不移入。
+    for unit in units {
+        let from = safe_join(&temp.0, &unit.path)?;
+        let present = match &unit.identity {
+            Some(identity) => safe_join(&from, identity)?.is_file(),
+            None => from.is_file(),
+        };
+        if !present {
+            return Err(invalid(format!("包内缺少 {}", unit.path)));
         }
     }
 
-    let mut report = ImportReport { imported: 0, skipped: 0, conflicts: Vec::new(), bytes: done };
-    for unit in &units {
+    let mut outcomes = Vec::new();
+    for unit in units {
         check_cancel(cancel)?;
-        let (name, is_task) = match unit {
-            Unit::TaskDir(dir) => (dir, true),
-            Unit::File(file) => (file, false),
-        };
-        let from = join_segments(&temp.0, name)?;
-        let to = join_segments(root, name)?;
-        if to.exists() {
-            let identical = if is_task { same_bytes(&from.join(TASK_RECORD), &to.join(TASK_RECORD)) } else { same_bytes(&from, &to) };
-            if !identical {
-                report.conflicts.push(name.clone());
-            } else if is_task {
-                report.skipped += 1;
+        let from = safe_join(&temp.0, &unit.path)?;
+        let to = safe_join(root, &unit.path)?;
+        let outcome = if to.exists() {
+            let same = match &unit.identity {
+                Some(identity) => same_file(&safe_join(&from, identity)?, &safe_join(&to, identity)?),
+                None => same_file(&from, &to),
+            };
+            if same {
+                MergeOutcome::Identical
+            } else {
+                MergeOutcome::Conflict
             }
-            continue;
-        }
-        if let Some(parent) = to.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        fs::rename(&from, &to)?;
-        if is_task {
-            report.imported += 1;
-        }
+        } else {
+            if let Some(parent) = to.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::rename(&from, &to)?;
+            MergeOutcome::Moved
+        };
+        outcomes.push(UnitOutcome { path: unit.path.clone(), outcome });
     }
-    Ok(report)
+    Ok(ImportReport { outcomes, bytes: done })
 }
 
 #[cfg(test)]
@@ -314,6 +359,7 @@ mod tests {
 
     const TASK_A: &str = "2026-09-16/20260916T010000Z-0000000a";
     const TASK_B: &str = "2026-09-16/20260916T020000Z-0000000b";
+    const REF: &str = "导入参考图/abc.png";
 
     fn no_progress(_: u64, _: u64) {}
 
@@ -342,14 +388,25 @@ mod tests {
         Fixture { tmp, root, external }
     }
 
+    fn text(entry: &str, text: &str) -> PackText {
+        PackText { entry: entry.into(), text: text.into() }
+    }
+
     fn spec(f: &Fixture) -> ExportSpec {
         ExportSpec {
-            manifest: "{\"pack_format_version\":1}".into(),
-            board_entry: "画板/千问测试.ugcboard.json".into(),
-            board_text: "{\"title\":\"千问测试\"}".into(),
+            texts: vec![text("manifest.json", "{\"pack_format_version\":1}"), text("画板/千问测试.ugcboard.json", "{\"title\":\"千问测试\"}")],
             task_dirs: vec![TASK_A.into(), TASK_B.into(), "2026-09-17/20260917T000000Z-missing".into()],
-            files: vec![PackFile { source: f.external.to_string_lossy().into_owned(), entry: "导入参考图/abc.png".into() }],
+            files: vec![PackFile { source: f.external.to_string_lossy().into_owned(), entry: REF.into() }],
         }
+    }
+
+    fn units() -> Vec<MergeUnit> {
+        let dir = |p: &str| MergeUnit { path: p.into(), identity: Some("task.json".into()) };
+        vec![dir(TASK_A), dir(TASK_B), MergeUnit { path: REF.into(), identity: None }]
+    }
+
+    fn outcomes(report: &ImportReport) -> Vec<(&str, MergeOutcome)> {
+        report.outcomes.iter().map(|o| (o.path.as_str(), o.outcome)).collect()
     }
 
     fn zip_entries(path: &Path) -> Vec<(String, zip::CompressionMethod)> {
@@ -363,11 +420,22 @@ mod tests {
     }
 
     fn names_in(dir: &Path) -> Vec<String> {
-        fs::read_dir(dir).map(|it| it.map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect()).unwrap_or_default()
+        let mut names: Vec<String> = fs::read_dir(dir).map(|it| it.map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect()).unwrap_or_default();
+        names.sort();
+        names
+    }
+
+    fn make_zip(path: &Path, entries: &[&str]) {
+        let mut zip = zip::ZipWriter::new(File::create(path).unwrap());
+        for e in entries {
+            zip.start_file(*e, SimpleFileOptions::default()).unwrap();
+            zip.write_all(b"x").unwrap();
+        }
+        zip.finish().unwrap();
     }
 
     #[test]
-    fn export_mirrors_root_layout_and_stores_images() {
+    fn export_writes_texts_dirs_and_files_storing_images() {
         let f = fixture();
         let target = f.tmp.path().join("出/千问测试.ugcpack");
         let report = export(&f.root, &spec(&f), &target, &no_progress, &AtomicBool::new(false)).unwrap();
@@ -385,7 +453,7 @@ mod tests {
                 &format!("{TASK_B}/layers/01.png"),
                 &format!("{TASK_B}/result.png"),
                 &format!("{TASK_B}/task.json"),
-                "导入参考图/abc.png",
+                REF,
             ]
         );
         for (name, method) in &entries {
@@ -396,12 +464,16 @@ mod tests {
     }
 
     #[test]
-    fn export_rejects_unsafe_entries() {
+    fn export_rejects_unsafe_or_duplicate_entries() {
         let f = fixture();
-        let mut bad = spec(&f);
-        bad.task_dirs = vec!["../outside".into()];
         let target = f.tmp.path().join("bad.ugcpack");
-        assert!(export(&f.root, &bad, &target, &no_progress, &AtomicBool::new(false)).is_err());
+        let mut traversal = spec(&f);
+        traversal.task_dirs = vec!["../outside".into()];
+        assert!(export(&f.root, &traversal, &target, &no_progress, &AtomicBool::new(false)).is_err());
+        let mut duplicate = spec(&f);
+        duplicate.files.push(PackFile { source: f.external.to_string_lossy().into_owned(), entry: "manifest.json".into() });
+        let err = export(&f.root, &duplicate, &target, &no_progress, &AtomicBool::new(false)).unwrap_err();
+        assert!(err.to_string().contains("重复"), "{err}");
         assert!(!target.exists());
     }
 
@@ -414,6 +486,13 @@ mod tests {
         assert!(names_in(f.tmp.path()).iter().all(|n| !n.contains("c.ugcpack")));
     }
 
+    #[test]
+    fn sha256_of_any_file() {
+        let f = fixture();
+        assert_eq!(sha256_file(&f.external).unwrap(), format!("{:x}", Sha256::digest(b"cat")));
+        assert!(sha256_file(&f.tmp.path().join("没有")).is_err());
+    }
+
     fn exported(f: &Fixture) -> PathBuf {
         let target = f.tmp.path().join("p.ugcpack");
         export(&f.root, &spec(f), &target, &no_progress, &AtomicBool::new(false)).unwrap();
@@ -421,44 +500,45 @@ mod tests {
     }
 
     #[test]
-    fn inspect_reads_manifest_and_boards_only() {
+    fn lists_entries_and_reads_requested_texts() {
         let f = fixture();
-        let inspected = inspect(&exported(&f)).unwrap();
-        assert_eq!(inspected.manifest.as_deref(), Some("{\"pack_format_version\":1}"));
-        assert_eq!(inspected.boards.keys().collect::<Vec<_>>(), vec!["画板/千问测试.ugcboard.json"]);
+        let pack = exported(&f);
+        assert_eq!(entries(&pack).unwrap().len(), 8);
+        let texts = read_texts(&pack, &["manifest.json".into(), "画板/没有.ugcboard.json".into()]).unwrap();
+        assert_eq!(texts.into_iter().collect::<Vec<_>>(), vec![("manifest.json".to_string(), "{\"pack_format_version\":1}".to_string())]);
+        fs::write(f.tmp.path().join("junk.ugcpack"), b"not a zip").unwrap();
+        assert!(entries(&f.tmp.path().join("junk.ugcpack")).is_err());
     }
 
     #[test]
-    fn import_moves_task_dirs_and_files_then_is_idempotent() {
+    fn import_moves_units_only_then_is_idempotent() {
         let f = fixture();
         let pack = exported(&f);
         let other = f.tmp.path().join("输出 B");
-        let report = import(&pack, &other, &no_progress, &AtomicBool::new(false)).unwrap();
-        assert_eq!((report.imported, report.skipped, report.conflicts.len()), (2, 0, 0));
+        let report = import(&pack, &other, &units(), &no_progress, &AtomicBool::new(false)).unwrap();
+        assert_eq!(outcomes(&report), vec![(TASK_A, MergeOutcome::Moved), (TASK_B, MergeOutcome::Moved), (REF, MergeOutcome::Moved)]);
         assert_eq!(fs::read(other.join(TASK_B).join("layers/01.png")).unwrap(), b"layer");
-        assert_eq!(fs::read(other.join("导入参考图/abc.png")).unwrap(), b"cat");
-        // 画板不由壳写入（前端按改名规则写）。
-        assert!(!other.join(BOARDS_DIR).exists());
-        assert_eq!(names_in(&other).len(), 2, "临时目录应已清理：{:?}", names_in(&other));
+        assert_eq!(fs::read(other.join(REF)).unwrap(), b"cat");
+        // 清单与画板不属于合并单元，不解压（画板由前端按改名规则写）；临时目录已清理。
+        assert_eq!(names_in(&other), vec!["2026-09-16", "导入参考图"]);
 
-        let again = import(&pack, &other, &no_progress, &AtomicBool::new(false)).unwrap();
-        assert_eq!((again.imported, again.skipped, again.conflicts), (0, 2, vec![]));
-        assert_eq!(names_in(&other).len(), 2);
+        let again = import(&pack, &other, &units(), &no_progress, &AtomicBool::new(false)).unwrap();
+        assert_eq!(outcomes(&again), vec![(TASK_A, MergeOutcome::Identical), (TASK_B, MergeOutcome::Identical), (REF, MergeOutcome::Identical)]);
+        assert_eq!(names_in(&other), vec!["2026-09-16", "导入参考图"]);
     }
 
     #[test]
-    fn differing_task_json_is_a_conflict_and_not_overwritten() {
+    fn differing_identity_is_a_conflict_and_not_overwritten() {
         let f = fixture();
         let pack = exported(&f);
         let other = f.tmp.path().join("输出 B");
         write(&other.join(TASK_A).join("task.json"), b"{\"local\":true}");
-        write(&other.join("导入参考图/abc.png"), b"dog");
-        let report = import(&pack, &other, &no_progress, &AtomicBool::new(false)).unwrap();
-        assert_eq!(report.imported, 1);
-        assert_eq!(report.conflicts, vec![TASK_A.to_string(), "导入参考图/abc.png".to_string()]);
+        write(&other.join(REF), b"dog");
+        let report = import(&pack, &other, &units(), &no_progress, &AtomicBool::new(false)).unwrap();
+        assert_eq!(outcomes(&report), vec![(TASK_A, MergeOutcome::Conflict), (TASK_B, MergeOutcome::Moved), (REF, MergeOutcome::Conflict)]);
         assert_eq!(fs::read(other.join(TASK_A).join("task.json")).unwrap(), b"{\"local\":true}");
         assert!(!other.join(TASK_A).join("result.png").exists());
-        assert_eq!(fs::read(other.join("导入参考图/abc.png")).unwrap(), b"dog");
+        assert_eq!(fs::read(other.join(REF)).unwrap(), b"dog");
     }
 
     #[test]
@@ -466,7 +546,7 @@ mod tests {
         let f = fixture();
         let pack = exported(&f);
         let other = f.tmp.path().join("输出 B");
-        let err = import(&pack, &other, &no_progress, &AtomicBool::new(true)).unwrap_err();
+        let err = import(&pack, &other, &units(), &no_progress, &AtomicBool::new(true)).unwrap_err();
         assert_eq!(err.to_string(), CANCELLED);
         assert!(names_in(&other).is_empty(), "{:?}", names_in(&other));
     }
@@ -483,30 +563,35 @@ mod tests {
                 cancel.store(true, Ordering::Relaxed);
             }
         };
-        assert!(import(&pack, &other, &progress, &cancel).is_err());
+        assert!(import(&pack, &other, &units(), &progress, &cancel).is_err());
         assert!(names_in(&other).is_empty(), "{:?}", names_in(&other));
     }
 
     #[test]
-    fn import_rejects_unsafe_or_invalid_packs_without_writing() {
+    fn import_sweeps_temp_dirs_left_by_a_killed_process() {
+        let f = fixture();
+        let pack = exported(&f);
+        let other = f.tmp.path().join("输出 B");
+        write(&other.join(".ugcpack-import.123-456-0.tmp/导入参考图/abc.png"), b"cat");
+        write(&other.join(".别的.tmp/x"), b"x");
+        import(&pack, &other, &units(), &no_progress, &AtomicBool::new(false)).unwrap();
+        assert_eq!(names_in(&other), vec![".别的.tmp", "2026-09-16", "导入参考图"]);
+    }
+
+    #[test]
+    fn import_rejects_unsafe_or_missing_units_without_writing() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("输出");
-        let make = |name: &str, entries: &[&str]| {
-            let path = tmp.path().join(name);
-            let mut zip = zip::ZipWriter::new(File::create(&path).unwrap());
-            for e in entries {
-                zip.start_file(*e, SimpleFileOptions::default()).unwrap();
-                zip.write_all(b"x").unwrap();
-            }
-            zip.finish().unwrap();
-            path
-        };
-        let traversal = make("t.ugcpack", &["manifest.json", "../evil.png"]);
-        assert!(import(&traversal, &root, &no_progress, &AtomicBool::new(false)).is_err());
-        let no_record = make("n.ugcpack", &["manifest.json", &format!("{TASK_A}/result.png")]);
-        assert!(import(&no_record, &root, &no_progress, &AtomicBool::new(false)).is_err());
+        let traversal = tmp.path().join("t.ugcpack");
+        make_zip(&traversal, &["manifest.json", &format!("{TASK_A}/../../evil.png"), &format!("{TASK_A}/task.json")]);
+        let task = || vec![MergeUnit { path: TASK_A.into(), identity: Some("task.json".into()) }];
+        assert!(import(&traversal, &root, &task(), &no_progress, &AtomicBool::new(false)).is_err());
+        let unsafe_unit = vec![MergeUnit { path: "../x".into(), identity: None }];
+        assert!(import(&traversal, &root, &unsafe_unit, &no_progress, &AtomicBool::new(false)).is_err());
+        let no_record = tmp.path().join("n.ugcpack");
+        make_zip(&no_record, &["manifest.json", &format!("{TASK_A}/result.png")]);
+        let err = import(&no_record, &root, &task(), &no_progress, &AtomicBool::new(false)).unwrap_err();
+        assert!(err.to_string().contains("缺少"), "{err}");
         assert!(names_in(&root).is_empty(), "{:?}", names_in(&root));
-        fs::write(tmp.path().join("junk.ugcpack"), b"not a zip").unwrap();
-        assert!(inspect(&tmp.path().join("junk.ugcpack")).is_err());
     }
 }

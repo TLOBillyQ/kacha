@@ -6,9 +6,10 @@ import type { ExportPlan } from "../core/boardPack";
 export type PackDialogState =
   | { stage: "confirmExport"; boardFile: string; plan: ExportPlan }
   | { stage: "progress"; title: string }
-  | { stage: "importDone"; message: string; conflicts: string[] };
+  /** 有冲突或写画板失败时才弹；任务目录的导入结果照常给出。 */
+  | { stage: "importDone"; message: string; conflicts: string[]; error: string | null };
 
-interface Props {
+export interface BoardPackDialogProps {
   state: PackDialogState;
   onExport: () => void;
   onCancelProgress: () => void;
@@ -46,7 +47,7 @@ function Progress({ title, onCancel }: { title: string; onCancel: () => void }) 
   );
 }
 
-export function BoardPackDialog({ state, onExport, onCancelProgress, onClose }: Props) {
+export function BoardPackDialog({ state, onExport, onCancelProgress, onClose }: BoardPackDialogProps) {
   // 进度中不响应点背景关闭：只能点「取消」。
   const dismiss = state.stage === "progress" ? undefined : onClose;
   return (
@@ -88,14 +89,19 @@ export function BoardPackDialog({ state, onExport, onCancelProgress, onClose }: 
             <div className="modal-head">
               <strong>{state.message}</strong>
             </div>
-            <div>以下内容与本机已有的不一致，已跳过、未覆盖：</div>
-            <ul className="error-list">
-              {state.conflicts.map((c) => (
-                <li key={c} className="mono">
-                  {c}
-                </li>
-              ))}
-            </ul>
+            {state.error && <div className="badge-warn">任务目录已导入，但写画板失败：{state.error}</div>}
+            {state.conflicts.length > 0 && (
+              <>
+                <div>以下内容与本机已有的不一致，已跳过、未覆盖：</div>
+                <ul className="error-list">
+                  {state.conflicts.map((c) => (
+                    <li key={c} className="mono">
+                      {c}
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
             <div className="modal-foot">
               <button className="primary" onClick={onClose}>
                 知道了

@@ -71,6 +71,12 @@ describe("重新定位：参考图按 sha256 找", () => {
     expect(listed).not.toContain("/out/画板");
   });
 
+  it("跳过隐藏目录与文件（未清理的导入临时目录、原子写临时文件）", async () => {
+    const { fs, listed } = memoryFs({ "/out/.ugcpack-import.1-2-0.tmp/导入参考图/cat.png": "want", "/out/.cat.png.1-2-0.tmp": "want", "/out/导入参考图/cat.png": "want" });
+    expect(await findReferenceFile(fs, ROOT, { sha256: "want", display_name: "cat.png" })).toBe("/out/导入参考图/cat.png");
+    expect(listed.some((d) => d.includes(".ugcpack-import"))).toBe(false);
+  });
+
   it("找不到为 null；读不了的目录与文件跳过", async () => {
     const { fs } = memoryFs({ "/out/a.png": "nope" });
     expect(await findReferenceFile(fs, ROOT, { sha256: "want", display_name: "cat.png" })).toBeNull();
