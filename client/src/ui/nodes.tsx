@@ -1,6 +1,6 @@
 // 节点四型的渲染。节点数据只来自画板文件模型；派生信息（露出端口、标红原因、校验规则）由画布计算后传入。
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { Handle, NodeResizer, Position, useUpdateNodeInternals, type Node, type NodeProps } from "@xyflow/react";
+import { NodeResizer, Position, useUpdateNodeInternals, type Node, type NodeProps } from "@xyflow/react";
 import { memo, useEffect, useRef, useState, type ReactNode } from "react";
 import type {
   PromptNode as PromptModel,
@@ -20,6 +20,7 @@ import {
   type WorkflowName,
 } from "../core/capabilities";
 import type { MenuItem } from "../core/contextMenu";
+import type { PortKind } from "../core/ports";
 import { actionHoverInfo, CANCELLED_HINT, referenceHoverInfo, resultHoverInfo, taskHoverInfo, textHoverInfo } from "../core/hoverInfo";
 import type { TaskStatus } from "../core/run";
 import { CHAIN_DEPTH_HINT, IMAGE_PORT_PREFIX, imageRuleViolations, type TaskPorts } from "../core/graph";
@@ -29,10 +30,12 @@ import { ratiosForSizeTier, sizeTiersOf } from "../core/size";
 import { fileUrl } from "../shell/ipc";
 import { useBoardActions, useImageInfo } from "./context";
 import { HoverButton, HoverSpan, useHover } from "./hoverInfo";
+import { Port } from "./ports";
 import type { Rect01 } from "./rects";
 
 /** recorded：直接下游有已提交过的任务，编辑时三选；autoFocus：「以此继续编辑」刚新建的空提示词。 */
-export type PromptFlowNode = Node<{ node: PromptModel; recorded: boolean; autoFocus: boolean }, "prompt">;
+/** portKind：输出端口类型色（只连负向端口 = 负向色）。 */
+export type PromptFlowNode = Node<{ node: PromptModel; recorded: boolean; autoFocus: boolean; portKind: PortKind }, "prompt">;
 /** missing：图片文件读不到，显示占位与「重新定位」。 */
 export type ReferenceFlowNode = Node<{ node: ReferenceModel; rules: InputImageRule[]; missing: boolean }, "reference">;
 export type ResultFlowNode = Node<{ node: ResultModel; missing: boolean }, "result">;
@@ -169,7 +172,7 @@ function ImageNode({
 
 export const PromptNodeView = memo(function PromptNodeView({ data }: NodeProps<PromptFlowNode>) {
   const { updateNode, forkPrompt } = useBoardActions();
-  const { node, recorded, autoFocus } = data;
+  const { node, recorded, autoFocus, portKind } = data;
   const textarea = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
     if (autoFocus) textarea.current?.focus();
@@ -221,7 +224,7 @@ export const PromptNodeView = memo(function PromptNodeView({ data }: NodeProps<P
           </HoverButton>
         </div>
       )}
-      <Handle type="source" position={Position.Right} id="out" />
+      <Port kind={portKind} type="source" position={Position.Right} id="out" />
     </Shell>
   );
 });
@@ -246,7 +249,7 @@ export const ReferenceNodeView = memo(function ReferenceNodeView({ data, selecte
       badges={info?.has_alpha ? ["透明"] : []}
       hover={hover}
     >
-      <Handle type="source" position={Position.Right} id="out" />
+      <Port kind="image" type="source" position={Position.Right} id="out" />
     </ImageNode>
   );
 });
@@ -261,8 +264,8 @@ export const ResultNodeView = memo(function ResultNodeView({ data, selected, wid
   const badges = [...(info?.has_alpha ? ["透明"] : []), ...(node.layer_count > 0 ? [`${node.layer_count} 图层`] : [])];
   return (
     <ImageNode id={node.id} absPath={abs} name={node.file} missing={missing} selected={selected} width={width} height={height} badges={badges} hover={hover}>
-      <Handle type="target" position={Position.Left} id="in" isConnectable={false} />
-      <Handle type="source" position={Position.Right} id="out" />
+      <Port kind="image" type="target" position={Position.Left} id="in" isConnectable={false} />
+      <Port kind="image" type="source" position={Position.Right} id="out" />
     </ImageNode>
   );
 });
@@ -338,11 +341,12 @@ function PortRow({
   children,
   className = "",
   connectable = true,
+  kind,
   ...drag
-}: { id: string; label: ReactNode; children?: ReactNode; className?: string; connectable?: boolean } & React.HTMLAttributes<HTMLDivElement>) {
+}: { id: string; label: ReactNode; children?: ReactNode; className?: string; connectable?: boolean; kind: PortKind } & React.HTMLAttributes<HTMLDivElement>) {
   return (
     <div className={`port-row ${className}`} {...drag}>
-      <Handle type="target" position={Position.Left} id={id} isConnectable={connectable} />
+      <Port kind={kind} type="target" position={Position.Left} id={id} isConnectable={connectable} />
       <span className="port-label">{label}</span>
       {children}
     </div>
@@ -516,16 +520,17 @@ export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskF
       )}
 
       <div className="ports">
-        <PortRow id="positive" label="正向提示词" className={hasPositive ? "" : "port-required"} connectable={!locked}>
+        <PortRow id="positive" kind="positive" label="正向提示词" className={hasPositive ? "" : "port-required"} connectable={!locked}>
           {!hasPositive && <span className="port-hint">拖提示词进来</span>}
         </PortRow>
-        {ports.negative && <PortRow id="negative" label="负向提示词" connectable={!locked} />}
+        {ports.negative && <PortRow id="negative" kind="negative" label="负向提示词" connectable={!locked} />}
         {slots.map((slot) => {
           if (slot.kind === "overlay") {
             return (
               <PortRow
                 key={`overlay-${slot.port}`}
                 id={`overlay:${slot.port}`}
+                kind="image"
                 connectable={false}
                 className="nodrag port-overlay"
                 label={`图${slot.port} · 叠加`}
@@ -541,6 +546,7 @@ export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskF
             <PortRow
               key={`image-${i}`}
               id={`${IMAGE_PORT_PREFIX}${i}`}
+              kind="image"
               connectable={!locked}
               className={`nodrag port-filled ${unreferenced.includes(slot.port) ? "port-unreferenced" : ""} ${dragFrom === i ? "port-dragging" : ""} ${dropTo === i ? "port-drop" : ""}`}
               label={`图${slot.port} · ${slot.label}`}
@@ -582,7 +588,7 @@ export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskF
           );
         })}
         {ports.imageSlots > images.length && (
-          <PortRow id={`${IMAGE_PORT_PREFIX}${images.length}`} connectable={!locked} className="nodrag port-empty" label={`图${slots.length + 1}`}>
+          <PortRow id={`${IMAGE_PORT_PREFIX}${images.length}`} kind="image" connectable={!locked} className="nodrag port-empty" label={`图${slots.length + 1}`}>
             <span className="port-hint">拖图进来</span>
           </PortRow>
         )}
@@ -611,7 +617,7 @@ export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskF
           ▶ {run.label}
         </HoverButton>
       </div>
-      <Handle type="source" position={Position.Right} id="result" isConnectable={false} />
+      <Port kind="image" type="source" position={Position.Right} id="result" isConnectable={false} />
     </div>
   );
 });

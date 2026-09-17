@@ -8,7 +8,9 @@ import {
   NodeToolbar,
   Position,
   ReactFlow,
+  useConnection,
   useReactFlow,
+  type ConnectionState,
   type Edge,
   type EdgeChange,
   type Node,
@@ -41,7 +43,8 @@ import {
   type Connection,
 } from "../core/graph";
 import { menuItems, selectionForMenu, actionBarItems, type BoardAction, type MenuFacts, type MenuTarget } from "../core/contextMenu";
-import { edgeHoverInfo, textHoverInfo } from "../core/hoverInfo";
+import { edgeHoverInfo, textHoverInfo, type HoverInfo } from "../core/hoverInfo";
+import { connectablePorts, dragKind, edgeClassName, nodeClassName, promptPortKind, type DragFrom, type DragState } from "../core/ports";
 import { countLabel, nodeEditChange, type Change, type UserChange } from "../core/history";
 import { addAsReference, addAsReferenceTarget, continueEditing, copySelection, lineage, LOCKED_HINT, pasteClip, PASTE_OFFSET, producerOf, type Clip, type Outcome } from "../core/iterate";
 import { PROMPT_NODE_SIZE, TASK_NODE_SIZE } from "../core/layout";
@@ -61,6 +64,7 @@ import { BoardContext, primeImageInfo, useImageInfos, useMissingImages, useStore
 import { edgeTypes } from "./edges";
 import { HoverButton, HoverProvider, useHoverLayer } from "./hoverInfo";
 import { nodeTypes, type ImagePortInfo, type ImageSlotInfo } from "./nodes";
+import { DragContext } from "./ports";
 import { PreviewDialog, type PreviewRequest, type RegionTarget } from "./PreviewDialog";
 import { isTyping, useCanvasInteraction, type Selection } from "./useCanvasInteraction";
 import { isActive } from "./useRunner";
@@ -365,6 +369,23 @@ export function BoardCanvas({
     [board, table, locked, expanded, undoLabel, redoLabel],
   );
 
+  const toConnection = (c: { source: string; sourceHandle?: string | null; target: string; targetHandle?: string | null }): Connection => ({
+    source: c.source,
+    sourceHandle: c.sourceHandle ?? "",
+    target: c.target,
+    targetHandle: c.targetHandle ?? "",
+  });
+
+  const isValidConnection = useCallback(
+    (c: Edge | { source: string; sourceHandle?: string | null; target: string; targetHandle?: string | null }) =>
+      !locked.has(c.target) && canConnect(board, table, toConnection(c)).ok,
+    [board, table, locked],
+  );
+
+  // 拖线态（规格 4.1）：起点来自 useConnection，合法落点与 isValidConnection 同一判定。
+  const dragFrom = useConnection(dragFromOf);
+  const drag = useMemo<DragState | null>(() => (dragFrom ? { from: dragFrom, ports: connectablePorts(board, dragFrom, isValidConnection) } : null), [dragFrom, board, isValidConnection]);
+
   const nodes = useMemo<Node[]>(() => {
     const fallback = defaultModel(table);
     const labelOf = (id: string): ImagePortInfo => {
@@ -380,7 +401,7 @@ export function BoardCanvas({
         position: { x: n.pos[0], y: n.pos[1] },
         selected: selectedNodes.has(n.id),
         measured: measured[n.id],
-        className: highlighted.nodes.has(n.id) ? "in-lineage" : selectedNodes.size ? "dimmed" : undefined,
+        className: nodeClassName(n.id, { lineage: highlighted.nodes.has(n.id), selecting: selectedNodes.size > 0, drag }) || undefined,
       };
       // 图片节点按存的宽度与图片比例显示（不回写 size）；缺图时高度随占位内容。
       const imageBox = (path: string) => {
@@ -389,7 +410,7 @@ export function BoardCanvas({
       };
       switch (n.type) {
         case "prompt":
-          return [{ ...base, type: "prompt", data: { node: n, recorded: hasDownstreamRecords(board, n.id), autoFocus: focusPrompt === n.id } }];
+          return [{ ...base, type: "prompt", data: { node: n, recorded: hasDownstreamRecords(board, n.id), autoFocus: focusPrompt === n.id, portKind: promptPortKind(board, n.id) } }];
         case "result":
           return [{ ...base, ...imageBox(n.path), type: "result", data: { node: n, missing: missing.has(n.id) } }];
         case "reference": {
@@ -453,8 +474,9 @@ export function BoardCanvas({
         }
       }
     });
-  }, [board, table, outputRoot, selectedNodes, measured, statusOf, locked, discovery, highlighted, missing, focusPrompt, alphaByNode, imageInfos, expanded, menuFacts]);
+  }, [board, table, outputRoot, selectedNodes, measured, statusOf, locked, discovery, highlighted, missing, focusPrompt, alphaByNode, imageInfos, expanded, menuFacts, drag]);
 
+  const dragging = drag !== null;
   const edges = useMemo<Edge[]>(
     () =>
       board.edges.map((e) => ({
@@ -467,11 +489,10 @@ export function BoardCanvas({
         label: (e.region?.rects.length ?? 0) > 0 ? `${e.region!.rects.length} 区域` : undefined,
         deletable: !e.system,
         selectable: !e.system,
-        className:
-          [e.system ? "edge-system" : e.to[1] === "negative" ? "edge-negative" : "", highlighted.edges.has(e) ? "edge-lineage" : selectedNodes.size ? "dimmed" : ""].join(" ").trim() ||
-          undefined,
+        className: edgeClassName(e, { lineage: highlighted.edges.has(e), selecting: selectedNodes.size > 0, dragging: dragging }),
+        data: { hover: edgeHoverInfo(e) },
       })),
-    [board.edges, selectedEdges, selectedNodes, highlighted],
+    [board.edges, selectedEdges, selectedNodes, highlighted, dragging],
   );
 
   /** 进行中的拖动编号（0 = 没在拖）；每次拖动一个新合并键。 */
@@ -556,19 +577,6 @@ export function BoardCanvas({
   const onEdgesChange = useCallback(
     (changes: EdgeChange[]) => nav.selectEdges(changes.flatMap((c) => (c.type === "select" ? [c] : []))),
     [nav.selectEdges],
-  );
-
-  const toConnection = (c: { source: string; sourceHandle?: string | null; target: string; targetHandle?: string | null }): Connection => ({
-    source: c.source,
-    sourceHandle: c.sourceHandle ?? "",
-    target: c.target,
-    targetHandle: c.targetHandle ?? "",
-  });
-
-  const isValidConnection = useCallback(
-    (c: Edge | { source: string; sourceHandle?: string | null; target: string; targetHandle?: string | null }) =>
-      !locked.has(c.target) && canConnect(board, table, toConnection(c)).ok,
-    [board, table, locked],
   );
 
   const onConnect = useCallback(
@@ -868,9 +876,10 @@ export function BoardCanvas({
   return (
     <BoardContext.Provider value={actions}>
       <HoverProvider value={hover.controller}>
+      <DragContext.Provider value={drag}>
       {/* 画布内屏蔽 WebView 默认右键菜单；可编辑元素保留原生菜单（复制粘贴）。 */}
       <div
-        className={nav.hand ? "canvas hand" : "canvas"}
+        className={["canvas", nav.hand ? "hand" : "", drag ? "connecting" : ""].join(" ").trim()}
         ref={wrapper}
         onContextMenu={(e) => !isTyping(e.target) && e.preventDefault()}
         onPointerDownCapture={nav.onPointerDownCapture}
@@ -912,6 +921,7 @@ export function BoardCanvas({
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           isValidConnection={isValidConnection}
+          connectionLineStyle={drag ? { stroke: `var(--port-${dragKind(board, drag.from)})` } : undefined}
           onConnect={onConnect}
           onConnectEnd={onConnectEnd}
           onBeforeDelete={onBeforeDelete}
@@ -928,8 +938,7 @@ export function BoardCanvas({
           onNodeMouseEnter={(_, n) => (n.type === "reference" || n.type === "result" ? showActionBar(n.id) : undefined)}
           onNodeMouseLeave={hideActionBarSoon}
           onEdgeMouseMove={(e, fe) => {
-            const target = board.edges.find((be) => edgeId(be) === fe.id);
-            if (target && e.buttons === 0) hover.controller.move(`edge:${fe.id}`, edgeHoverInfo(target), e.clientX, e.clientY);
+            if (fe.data && e.buttons === 0) hover.controller.move(`edge:${fe.id}`, fe.data.hover as HoverInfo, e.clientX, e.clientY);
           }}
           onEdgeMouseLeave={(_, fe) => hover.controller.leave(`edge:${fe.id}`)}
           onNodeDragStart={onDragStart}
@@ -959,9 +968,16 @@ export function BoardCanvas({
         {preview && <PreviewDialog key={preview.nonce} req={preview.req} toast={toast} onClose={() => setPreview(null)} />}
         {hover.layer}
       </div>
+      </DragContext.Provider>
       </HoverProvider>
     </BoardContext.Provider>
   );
+}
+
+/** useConnection 选择器：只取拖线起点，指针移动不触发重渲染（浅比较）。 */
+function dragFromOf(c: ConnectionState): DragFrom | null {
+  if (!c.inProgress) return null;
+  return { nodeId: c.fromHandle.nodeId, handleId: c.fromHandle.id ?? "", type: c.fromHandle.type };
 }
 
 function withAvailability(issues: string[], unavailable: string | null): string[] {
