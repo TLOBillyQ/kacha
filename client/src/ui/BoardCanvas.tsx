@@ -436,13 +436,13 @@ export function BoardCanvas({
   );
 
   /** 进行中的拖动编号（0 = 没在拖）；每次拖动一个新合并键。 */
-  const dragSeq = useRef(0);
-  const dragCount = useRef(0);
+  const activeDrag = useRef(0);
+  const dragCounter = useRef(0);
   const onDragStart = useCallback(() => {
-    dragSeq.current = ++dragCount.current;
+    activeDrag.current = ++dragCounter.current;
   }, []);
   const onDragStop = useCallback(() => {
-    dragSeq.current = 0;
+    activeDrag.current = 0;
   }, []);
 
   const onNodesChange = useCallback(
@@ -466,7 +466,7 @@ export function BoardCanvas({
       }
       if (moves.size) {
         // 一次拖动（含多选）从开始到 onNodeDragStop 合为一步；拖动之外的位置变更（方向键微移）连按合为一步。
-        const drag = dragSeq.current;
+        const drag = activeDrag.current;
         const change: UserChange = drag
           ? { label: countLabel("移动", moves.size), merge: { key: `drag:${drag}` } }
           : { label: countLabel("微移", moves.size), merge: { key: `nudge:${[...moves.keys()].sort().join(",")}`, windowMs: MERGE_PAUSE_MS } };
@@ -687,6 +687,9 @@ export function BoardCanvas({
   // 撤销 / 重做（供工具栏与上下文菜单）：锁定任务按当前状态保留。
   const undo = useCallback(() => onUndo(lockedRef.current), [onUndo]);
   const redo = useCallback(() => onRedo(lockedRef.current), [onRedo]);
+  // 预设 / 预览弹窗开着时快捷键不撤销背后的画板。
+  const dialogOpenRef = useRef(false);
+  dialogOpenRef.current = presetsOpen || preview !== null;
 
   // 通用复制粘贴：Ctrl/⌘+C 复制选中节点，Ctrl/⌘+V 粘贴（新节点整体偏移、从未提交过）。
   // Ctrl/⌘+Z 撤销，Ctrl/⌘+Shift+Z、Ctrl/⌘+Y 重做；文本框聚焦时交给原生撤销。
@@ -696,6 +699,7 @@ export function BoardCanvas({
       const key = e.key.toLowerCase();
       if (key === "z" || (key === "y" && !e.shiftKey)) {
         e.preventDefault();
+        if (dialogOpenRef.current) return;
         if (key === "z" && !e.shiftKey) undo();
         else redo();
         return;

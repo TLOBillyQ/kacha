@@ -240,6 +240,30 @@ describe("撤销时合并系统状态", () => {
   });
 });
 
+describe("用户删除的结果节点", () => {
+  it("撤销删除后重做：结果节点仍按删除（它早于重做快照产出，不算晚到）", () => {
+    const withResult = board([task("t"), result("r")], [systemEdge("t", "r")]);
+    const deleted = board([task("t")]);
+    const h = recordChange(emptyHistory(), withResult, { label: "删除 1 个节点" }, 0);
+    const undone = undo(h, deleted, NONE)!;
+    expect(ids(undone.board)).toEqual(["t", "r"]);
+    const redone = redo(undone.history, undone.board, NONE)!;
+    expect(ids(redone.board)).toEqual(["t"]);
+    expect(redone.board.edges).toEqual([]);
+  });
+
+  it("删除后再撤销更早的步：删掉的结果节点不回来", () => {
+    const b0 = board([task("t")]);
+    const withResult = board([task("t"), result("r"), prompt("p")], [systemEdge("t", "r")]);
+    let h = recordChange(emptyHistory(), b0, { label: "新建提示词" }, 0);
+    h = recordChange(h, withResult, { label: "删除 1 个节点" }, 1000);
+    const deleted = board([task("t"), prompt("p")]);
+    const once = undo(h, deleted, NONE)!;
+    const twice = undo(once.history, once.board, NONE)!;
+    expect(ids(twice.board)).toEqual(["t", "r"]);
+  });
+});
+
 describe("步描述", () => {
   it("按数量生成文案", () => {
     expect(countLabel("删除", 3, "个节点")).toBe("删除 3 个节点");
