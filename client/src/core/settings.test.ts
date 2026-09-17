@@ -95,7 +95,7 @@ describe("模型发现", () => {
   it("已发现但网关没有该模型时，任务标红原因", () => {
     const live = { source: "live" as const, ids: ["qwen-image-3.0-pro"], fetchedAt: "t" };
     expect(modelAvailabilityIssue(BUILTIN_TABLE, live, "qwen-image-3.0-pro")).toBeNull();
-    expect(modelAvailabilityIssue(BUILTIN_TABLE, live, "qwen-image-3.0")).toBe("网关未提供模型 Qwen Image 3.0 经济版");
+    expect(modelAvailabilityIssue(BUILTIN_TABLE, live, "qwen-image-3.0")).toBe("网关未提供模型 qwen-image-3.0");
     expect(modelAvailabilityIssue(BUILTIN_TABLE, { source: "none" }, "qwen-image-3.0")).toBeNull();
   });
 });

@@ -3,7 +3,7 @@
   "models": [
     {
       "model_id": "qwen-image-3.0-pro",
-      "display_name": "Qwen Image 3.0",
+      "display_name": "qwen-image-3.0-pro",
       "tier": "flagship",
       "help_url": "https://platform.qianwenai.com/docs/developer-guides/image-generation/image-editing",
       "request_shape": "qwen_images_edits",
@@ -62,7 +62,7 @@
     },
     {
       "model_id": "qwen-image-3.0",
-      "display_name": "Qwen Image 3.0 经济版",
+      "display_name": "qwen-image-3.0",
       "tier": "economy",
       "help_url": "https://platform.qianwenai.com/docs/developer-guides/image-generation/image-editing",
       "request_shape": "qwen_images_edits",
