@@ -231,12 +231,12 @@ export function BoardCanvas({ board, table, outputRoot, update, openBoardPath, t
       editRegion: (taskId, ref) => {
         if (lockedRef.current.has(taskId)) return toast(LOCKED_HINT);
         const target = regionTargetsOf(ref.from[0]).find((t) => t.edgeRef.to[0] === taskId && t.edgeRef.to[1] === ref.to[1]);
-        if (!target) return toast("当前模型不支持区域指示");
+        if (!target) return toast("当前模型不支持框选修改区域");
         const src = boardRef.current.nodes.find((n) => n.id === ref.from[0]);
         if (src?.type !== "reference" && src?.type !== "result") return;
         const name = src.type === "reference" ? src.display_name : src.file;
         const req: PreviewRequest = {
-          title: `指示区域 · ${name}`,
+          title: `框选修改区域 · ${name}`,
           absPath: resolveFromRoot(outputRoot, src.path),
           edit: target,
           regionTargets: [target],

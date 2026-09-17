@@ -214,7 +214,7 @@ export function taskIssues(board: Board, table: CapabilityTable, taskId: string)
   const expanded = expandImageEdges(imageEdges(board, taskId), render).length;
   if (images > 0 && max === 0) issues.push("模型不支持图片编辑");
   else if (expanded > max) issues.push(`参考图 ${expanded} 张超出模型上限 ${max} 张`);
-  if (render === null && imageEdges(board, taskId).some((e) => (e.region?.rects.length ?? 0) > 0)) issues.push("模型不支持区域指示");
+  if (render === null && imageEdges(board, taskId).some((e) => (e.region?.rects.length ?? 0) > 0)) issues.push("模型不支持框选修改区域");
   if (hasEdge("negative") && !isSupported(wf.supports_negative_prompt)) issues.push("模型不支持负向提示词");
   if (resolveSize(wf.size_rule, task.size_spec) === null) {
     const s = task.size_spec;

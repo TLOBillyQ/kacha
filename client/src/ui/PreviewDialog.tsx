@@ -204,7 +204,7 @@ export function PreviewDialog({ req, toast, onClose }: Props) {
           {editing && <span className="badge">编辑区域：{editing.label}</span>}
           {solo !== null && <span className="badge">单层：图层{solo + 1}</span>}
           {outlines.length > 0 && !editing && (
-            <label className="small" title="本次编辑用到的指示区域（只读描边，来自产出任务的提交快照）">
+            <label className="small" title="本次编辑框选的修改区域（只读描边，来自产出任务的提交快照）">
               <input type="checkbox" checked={showOutlines} onChange={(e) => setShowOutlines(e.target.checked)} />
               区域轮廓
             </label>
@@ -344,7 +344,7 @@ export function PreviewDialog({ req, toast, onClose }: Props) {
               <span className="muted">
                 {targets.length > 0 && (
                   <>
-                    指示区域：
+                    框选修改区域：
                     {targets.map((t) => (
                       <button key={`${t.edgeRef.from.join(":")}->${t.edgeRef.to.join(":")}`} className="link" onClick={() => startEdit(t)}>
                         {t.label}

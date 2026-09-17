@@ -93,13 +93,13 @@ function Shell({ kind, title, className = "", children }: { kind: string; title:
   );
 }
 
-function Thumb({ absPath, alt }: { absPath: string; alt: string }) {
+function Thumb({ absPath, alt, onOpen }: { absPath: string; alt: string; onOpen?: () => void }) {
   const [missing, setMissing] = useState(false);
   useEffect(() => setMissing(false), [absPath]);
   return missing ? (
     <div className="thumb thumb-missing">图片缺失</div>
   ) : (
-    <img className="thumb" src={fileUrl(absPath)} alt={alt} draggable={false} onError={() => setMissing(true)} />
+    <img className="thumb" src={fileUrl(absPath)} alt={alt} draggable={false} onError={() => setMissing(true)} onDoubleClick={onOpen} title={onOpen ? "双击放大预览" : undefined} />
   );
 }
 
@@ -198,7 +198,7 @@ export const ReferenceNodeView = memo(function ReferenceNodeView({ data }: NodeP
   const warnings = info ? [...new Set(rules.flatMap((rule) => imageRuleViolations(info, rule)))] : [];
   return (
     <Shell kind="reference" title="参考图" className={warnings.length ? "node-warn" : ""}>
-      {missing ? <MissingImage nodeId={node.id} name={node.display_name} /> : <Thumb absPath={abs} alt={node.display_name} />}
+      {missing ? <MissingImage nodeId={node.id} name={node.display_name} /> : <Thumb absPath={abs} alt={node.display_name} onOpen={() => previewNode(node.id)} />}
       <div className="caption" title={node.path}>
         {info?.has_alpha && <span className="badge">透明</span>}
         {node.display_name}
@@ -211,7 +211,7 @@ export const ReferenceNodeView = memo(function ReferenceNodeView({ data }: NodeP
         </ul>
       )}
       <ImageActions>
-        <button onClick={() => previewNode(node.id)} title="放大查看；若下游任务支持区域指示，可在预览里框选">
+        <button onClick={() => previewNode(node.id)} title="放大查看（也可双击图片）；若下游任务支持，可在预览里框选修改区域">
           放大预览
         </button>
         <button onClick={() => continueEditing(node.id)} title="新建生成任务，以这张图为图1（多选时按选中顺序接入）">
@@ -234,7 +234,7 @@ export const ResultNodeView = memo(function ResultNodeView({ data }: NodeProps<R
   return (
     <Shell kind="result" title="结果">
       <Handle type="target" position={Position.Left} id="in" isConnectable={false} />
-      {missing ? <MissingImage nodeId={node.id} name={node.file} /> : <Thumb absPath={abs} alt={node.file} />}
+      {missing ? <MissingImage nodeId={node.id} name={node.file} /> : <Thumb absPath={abs} alt={node.file} onOpen={() => previewNode(node.id)} />}
       <div className="badges">
         {info?.has_alpha && <span className="badge">透明</span>}
         {node.layer_count > 0 && <span className="badge">{node.layer_count} 图层</span>}
@@ -258,7 +258,7 @@ export const ResultNodeView = memo(function ResultNodeView({ data }: NodeProps<R
       <ImageActions>
         <button
           onClick={() => previewNode(node.id)}
-          title={node.layer_count > 0 ? "放大查看；可勾选图层叠加显示、按图层继续编辑 / 加为参考图、导出图层" : "放大查看"}
+          title={node.layer_count > 0 ? "放大查看（也可双击图片）；可勾选图层叠加显示、按图层继续编辑 / 加为参考图、导出图层" : "放大查看（也可双击图片）"}
         >
           放大预览
         </button>
@@ -565,7 +565,7 @@ export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskF
               }}
             >
               {slot.absPath && (
-                <span className="port-thumb" title={slot.rects.length ? `${slot.rects.length} 个指示区域` : undefined}>
+                <span className="port-thumb" title={slot.rects.length ? `已框选 ${slot.rects.length} 个修改区域` : undefined}>
                   <img src={fileUrl(slot.absPath)} alt={slot.label} draggable={false} />
                   {slot.rects.map((r, k) => (
                     <span
@@ -579,11 +579,11 @@ export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskF
               {slot.edgeRef && regionRender !== null && !locked && (
                 <button
                   className="link small"
-                  title="在放大预览里框选要指示的区域"
+                  title="在放大预览里框出希望模型修改的位置"
                   onPointerDown={(e) => e.stopPropagation()}
                   onClick={() => editRegion(node.id, slot.edgeRef!)}
                 >
-                  指示区域{slot.rects.length > 0 ? `（${slot.rects.length}）` : ""}
+                  框选修改区域{slot.rects.length > 0 ? `（${slot.rects.length}）` : ""}
                 </button>
               )}
               {!locked && <span className="grip" title="拖动调整参考图顺序">⋮⋮</span>}

@@ -399,7 +399,7 @@ describe("区域指示", () => {
       [node("p", "prompt"), node("r1", "reference"), task("t", "doubao-seedream-5-0-260128")],
       [edge("p", "out", "t", "positive"), { ...edge("r1", "out", "t", "image:0"), region: REGION }],
     );
-    expect(taskIssues(b, table, "t")).toContain("模型不支持区域指示");
+    expect(taskIssues(b, table, "t")).toContain("模型不支持框选修改区域");
     expect(b.edges[1].region).toEqual(REGION);
   });
 

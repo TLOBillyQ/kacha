@@ -114,7 +114,7 @@ export async function prepareJob(
           : { kind: "result", task_id: image.task_id, file: image.file, ...(image.source_layer !== null ? { source_layer: image.source_layer } : {}) };
       references.push({ bytes: sourceBytes[i], source });
     } else {
-      if (!deps.composeOverlay) throw new LocalError("区域指示需要叠加合成能力，当前环境不支持");
+      if (!deps.composeOverlay) throw new LocalError("框选修改区域需要叠加合成能力，当前环境不支持");
       const sourcePort = slot.sourcePort!;
       const region = slot.edge.region!;
       const bytes = await deps.composeOverlay(sourceBytes[sourcePort - 1], region.rects);
