@@ -24,15 +24,15 @@ v2 规格 §13 要求补测 macOS 性能与包体数字；Windows 包体一并�
 
 ## 结果
 
-测试版本：0.2.0　测试提交：5377b2f（包体数字；其余项待测）
+测试版本：0.2.0　测试提交：5377b2f
 
 ### macOS（Apple Silicon）— 待在 Apple Silicon 机器上实测
 
 | 指标 | 数值 | 备注 |
 | --- | --- | --- |
 | 冷启动到首帧 |  | 待在 Apple Silicon 机器上实测 |
-| 空闲 RSS |  | 待在 Apple Silicon 机器上实测 |
-| 50 节点画板 RSS |  | 待在 Apple Silicon 机器上实测 |
+| 空闲 RSS | 约 225 MB（229,936 KB） | 单次采样，未按 5 次取中位数；主进程 118 MB + WebContent 62 MB + GPU 33 MB + Networking 14 MB |
+| 50 节点画板 RSS | 约 348 MB（356,784 KB） | 单次采样；50 个参考图节点，均为 256×256 PNG（139 KB）；以 `open -a` 在运行中实例打开，静置 60 秒；未截图确认缩略图全部加载 |
 | `.app` 大小 | 5.9 MB（`du -sk` 6012 KB） | 2026-09-17，ad-hoc 签名后 |
 | zip 大小 | 2.9 MB（3,013,446 字节） | `ditto` 生成 |
 
