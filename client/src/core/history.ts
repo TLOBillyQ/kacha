@@ -49,18 +49,18 @@ export const redoLabel = (h: History): string | null => h.redo.at(-1)?.label ?? 
 export const countLabel = (verb: string, count: number, unit = "个节点") => `${verb} ${count} ${unit}`;
 
 const FIELD_LABELS: Partial<Record<string, string>> = {
+  text: "编辑提示词",
   size_spec: "修改尺寸",
   layer_decomposition: "切换图层拆分",
   transparent_background: "切换透明背景",
 };
 
-/** 节点字段编辑的步描述：只改提示词文本时连续输入停顿不超过 MERGE_PAUSE_MS 合为一步；多个字段描述不一致时退为「修改节点」。 */
+/** 节点字段编辑的步描述：只改提示词文本时连续输入停顿不超过 MERGE_PAUSE_MS 合为一步；多个字段按各自描述去重后以「、」连接，都没有描述时为「修改节点」。 */
 export function nodeEditChange(nodeId: string, patch: object): UserChange {
   const fields = Object.keys(patch);
   if (fields.length === 1 && fields[0] === "text") return { label: "编辑提示词", merge: { key: `text:${nodeId}`, windowMs: MERGE_PAUSE_MS } };
-  const labels = new Set(fields.map((f) => FIELD_LABELS[f]));
-  const [only] = labels;
-  return { label: labels.size === 1 && only ? only : "修改节点" };
+  const labels = [...new Set(fields.flatMap((f) => FIELD_LABELS[f] ?? []))];
+  return { label: labels.length ? labels.join("、") : "修改节点" };
 }
 
 const capped = (stack: Snapshot[]) => (stack.length > HISTORY_LIMIT ? stack.slice(stack.length - HISTORY_LIMIT) : stack);
