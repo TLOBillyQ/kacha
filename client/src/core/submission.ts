@@ -5,7 +5,7 @@ import { composeSendText, isRequestShapeImplemented } from "./gateway";
 import { CHAIN_DEPTH_HINT, chainDepth, imageEdges, imagePortSlots, taskIssues, transparentAlphaIssue } from "./graph";
 import { checkImageRefs, promptLanguage } from "./imageRefs";
 import { resolveFromRoot } from "./paths";
-import { overlayPhrases } from "./region";
+import { overlayPhrases, referencedRegions, regionNames } from "./region";
 import { modelAvailabilityIssue, type Discovery } from "./settings";
 import type { SizeSpec } from "./size";
 
@@ -171,8 +171,11 @@ export function imageRefProblems(board: Board, table: CapabilityTable, taskId: s
     injected: model ? overlayPhrases(model, slots, promptLanguage(prompt)) : [],
     exempt: slots.filter((s) => s.kind === "overlay").map((s) => s.port),
   });
+  // 只有区域真的生效（叠加槽存在）时才校验「区域N」；没有框选时这两个字是普通文字。
+  const regions = regionNames(slots, promptLanguage(prompt)).length;
+  const regionIssues = regions > 0 ? referencedRegions(prompt).filter((n) => n < 1 || n > regions).map((n) => `提示词引用了区域${n}，但只框选了 ${regions} 个区域`) : [];
   return {
-    issues: check.outOfRange.map((n) => `提示词引用了图${n}，但只接了 ${count} 张参考图`),
+    issues: [...check.outOfRange.map((n) => `提示词引用了图${n}，但只接了 ${count} 张参考图`), ...regionIssues],
     warnings: check.unreferenced.map((n) => `图${n} 已接线但提示词未引用`),
     unreferenced: check.unreferenced,
   };
@@ -221,13 +224,14 @@ export function buildConfirmItems(board: Board, table: CapabilityTable, taskIds:
     if (alphaIssue) issues.push(alphaIssue);
     const slots = imagePortSlots(board, table, taskId);
     const regionPhrases = model ? overlayPhrases(model, slots, promptLanguage(prompt)) : [];
+    const names = regionNames(slots, promptLanguage(prompt));
     return [
       {
         taskId,
         modelName: model?.display_name ?? task.model,
         firstLine: prompt.split("\n").find((line) => line.trim())?.trim() ?? "",
         negativePrompt,
-        sendText: composeSendText({ prompt, negativePrompt, referenceCount: slots.length, regionPhrases }),
+        sendText: composeSendText({ prompt, negativePrompt, referenceCount: slots.length, regionPhrases, regionNames: names }),
         referenceCount: slots.length,
         issues: [...new Set(issues)],
         warnings,

@@ -76,6 +76,8 @@ export interface SubmissionPlan {
   sendText: string;
   /** 区域指示固定句（每个叠加参考图一句），追加在发送文本末尾。 */
   regionPhrases: string[];
+  /** 区域编号的颜色指代（区域N 取第 N 个）；只参与发送文本，不单独落盘。 */
+  regionNames?: string[];
   sizeSpec: SizeSpec;
   size: { width: number; height: number };
   layerDecomposition: boolean;

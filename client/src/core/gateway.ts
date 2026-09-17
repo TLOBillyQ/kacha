@@ -3,6 +3,7 @@
 // HTTP 由调用方注入（壳里是 tauri-plugin-http 的 fetch，测试里是夹具回放）。
 import type { ModelCapability } from "./capabilities";
 import { promptLanguage, rewriteImageRefs, type PromptLanguage } from "./imageRefs";
+import { rewriteRegionRefs } from "./region";
 
 export const MODELS_PATH = "/v1/models";
 export const TEXT_TO_IMAGE_PATH = "/v1/images/generations";
@@ -68,6 +69,8 @@ export interface GenerationInput {
   references: ReferenceImage[];
   /** 区域指示固定句，追加在发送文本末尾。 */
   regionPhrases?: string[];
+  /** 区域编号的颜色指代（区域N 取第 N 个），改写提示词里的「区域N」。 */
+  regionNames?: string[];
 }
 
 export type GeneratedImage = ({ kind: "url"; url: string } | { kind: "bytes"; bytes: Uint8Array }) & {
@@ -98,15 +101,18 @@ export function composeSendText({
   negativePrompt,
   referenceCount,
   regionPhrases = [],
+  regionNames = [],
 }: {
   prompt: string;
   negativePrompt: string;
   referenceCount: number;
   /** 区域指示固定句（每个叠加参考图一句），逐句追加在末尾。 */
   regionPhrases?: string[];
+  /** 区域编号的颜色指代，改写提示词里的「区域N」。 */
+  regionNames?: string[];
 }): string {
   const phrases = regionPhrases.length ? `\n${regionPhrases.join("\n")}` : "";
-  const text = rewriteImageRefs(prompt);
+  const text = rewriteRegionRefs(rewriteImageRefs(prompt), regionNames);
   if (referenceCount === 0) return `${text}${phrases}`;
   const language = promptLanguage(prompt);
   const withNote = `${referenceNote(referenceCount, language)}\n${text}`;
@@ -132,7 +138,7 @@ const qwenImagesEdits: RequestShape = (input) => {
     Object.assign(body, { n: 1, size: `${size.width}x${size.height}` }, model.fixed_params);
     return { path: TEXT_TO_IMAGE_PATH, body };
   }
-  const text = composeSendText({ prompt, negativePrompt, referenceCount: references.length, regionPhrases: input.regionPhrases ?? [] });
+  const text = composeSendText({ prompt, negativePrompt, referenceCount: references.length, regionPhrases: input.regionPhrases ?? [], regionNames: input.regionNames ?? [] });
   const content = [...references.map((r) => ({ image: `data:${r.mediaType};base64,${toBase64(r.bytes)}` })), { text }];
   return {
     path: IMAGE_EDIT_PATH,

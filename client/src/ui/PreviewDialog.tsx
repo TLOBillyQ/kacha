@@ -3,6 +3,7 @@
 import { open } from "@tauri-apps/plugin-dialog";
 import { useEffect, useRef, useState } from "react";
 import type { PortRef, RegionRender } from "../core/board";
+import { MAX_REGIONS, regionCss } from "../core/overlay";
 import { basename, joinPath } from "../core/paths";
 import { layersExportJson, type LayerRecord } from "../core/taskDir";
 import { fileUrl, ipc } from "../shell/ipc";
@@ -21,6 +22,8 @@ export interface RegionTarget {
   edgeRef: { from: PortRef; to: PortRef };
   rects: Rect01[];
   render: RegionRender;
+  /** 这条线第一个区域的区域编号（0 起）；区域N 的颜色由它推导。 */
+  firstRegion: number;
 }
 
 export interface PreviewRequest {
@@ -51,7 +54,6 @@ type Drag =
   | { kind: "resize"; index: number; corner: Corner; origin: Rect01; current: Point01 };
 
 const CORNERS: Corner[] = ["nw", "ne", "sw", "se"];
-const OVERLAY = "rgba(128,0,255,0.5)";
 
 export function PreviewDialog({ req, toast, onClose }: Props) {
   const { setEdgeRegion, addAsReference, continueEditing } = useBoardActions();
@@ -68,6 +70,7 @@ export function PreviewDialog({ req, toast, onClose }: Props) {
   const layers = req.layers ?? [];
   const targets = req.regionTargets ?? [];
   const outlines = req.regionOutlines ?? [];
+  const first = editing?.firstRegion ?? 0;
   const layerInfos = useImageInfos(layers.map((l) => l.absPath));
 
   const pointAt = (e: PointerEvent | React.PointerEvent): Point01 => {
@@ -221,9 +224,13 @@ export function PreviewDialog({ req, toast, onClose }: Props) {
                       top: `${r[1] * 100}%`,
                       width: `${(r[2] - r[0]) * 100}%`,
                       height: `${(r[3] - r[1]) * 100}%`,
-                      background: OVERLAY,
+                      background: regionCss(first + i, 0.5),
+                      borderColor: regionCss(first + i, 0.9),
                     }}
                   >
+                    <span className="preview-rect-label" style={{ background: regionCss(first + i, 0.9) }}>
+                      区域{first + i + 1}
+                    </span>
                     {editing && selected === i &&
                       CORNERS.map((c) => <span key={c} className={`preview-handle preview-handle-${c}`} data-rect-index={i} data-corner={c} />)}
                   </div>
@@ -303,7 +310,9 @@ export function PreviewDialog({ req, toast, onClose }: Props) {
         <div className="modal-foot">
           {editing ? (
             <>
-              <span className="muted">拖拽空白处画新矩形；拖动矩形移动，拖动角柄缩放</span>
+              <span className={first + rects.length > MAX_REGIONS ? "region-limit-exceeded" : "muted"}>
+                拖拽空白处画新矩形；拖动矩形移动，拖动角柄缩放。提示词里写「区域N」指代对应颜色的区域，每个任务最多 {MAX_REGIONS} 个
+              </span>
               <button disabled={selected === null} onClick={removeSelected}>
                 删除选中
               </button>

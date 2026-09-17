@@ -204,7 +204,7 @@ describe("区域指示：提交链路", () => {
       region: { rects: REGION.rects, render: "highlight_overlay", source_port: 1 },
     });
     expect(taskJson.send_text).toContain("本次提供 2 张参考图，按顺序为图1、图2。");
-    expect(taskJson.send_text).toContain("输出图里不要出现紫色高亮。");
+    expect(taskJson.send_text).toContain("紫色半透明高亮标出的是要修改的区域");
 
     await executeJob(d, { job, outputRoot: "/root", baseUrl: "http://gw", apiKey: "k", newNodeId: "res" });
     const body = JSON.parse(String(requests[0].init.body));

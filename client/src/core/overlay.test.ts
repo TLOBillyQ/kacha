@@ -37,7 +37,7 @@ describe("高亮叠加合成", () => {
     expect(px(src, 1, 0, 0)).toEqual([0, 0, 0, 255]);
   });
 
-  it("多个矩形合成到同一张图上", () => {
+  it("多个矩形合成到同一张图上，按区域编号分色（紫、黄）", () => {
     const src = rgba(4, 1, [0, 0, 0, 255]);
     const out = applyHighlightOverlay(src, 4, 1, [
       [0, 0, 0.25, 1],
@@ -45,7 +45,12 @@ describe("高亮叠加合成", () => {
     ]);
     expect(px(out, 4, 0, 0)).toEqual([64, 0, 128, 255]);
     expect(px(out, 4, 1, 0)).toEqual([0, 0, 0, 255]);
-    expect(px(out, 4, 3, 0)).toEqual([64, 0, 128, 255]);
+    expect(px(out, 4, 3, 0)).toEqual([128, 110, 0, 255]);
+  });
+
+  it("firstRegion 让编号接着前一张图的区域往下排", () => {
+    const out = applyHighlightOverlay(rgba(1, 1, [0, 0, 0, 255]), 1, 1, [[0, 0, 1, 1]], 2);
+    expect(px(out, 1, 0, 0)).toEqual([128, 0, 80, 255]);
   });
 
   it("完全越界的矩形不画任何东西", () => {

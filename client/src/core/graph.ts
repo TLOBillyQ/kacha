@@ -8,6 +8,7 @@ import {
   type InputImageRule,
   type WorkflowName,
 } from "./capabilities";
+import { MAX_REGIONS } from "./overlay";
 import { effectiveRegionRender, expandImageEdges, type PortSlot } from "./region";
 import { resolveSize } from "./size";
 
@@ -40,6 +41,14 @@ export function imageEdges(board: Board, taskId: string): BoardEdge[] {
   return board.edges
     .filter((e) => e.to[0] === taskId && imagePortIndex(e.to[1]) !== null)
     .sort((a, b) => imagePortIndex(a.to[1])! - imagePortIndex(b.to[1])!);
+}
+
+/** 该图片线第一个区域的区域编号（0 起）：排在它前面的图片线上的区域都先编号。 */
+export function firstRegionOfEdge(board: Board, taskId: string, toPort: string): number {
+  const index = imagePortIndex(toPort) ?? 0;
+  return imageEdges(board, taskId)
+    .filter((e) => imagePortIndex(e.to[1])! < index)
+    .reduce((n, e) => n + (e.region?.rects.length ?? 0), 0);
 }
 
 /** 工作流由连线推导：图片端口 0 条线 = 文生图，≥1 条 = 图片编辑。 */
@@ -221,6 +230,8 @@ export function taskIssues(board: Board, table: CapabilityTable, taskId: string)
   if (images > 0 && max === 0) issues.push("模型不支持图片编辑");
   else if (expanded > max) issues.push(`参考图 ${expanded} 张超出模型上限 ${max} 张`);
   if (render === null && imageEdges(board, taskId).some((e) => (e.region?.rects.length ?? 0) > 0)) issues.push("模型不支持框选修改区域");
+  const regions = imageEdges(board, taskId).reduce((n, e) => n + (e.region?.rects.length ?? 0), 0);
+  if (render !== null && regions > MAX_REGIONS) issues.push(`框选了 ${regions} 个区域，最多 ${MAX_REGIONS} 个`);
   if (hasEdge("negative") && !isSupported(wf.supports_negative_prompt)) issues.push("模型不支持负向提示词");
   if (resolveSize(wf.size_rule, task.size_spec) === null) {
     const s = task.size_spec;

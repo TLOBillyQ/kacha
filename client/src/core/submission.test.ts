@@ -259,8 +259,36 @@ describe("区域指示：图N 校验与发送文本", () => {
     expect(item.warnings).toEqual([]);
     expect(item.referenceCount).toBe(2);
     expect(item.sendText).toBe(
-      "本次提供 2 张参考图，按顺序为图1、图2。\n把图1 的帽子改成红色\n图2 是图1 的标注版，紫色半透明高亮标出的区域是要修改的范围。只修改图1 中高亮区域内的内容，高亮区域之外的所有内容保持完全不变，输出图里不要出现紫色高亮。",
+      "本次提供 2 张参考图，按顺序为图1、图2。\n把图1 的帽子改成红色\n图2 是图1 的标注版，紫色半透明高亮标出的是要修改的区域。只修改图1 中高亮区域内的内容，高亮区域之外的所有内容保持完全不变，输出图里不要出现任何高亮颜色。",
     );
+  });
+
+  it("多区域：跨图连续编号分色，「区域N」改写为颜色指代，越界编号标红", () => {
+    const two = { rects: [REGION.rects[0], [0.6, 0.6, 0.9, 0.9] as [number, number, number, number]], render: "highlight_overlay" as const };
+    const b = board(
+      [prompt("p", "区域1 放狐狸，区域3 放礼物盒，区域2 放路牌"), reference("r1"), reference("r2"), task("t")],
+      [edge("p", "t", "positive"), { ...edge("r1", "t", "image:0"), region: two }, { ...edge("r2", "t", "image:1"), region: REGION }],
+    );
+    const [item] = buildConfirmItems(b, BUILTIN_TABLE, ["t"], ctx);
+    // 两张图各带叠加图共 4 张，超出 qwen 上限另行标红；这里只看区域编号本身。
+    expect(item.issues.filter((i) => i.includes("区域"))).toEqual([]);
+    expect(item.sendText).toContain("紫色区域 放狐狸，洋红色区域 放礼物盒，黄色区域 放路牌");
+    expect(item.sendText).toContain("图2 是图1 的标注版，紫色、黄色半透明高亮");
+    expect(item.sendText).toContain("图4 是图3 的标注版，洋红色半透明高亮");
+
+    const [over] = buildConfirmItems(regionBoard("区域2 改成红色"), BUILTIN_TABLE, ["t"], ctx);
+    expect(over.issues).toContain("提示词引用了区域2，但只框选了 1 个区域");
+  });
+
+  it("超过 3 个区域标红；没有框选时「区域N」是普通文字", () => {
+    const four = { rects: Array.from({ length: 4 }, () => REGION.rects[0]), render: "highlight_overlay" as const };
+    const b = board([prompt("p", "改"), reference("r1"), task("t")], [edge("p", "t", "positive"), { ...edge("r1", "t", "image:0"), region: four }]);
+    expect(buildConfirmItems(b, BUILTIN_TABLE, ["t"], ctx)[0].issues).toContain("框选了 4 个区域，最多 3 个");
+
+    const plain = board([prompt("p", "把区域2 的草地加深"), reference("r1"), task("t")], [edge("p", "t", "positive"), edge("r1", "t", "image:0")]);
+    const [item] = buildConfirmItems(plain, BUILTIN_TABLE, ["t"], ctx);
+    expect(item.issues).toEqual([]);
+    expect(item.sendText).toContain("把区域2 的草地加深");
   });
 
   it("引用越界按展开后序号", () => {

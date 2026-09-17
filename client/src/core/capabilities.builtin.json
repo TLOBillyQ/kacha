@@ -25,8 +25,8 @@
       },
       "region_hint_phrasing": {
         "highlight_overlay": {
-          "zh": "图{overlay} 是图{source} 的标注版，紫色半透明高亮标出的区域是要修改的范围。只修改图{source} 中高亮区域内的内容，高亮区域之外的所有内容保持完全不变，输出图里不要出现紫色高亮。",
-          "en": "Image {overlay} is an annotated copy of Image {source}; the translucent purple highlight marks the area to modify. Only change the content inside the highlighted area of Image {source}, keep everything outside it exactly unchanged, and do not show the purple highlight in the output."
+          "zh": "图{overlay} 是图{source} 的标注版，{colors}半透明高亮标出的是要修改的区域。只修改图{source} 中高亮区域内的内容，高亮区域之外的所有内容保持完全不变，输出图里不要出现任何高亮颜色。",
+          "en": "Image {overlay} is an annotated copy of Image {source}; the translucent {colors} highlights mark the areas to modify. Only change the content inside the highlighted areas of Image {source}, keep everything outside them exactly unchanged, and do not show any highlight colors in the output."
         }
       },
       "native_mask": "unsupported",
@@ -84,8 +84,8 @@
       },
       "region_hint_phrasing": {
         "highlight_overlay": {
-          "zh": "图{overlay} 是图{source} 的标注版，紫色半透明高亮标出的区域是要修改的范围。只修改图{source} 中高亮区域内的内容，高亮区域之外的所有内容保持完全不变，输出图里不要出现紫色高亮。",
-          "en": "Image {overlay} is an annotated copy of Image {source}; the translucent purple highlight marks the area to modify. Only change the content inside the highlighted area of Image {source}, keep everything outside it exactly unchanged, and do not show the purple highlight in the output."
+          "zh": "图{overlay} 是图{source} 的标注版，{colors}半透明高亮标出的是要修改的区域。只修改图{source} 中高亮区域内的内容，高亮区域之外的所有内容保持完全不变，输出图里不要出现任何高亮颜色。",
+          "en": "Image {overlay} is an annotated copy of Image {source}; the translucent {colors} highlights mark the areas to modify. Only change the content inside the highlighted areas of Image {source}, keep everything outside them exactly unchanged, and do not show any highlight colors in the output."
         }
       },
       "native_mask": "unsupported",

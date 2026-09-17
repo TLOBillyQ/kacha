@@ -6,7 +6,7 @@ import { composeSendText, ERROR_CATEGORY_LABELS, fetchResultImage, GatewayError,
 import { imagePortSlots, workflowOf } from "./graph";
 import { promptLanguage } from "./imageRefs";
 import { addResultNode } from "./layout";
-import { overlayPhrases, type SlotRef } from "./region";
+import { firstRegionOf, overlayPhrases, regionNames, type SlotRef } from "./region";
 import { resolveSize } from "./size";
 import { imageSources, snapshotOf, withSubmitted } from "./submission";
 import { joinPath } from "./paths";
@@ -42,7 +42,7 @@ export interface RunDeps extends TaskFs {
   fetch: FetchLike;
   now(): Date;
   /** 把区域矩形以高亮叠加画到源图上，返回编码后的图片（壳层 canvas 实现）；有区域任务时必须注入。 */
-  composeOverlay?(image: Uint8Array, rects: [number, number, number, number][]): Promise<Uint8Array>;
+  composeOverlay?(image: Uint8Array, rects: [number, number, number, number][], firstRegion: number): Promise<Uint8Array>;
 }
 
 export interface PreparedJob {
@@ -103,6 +103,7 @@ export async function prepareJob(
     }
   }
   const references: SubmissionPlan["references"] = [];
+  const firstRegion = firstRegionOf(slots);
   let imageIndex = 0;
   for (const slot of slots) {
     if (slot.kind === "image") {
@@ -117,11 +118,12 @@ export async function prepareJob(
       if (!deps.composeOverlay) throw new LocalError("框选修改区域需要叠加合成能力，当前环境不支持");
       const sourcePort = slot.sourcePort!;
       const region = slot.edge.region!;
-      const bytes = await deps.composeOverlay(sourceBytes[sourcePort - 1], region.rects);
+      const bytes = await deps.composeOverlay(sourceBytes[sourcePort - 1], region.rects, firstRegion.get(slot.port)!);
       references.push({ bytes, source: { kind: "overlay", of: sourcePort }, region: { rects: region.rects, render: "highlight_overlay", source_port: sourcePort } });
     }
   }
   const regionPhrases = overlayPhrases(model, slots, promptLanguage(snapshot.prompt));
+  const names = regionNames(slots, promptLanguage(snapshot.prompt));
 
   const submittedAt = deps.now();
   const taskId = newTaskId(submittedAt);
@@ -131,8 +133,9 @@ export async function prepareJob(
     model: model.model_id,
     prompt: snapshot.prompt,
     negativePrompt: snapshot.negative_prompt,
-    sendText: composeSendText({ prompt: snapshot.prompt, negativePrompt: snapshot.negative_prompt, referenceCount: references.length, regionPhrases }),
+    sendText: composeSendText({ prompt: snapshot.prompt, negativePrompt: snapshot.negative_prompt, referenceCount: references.length, regionPhrases, regionNames: names }),
     regionPhrases,
+    regionNames: names,
     sizeSpec: snapshot.size_spec,
     size,
     layerDecomposition: snapshot.layer_decomposition,
@@ -150,7 +153,7 @@ function jobOf(taskNodeId: string, plan: SubmissionPlan, model: ModelCapability)
     taskId: plan.taskId,
     relDir: taskDirOf(plan.submittedAt, plan.taskId),
     plan,
-    input: { model, prompt: plan.prompt, negativePrompt: plan.negativePrompt, size: plan.size, references: [], regionPhrases: plan.regionPhrases },
+    input: { model, prompt: plan.prompt, negativePrompt: plan.negativePrompt, size: plan.size, references: [], regionPhrases: plan.regionPhrases, regionNames: plan.regionNames },
     record: {
       model: plan.model,
       prompt: plan.prompt,
@@ -197,9 +200,12 @@ export async function prepareRegenerate(
   }
   // 固定句按当前能力表模板重建：请求文本由请求形态现场组装，不能只用 task.json 里的 send_text。
   const slots: SlotRef[] = previous.references.map((ref, i) =>
-    ref.region ? { kind: "overlay", port: i + 1, sourcePort: ref.region.source_port } : { kind: "image", port: i + 1, sourcePort: null },
+    ref.region
+      ? { kind: "overlay", port: i + 1, sourcePort: ref.region.source_port, regionCount: ref.region.rects.length }
+      : { kind: "image", port: i + 1, sourcePort: null, regionCount: 0 },
   );
   const regionPhrases = overlayPhrases(model, slots, promptLanguage(previous.prompt));
+  const names = regionNames(slots, promptLanguage(previous.prompt));
 
   const submittedAt = deps.now();
   const taskId = newTaskId(submittedAt);
@@ -211,6 +217,7 @@ export async function prepareRegenerate(
     negativePrompt: previous.negative_prompt,
     sendText: previous.send_text,
     regionPhrases,
+    regionNames: names,
     sizeSpec: previous.size_spec,
     size: previous.size,
     layerDecomposition: previous.layer_decomposition,

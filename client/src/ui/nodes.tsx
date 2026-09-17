@@ -27,6 +27,7 @@ import { actionHoverInfo, CANCELLED_HINT, referenceHoverInfo, resultHoverInfo, t
 import type { TaskStatus } from "../core/run";
 import { CHAIN_DEPTH_HINT, IMAGE_PORT_PREFIX, imageRuleViolations, type TaskPorts } from "../core/graph";
 import { imageMinSize } from "../core/nodeSize";
+import { regionCss } from "../core/overlay";
 import { resolveFromRoot } from "../core/paths";
 import { ratiosForSizeTier, sizeTiersOf } from "../core/size";
 import { fileUrl } from "../shell/ipc";
@@ -57,6 +58,8 @@ export interface ImageSlotInfo {
   handleIndex: number | null;
   /** 该区域连线的矩形（归一化）；叠加行为空。 */
   rects: Rect01[];
+  /** 第一个矩形的区域编号（0 起）。 */
+  firstRegion: number;
   edgeRef: { from: PortRef; to: PortRef } | null;
 }
 export type TaskFlowNode = Node<
@@ -578,7 +581,8 @@ export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskF
                     <span
                       key={k}
                       className="port-thumb-rect"
-                      style={{ left: `${r[0] * 100}%`, top: `${r[1] * 100}%`, width: `${(r[2] - r[0]) * 100}%`, height: `${(r[3] - r[1]) * 100}%` }}
+                      style={{ left: `${r[0] * 100}%`, top: `${r[1] * 100}%`, width: `${(r[2] - r[0]) * 100}%`, height: `${(r[3] - r[1]) * 100}%`, background: regionCss(slot.firstRegion + k, 0.5), borderColor: regionCss(slot.firstRegion + k, 0.9) }}
+                      title={`区域${slot.firstRegion + k + 1}`}
                     />
                   ))}
                 </span>

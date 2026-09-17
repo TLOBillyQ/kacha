@@ -28,6 +28,7 @@ import {
   connect,
   chainDepth,
   disconnect,
+  firstRegionOfEdge,
   forkPrompt,
   hasDownstreamRecords,
   imageEdges,
@@ -226,7 +227,8 @@ export function BoardCanvas({
         if (!render) return [];
         const port = imagePortIndex(e.to[1])! + 1;
         const modelName = findModel(table, task.model)?.display_name ?? task.model;
-        return [{ label: `${modelName} 的图${port}`, edgeRef: { from: e.from, to: e.to }, rects: e.region?.rects ?? [], render }];
+        const firstRegion = firstRegionOfEdge(boardRef.current, task.id, e.to[1]);
+        return [{ label: `${modelName} 的图${port}`, edgeRef: { from: e.from, to: e.to }, rects: e.region?.rects ?? [], render, firstRegion }];
       }),
     [table],
   );
@@ -439,7 +441,7 @@ export function BoardCanvas({
           const slots: ImageSlotInfo[] = imagePortSlots(board, table, n.id).map((s) => {
             const src = labelOf(s.edge.from[0]);
             return s.kind === "overlay"
-              ? { kind: "overlay" as const, port: s.port, label: src.label, absPath: null, handleIndex: null, rects: [], edgeRef: null }
+              ? { kind: "overlay" as const, port: s.port, label: src.label, absPath: null, handleIndex: null, rects: [], firstRegion: 0, edgeRef: null }
               : {
                   kind: "image" as const,
                   port: s.port,
@@ -447,6 +449,7 @@ export function BoardCanvas({
                   absPath: src.absPath,
                   handleIndex: imagePortIndex(s.edge.to[1]),
                   rects: s.edge.region?.rects ?? [],
+                  firstRegion: firstRegionOfEdge(board, n.id, s.edge.to[1]),
                   edgeRef: { from: s.edge.from, to: s.edge.to },
                 };
           });
