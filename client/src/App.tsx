@@ -5,7 +5,7 @@ import { ask, message, open, save } from "@tauri-apps/plugin-dialog";
 import { ReactFlowProvider } from "@xyflow/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { BOARD_EXTENSION, serializeBoard, type Board } from "./core/board";
-import { buildManifest, checkPack, importSummary, PACK_EXTENSION, packBoardEntry, planExport, type PackFs } from "./core/boardPack";
+import { buildManifest, checkPack, importSummary, PACK_EXTENSION, packBoardEntry, planExport, type ExportPlan, type PackFs } from "./core/boardPack";
 import { BUILTIN_TABLE, effectiveTable, type CapabilityTable } from "./core/capabilities";
 import { redoLabel, undoLabel, type Change } from "./core/history";
 import { basename } from "./core/paths";
@@ -218,12 +218,13 @@ export function App() {
   );
 
   const exportPack = useCallback(
-    async (boardFile: string, plan: Extract<PackDialogState, { stage: "confirmExport" }>["plan"]) => {
+    async (boardFile: string, plan: ExportPlan) => {
       if (!outputRoot) return;
       const stem = boardFile.slice(0, -BOARD_EXTENSION.length);
       const picked = await save({ defaultPath: `${stem}${PACK_EXTENSION}`, filters: [{ name: "画板包", extensions: [PACK_EXTENSION.slice(1)] }] });
       if (!picked) return;
       const target = picked.toLowerCase().endsWith(PACK_EXTENSION) ? picked : `${picked}${PACK_EXTENSION}`;
+      await ipc.boardPackCancel(false);
       setPack({ stage: "progress", title: `正在导出画板包：${stem}` });
       const entry = packBoardEntry(boardFile);
       const fields = { action: "export", board_file: boardFile, task_dirs: plan.taskDirs.length, missing: plan.missing.length };
@@ -239,7 +240,7 @@ export function App() {
         toast(`已导出画板包到 ${target}`);
       } catch (e) {
         const cancelled = errorText(e) === PACK_CANCELLED;
-        logEvent("board_pack", { ...fields, result: cancelled ? "cancelled" : "failed", message: cancelled ? undefined : errorText(e) });
+        logEvent("board_pack", { ...fields, result: cancelled ? "cancelled" : "failed" });
         toast(cancelled ? "已取消导出画板包" : `导出画板包失败：${errorText(e)}`);
       } finally {
         setPack(null);
@@ -267,28 +268,31 @@ export function App() {
       else toast(`无法导入画板包：${check.reason}`);
       return;
     }
-    const board_file = check.boards.map((b) => basename(b.entry)).join(", ");
+    let board_file = check.boards.map((b) => basename(b.entry)).join(", ");
+    await ipc.boardPackCancel(false);
     setPack({ stage: "progress", title: `正在导入画板包：${basename(picked)}` });
     let report;
     try {
       report = await ipc.boardPackImport(picked, outputRoot);
     } catch (e) {
       const cancelled = errorText(e) === PACK_CANCELLED;
-      logEvent("board_pack", { ...fields, board_file, result: cancelled ? "cancelled" : "failed", message: cancelled ? undefined : errorText(e) });
+      logEvent("board_pack", { ...fields, board_file, result: cancelled ? "cancelled" : "failed" });
       toast(cancelled ? "已取消导入；已移入的任务目录保留" : `导入画板包失败：${errorText(e)}`);
       setPack(null);
       return;
     }
     const logged = { ...fields, board_file, task_dirs: report.imported, skipped: report.skipped, conflicts: report.conflicts.length, bytes: report.bytes };
     try {
-      for (const { board } of check.boards) await boards.addImportedBoard(board);
+      const written: string[] = [];
+      for (const { board } of check.boards) written.push(basename(await boards.addImportedBoard(board)));
+      board_file = written.join(", ");
     } catch (e) {
-      logEvent("board_pack", { ...logged, result: "failed", message: errorText(e) });
+      logEvent("board_pack", { ...logged, result: "board_write_failed" });
       toast(`任务目录已导入，但写画板失败：${errorText(e)}`);
       setPack(null);
       return;
     }
-    logEvent("board_pack", { ...logged, result: "ok" });
+    logEvent("board_pack", { ...logged, board_file, result: "ok" });
     const summary = importSummary(report);
     if (summary.conflicts.length) setPack({ stage: "importDone", ...summary });
     else {
@@ -506,7 +510,7 @@ export function App() {
         <BoardPackDialog
           state={pack}
           onExport={() => pack.stage === "confirmExport" && void exportPack(pack.boardFile, pack.plan)}
-          onCancelProgress={() => void ipc.boardPackCancel()}
+          onCancelProgress={() => void ipc.boardPackCancel(true)}
           onClose={() => setPack(null)}
         />
       )}

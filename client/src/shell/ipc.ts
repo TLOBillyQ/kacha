@@ -73,7 +73,8 @@ export const ipc = {
   boardPackInspect: (pack: string) => invoke<PackInspected>("board_pack_inspect", { pack }),
   boardPackImport: (pack: string, outputRoot: string) =>
     invoke<{ imported: number; skipped: number; conflicts: string[]; bytes: number }>("board_pack_import", { pack, outputRoot }),
-  boardPackCancel: () => invoke<void>("board_pack_cancel"),
+  /** 置取消标记；开始导出 / 导入前先以 false 复位。 */
+  boardPackCancel: (cancelled: boolean) => invoke<void>("board_pack_cancel", { cancelled }),
   /** 系统凭据库；不可用时 reject（调用方退回会话内存）。 */
   secretGet: () => invoke<string | null>("secret_get"),
   secretSet: (key: string) => invoke<void>("secret_set", { key }),

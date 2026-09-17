@@ -6,7 +6,6 @@ import { BOARDS_DIR_NAME, basename, resolveFromRoot, toRootRelative } from "./pa
 
 export const PACK_FORMAT_VERSION = 1;
 export const PACK_EXTENSION = ".ugcpack";
-export const PACK_MANIFEST = "manifest.json";
 /** 输出根目录外的参考图在包内（及导入后根目录内）的位置：导入参考图/<sha256>.<ext>。 */
 export const IMPORTED_REFERENCES_DIR = "导入参考图";
 

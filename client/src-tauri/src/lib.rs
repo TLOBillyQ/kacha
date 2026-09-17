@@ -160,7 +160,7 @@ fn diagnostics_export(
     diagnostics::export(&diagnostic_sources(&app, output_root, open_boards)?, Path::new(&target), &include, &version).map_err(err)
 }
 
-/// 画板包导出 / 导入的取消标记；同一时间只有一个模态进度，开始时复位。
+/// 画板包导出 / 导入的取消标记；同一时间只有一个模态进度。由前端在弹出进度前复位，避免命令开始前的取消丢失。
 #[derive(Default)]
 struct PackCancel(AtomicBool);
 
@@ -184,7 +184,6 @@ fn board_pack_export(
     target: String,
     spec: board_pack::ExportSpec,
 ) -> Result<board_pack::ExportReport, String> {
-    cancel.0.store(false, Ordering::Relaxed);
     board_pack::export(Path::new(&output_root), &spec, Path::new(&target), &emit_pack_progress(&app), &cancel.0).map_err(err)
 }
 
@@ -195,13 +194,12 @@ fn board_pack_inspect(pack: String) -> Result<board_pack::Inspected, String> {
 
 #[tauri::command(async)]
 fn board_pack_import(app: tauri::AppHandle, cancel: tauri::State<'_, PackCancel>, pack: String, output_root: String) -> Result<board_pack::ImportReport, String> {
-    cancel.0.store(false, Ordering::Relaxed);
     board_pack::import(Path::new(&pack), Path::new(&output_root), &emit_pack_progress(&app), &cancel.0).map_err(err)
 }
 
 #[tauri::command]
-fn board_pack_cancel(cancel: tauri::State<PackCancel>) {
-    cancel.0.store(true, Ordering::Relaxed);
+fn board_pack_cancel(cancel: tauri::State<PackCancel>, cancelled: bool) {
+    cancel.0.store(cancelled, Ordering::Relaxed);
 }
 
 #[tauri::command]
