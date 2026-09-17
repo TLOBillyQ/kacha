@@ -928,7 +928,7 @@ export function BoardCanvas({
         onPointerUpCapture={nav.onPointerUpCapture}
       >
         <div className="toolbar">
-          <button onClick={() => setPresetsOpen(true)}>＋ 从预设…</button>
+          <button onClick={() => setPresetsOpen(true)}>项目预设…</button>
           <HoverButton onClick={undo} disabled={!undoLabel} info={textHoverInfo(undoLabel ? `撤销 ${undoLabel}（Ctrl+Z）` : "没有可撤销的操作")} aria-label="撤销">
             ↶
           </HoverButton>
@@ -943,6 +943,7 @@ export function BoardCanvas({
           nodes={nodes}
           edges={edges}
           nodeTypes={nodeTypes}
+          proOptions={{ hideAttribution: true }}
           edgeTypes={edgeTypes}
           {...nav.flowProps}
           deleteKeyCode={dialogOpen ? null : nav.flowProps.deleteKeyCode}
