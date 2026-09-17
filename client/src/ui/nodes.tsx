@@ -534,7 +534,7 @@ export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskF
       )}
 
       <div className="ports">
-        <PortRow id="positive" kind="positive" label="正向提示词" className={hasPositive ? "" : "port-required"} connectable={!locked}>
+        <PortRow id="positive" kind="positive" label={ports.negative ? "正向提示词" : "提示词"} className={hasPositive ? "" : "port-required"} connectable={!locked}>
           {!hasPositive && <span className="port-hint">拖提示词进来</span>}
         </PortRow>
         {ports.negative && <PortRow id="negative" kind="negative" label="负向提示词" connectable={!locked} />}
