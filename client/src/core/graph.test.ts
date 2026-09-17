@@ -15,6 +15,7 @@ import {
   moveImagePort,
   taskIssues,
   taskPorts,
+  transparentAlphaIssue,
 } from "./graph";
 
 const SEEDREAM_PRO = "doubao-seedream-5-0-pro-260628";
@@ -369,5 +370,73 @@ describe("编辑已提交过的提示词节点：三选", () => {
     expect([from("t1"), from("t2"), from("t3")]).toEqual(["p-old", "p", "p-old"]);
     expect(next.edges.find((e) => e.to[0] === "t3")?.to[1]).toBe("negative");
     expect(hasDownstreamRecords(next, "p")).toBe(false);
+  });
+});
+
+describe("区域指示", () => {
+  const REGION = { rects: [[0.1, 0.1, 0.5, 0.5] as [number, number, number, number]], render: "highlight_overlay" as const };
+
+  it("叠加图占名额：2 条用户线（1 条带区域）占满上限 3，拒绝再连、不再给空位", () => {
+    const b = board(
+      [node("r1", "reference"), node("r2", "reference"), node("r3", "reference"), task("t")],
+      [edge("r1", "out", "t", "image:0"), { ...edge("r2", "out", "t", "image:1"), region: REGION }],
+    );
+    expect(canConnect(b, table, conn("r3", "out", "t", "image:2"))).toEqual({ ok: false, reason: "参考图已达模型上限 3 张" });
+    expect(taskPorts(b, table, "t").imageSlots).toBe(2);
+  });
+
+  it("展开后超上限标红、连线保留", () => {
+    const b = board(
+      [node("p", "prompt"), node("r1", "reference"), node("r2", "reference"), node("r3", "reference"), task("t")],
+      [edge("p", "out", "t", "positive"), edge("r1", "out", "t", "image:0"), edge("r2", "out", "t", "image:1"), { ...edge("r3", "out", "t", "image:2"), region: REGION }],
+    );
+    expect(taskIssues(b, table, "t")).toContain("参考图 4 张超出模型上限 3 张");
+    expect(imageEdgesCount(b)).toBe(3);
+  });
+
+  it("模型不支持区域指示：有区域连线标红，区域数据保留", () => {
+    const b = board(
+      [node("p", "prompt"), node("r1", "reference"), task("t", "doubao-seedream-5-0-260128")],
+      [edge("p", "out", "t", "positive"), { ...edge("r1", "out", "t", "image:0"), region: REGION }],
+    );
+    expect(taskIssues(b, table, "t")).toContain("模型不支持区域指示");
+    expect(b.edges[1].region).toEqual(REGION);
+  });
+
+  function imageEdgesCount(b: Board): number {
+    return b.edges.filter((e) => e.to[1].startsWith("image:")).length;
+  }
+});
+
+describe("透明背景：alpha 门控", () => {
+  function alphaBoard(): Board {
+    const t = { ...task("t"), transparent_background: true };
+    return board([node("p", "prompt"), node("r1", "reference"), t], [edge("p", "out", "t", "positive"), edge("r1", "out", "t", "image:0")]);
+  }
+
+  it("开关打开、恰好一条线、源图无 alpha → 标红；开关保留", () => {
+    const b = alphaBoard();
+    expect(transparentAlphaIssue(b, "t", false)).toBe("该图不带透明通道");
+    expect((b.nodes.find((n) => n.id === "t") as TaskNode).transparent_background).toBe(true);
+  });
+
+  it("带 alpha 或未知（未检测）不拦；开关关闭不拦", () => {
+    const b = alphaBoard();
+    expect(transparentAlphaIssue(b, "t", true)).toBeNull();
+    expect(transparentAlphaIssue(b, "t", undefined)).toBeNull();
+    const off = { ...b, nodes: b.nodes.map((n) => (n.type === "task" ? { ...n, transparent_background: false } : n)) };
+    expect(transparentAlphaIssue(off, "t", false)).toBeNull();
+  });
+
+  it("不是恰好一条线时不归它管（由 taskIssues 的「恰好一条」拦）", () => {
+    const supported = withModel((m) => {
+      m.transparent_background = "supported";
+    });
+    const t = { ...task("t", "test-model"), transparent_background: true };
+    const b = board([node("p", "prompt"), node("r1", "reference"), t], [edge("p", "out", "t", "positive"), edge("r1", "out", "t", "image:0")]);
+    expect(transparentAlphaIssue(b, "t", false)).toBe("该图不带透明通道");
+    b.edges = [...b.edges, edge("r1", "out", "t", "image:1")];
+    expect(transparentAlphaIssue(b, "t", false)).toBeNull();
+    expect(taskIssues(b, supported, "t")).toContain("透明背景需要恰好一条图片线");
   });
 });

@@ -8,6 +8,7 @@ import {
   type InputImageRule,
   type WorkflowName,
 } from "./capabilities";
+import { effectiveRegionRender, expandImageEdges, type PortSlot } from "./region";
 import { resolveSize } from "./size";
 
 export const IMAGE_PORT_PREFIX = "image:";
@@ -46,6 +47,13 @@ export function workflowOf(board: Board, taskId: string): WorkflowName {
   return imageEdges(board, taskId).length > 0 ? "image_edit" : "text_to_image";
 }
 
+/** 任务的图片连线按当前模型渲染方式展开后的槽位（区域叠加图紧随原图，占发送序名额）。 */
+export function imagePortSlots(board: Board, table: CapabilityTable, taskId: string): PortSlot[] {
+  const task = findTask(board, taskId);
+  const model = task && findModel(table, task.model);
+  return expandImageEdges(imageEdges(board, taskId), effectiveRegionRender(model));
+}
+
 function reachable(board: Board, from: string, to: string): boolean {
   const seen = new Set<string>();
   const stack = [from];
@@ -76,7 +84,8 @@ export function canConnect(board: Board, table: CapabilityTable, c: Connection):
   } else if (imageIndex !== null) {
     if (source.type === "prompt") return no("图片端口只接参考图或结果节点");
     const count = imageEdges(board, target.id).length;
-    if (count >= ports.maxReferences) {
+    // 名额按展开后序号算：区域叠加图也占 1 个参考图名额。
+    if (imagePortSlots(board, table, target.id).length >= ports.maxReferences) {
       return no(ports.maxReferences === 0 ? "模型不支持图片编辑" : `参考图已达模型上限 ${ports.maxReferences} 张`);
     }
     if (imageIndex !== count) return no("该端口已有连线");
@@ -174,9 +183,11 @@ export function taskPorts(board: Board, table: CapabilityTable, taskId: string):
   }
   const wf = model.workflows[workflowOf(board, taskId)];
   const maxReferences = model.workflows.image_edit.max_references;
+  const expanded = expandImageEdges(imageEdges(board, taskId), effectiveRegionRender(model)).length;
   return {
     negative: isSupported(wf.supports_negative_prompt) || hasNegativeEdge,
-    imageSlots: count < maxReferences ? count + 1 : count,
+    // 空位露出同样按展开后名额：区域叠加图占满后不再给新空位。
+    imageSlots: expanded < maxReferences ? count + 1 : count,
     maxReferences,
     layerDecomposition: isSupported(wf.layer_decomposition) || task.layer_decomposition,
     transparentBackground: isSupported(model.transparent_background) || task.transparent_background,
@@ -199,8 +210,11 @@ export function taskIssues(board: Board, table: CapabilityTable, taskId: string)
   const workflow = workflowOf(board, taskId);
   const wf = model.workflows[workflow];
   const max = model.workflows.image_edit.max_references;
+  const render = effectiveRegionRender(model);
+  const expanded = expandImageEdges(imageEdges(board, taskId), render).length;
   if (images > 0 && max === 0) issues.push("模型不支持图片编辑");
-  else if (images > max) issues.push(`参考图 ${images} 张超出模型上限 ${max} 张`);
+  else if (expanded > max) issues.push(`参考图 ${expanded} 张超出模型上限 ${max} 张`);
+  if (render === null && imageEdges(board, taskId).some((e) => (e.region?.rects.length ?? 0) > 0)) issues.push("模型不支持区域指示");
   if (hasEdge("negative") && !isSupported(wf.supports_negative_prompt)) issues.push("模型不支持负向提示词");
   if (resolveSize(wf.size_rule, task.size_spec) === null) {
     const s = task.size_spec;
@@ -212,6 +226,17 @@ export function taskIssues(board: Board, table: CapabilityTable, taskId: string)
     else if (images !== 1) issues.push("透明背景需要恰好一条图片线");
   }
   return issues;
+}
+
+/**
+ * 透明背景的图片来源不带透明通道时的标红原因（开关打开且恰好一条图片线；规格第 7 节：条件变坏保留 + 标红，绝不自动关）。
+ * alpha 由界面注入（参考图导入时的一次性检测）；未知（未检测）时不拦。
+ */
+export function transparentAlphaIssue(board: Board, taskId: string, alpha: boolean | null | undefined): string | null {
+  const task = findTask(board, taskId);
+  if (!task?.transparent_background) return null;
+  if (imageEdges(board, taskId).length !== 1) return null;
+  return alpha === false ? "该图不带透明通道" : null;
 }
 
 // ---- 编辑已提交过的提示词节点（规格第 3.5 节） ----

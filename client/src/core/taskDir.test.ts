@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { BUILTIN_TABLE } from "./capabilities";
-import { newTaskId, parseOutcome, saveResult, sha256Hex, sniffImage, tableDigest, taskDirOf, taskDirOfTaskId, writeOutcome, writeSubmission, type SubmissionPlan } from "./taskDir";
+import { layersExportJson, newTaskId, parseOutcome, saveLayers, saveResult, sha256Hex, sniffImage, tableDigest, taskDirOf, taskDirOfTaskId, writeOutcome, writeSubmission, type SubmissionPlan } from "./taskDir";
 
 const PNG = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="), (c) => c.charCodeAt(0));
 const JPEG = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0, 0x10]);
@@ -58,6 +58,7 @@ describe("提交时写任务目录", () => {
     prompt: "把图2的帽子戴到图1头上",
     negativePrompt: "模糊",
     sendText: "本次提供 2 张参考图，按顺序为图1、图2。\n把图2的帽子戴到图1头上\n避免出现：模糊",
+    regionPhrases: [],
     sizeSpec: { tier: "1K", ratio: "1:1", width: null, height: null },
     size: { width: 1024, height: 1024 },
     layerDecomposition: false,
@@ -154,5 +155,31 @@ describe("结局记录 outcome.json", () => {
     expect(parseOutcome(bytes("{"))).toBeNull();
     expect(parseOutcome(bytes('{"outcome":"exploded"}'))).toBeNull();
     expect(parseOutcome(bytes('{"outcome":"failed"}'))).toBeNull();
+  });
+});
+
+describe("图层落盘与导出", () => {
+  it("按 z_index 升序写 layers/NN.<ext>，返回图层记录", async () => {
+    const fs = memoryFs();
+    const layers = await saveLayers(fs, "/root", "2026-09-16/t", [
+      { bytes: JPEG, zIndex: 2, boundingBox: [0, 0, 10, 10] },
+      { bytes: PNG, zIndex: 1, boundingBox: [5, 5, 20, 20] },
+    ]);
+    expect([...fs.files.keys()]).toEqual(["/root/2026-09-16/t/layers/01.png", "/root/2026-09-16/t/layers/02.jpg"]);
+    expect(layers).toEqual([
+      { file: "layers/01.png", z_index: 1, bounding_box: [5, 5, 20, 20] },
+      { file: "layers/02.jpg", z_index: 2, bounding_box: [0, 0, 10, 10] },
+    ]);
+  });
+
+  it("不是图片的图层报错且不落盘", async () => {
+    const fs = memoryFs();
+    await expect(saveLayers(fs, "/root", "d", [{ bytes: new TextEncoder().encode("x"), zIndex: 1, boundingBox: [] }])).rejects.toThrow("图层1 不是可识别的图片");
+    expect(fs.files.size).toBe(0);
+  });
+
+  it("layers.json 导出内容与图层记录一致", () => {
+    const text = layersExportJson([{ file: "layers/01.png", z_index: 1, bounding_box: [5, 5, 20, 20] }]);
+    expect(JSON.parse(text)).toEqual({ layers: [{ file: "layers/01.png", z_index: 1, bounding_box: [5, 5, 20, 20] }] });
   });
 });

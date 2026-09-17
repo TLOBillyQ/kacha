@@ -114,14 +114,18 @@ export function App() {
       const ids = runScope(board, selectedIds, busy);
       const sources = ids.flatMap((id) => imageSources(board, id, outputRoot));
       const missingNodes = new Set<string>();
+      const alphaByNode = new Map<string, boolean>();
       await Promise.all(
         sources.map((src) =>
-          ipc.inspectImage(src.absPath).catch(() => {
-            missingNodes.add(src.nodeId);
-          }),
+          ipc.inspectImage(src.absPath).then(
+            (info) => alphaByNode.set(src.nodeId, info.has_alpha),
+            () => {
+              missingNodes.add(src.nodeId);
+            },
+          ),
         ),
       );
-      const items = buildConfirmItems(board, table, ids, { discovery: settings.discovery, missingNodes });
+      const items = buildConfirmItems(board, table, ids, { discovery: settings.discovery, missingNodes, alphaByNode });
       setConfirm({ boardKey: activeKey, board, items, scope: selectedIds.length ? "selection" : "board" });
     },
     [activeKey, outputRoot, settings.apiKey, settings.discovery, boards, runner.statuses, table, toast],

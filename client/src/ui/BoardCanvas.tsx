@@ -28,23 +28,28 @@ import {
   forkPrompt,
   hasDownstreamRecords,
   imageEdges,
+  imagePortIndex,
+  imagePortSlots,
   moveImagePort,
   removeNodes,
   syncImagePorts,
   taskIssues,
   taskPorts,
+  transparentAlphaIssue,
   workflowOf,
   type Connection,
 } from "../core/graph";
 import { addAsReference, addAsReferenceTarget, continueEditing, copySelection, lineage, pasteClip, PASTE_OFFSET, producerOf, type Clip, type Outcome } from "../core/iterate";
 import { PROMPT_NODE_SIZE, TASK_NODE_SIZE } from "../core/layout";
-import { basename, resolveFromRoot, toRootRelative } from "../core/paths";
+import { basename, dirname, joinPath, resolveFromRoot, toRootRelative } from "../core/paths";
+import { effectiveRegionRender, setEdgeRegion } from "../core/region";
 import { findReferenceFile, findResultFile, IMAGE_EXTENSIONS, type RelocateFs } from "../core/relocate";
 import { defaultSizeSpec } from "../core/size";
-import { imageRefProblems, imageSources } from "../core/submission";
+import { imageRefProblems, imageSources, type SnapshotImage } from "../core/submission";
 import { ipc } from "../shell/ipc";
-import { BoardContext, primeImageInfo, useMissingImages, useStoredStatuses, type BoardActions } from "./context";
-import { nodeTypes, type ImagePortInfo } from "./nodes";
+import { BoardContext, primeImageInfo, useImageInfos, useMissingImages, useStoredStatuses, type BoardActions } from "./context";
+import { nodeTypes, type ImagePortInfo, type ImageSlotInfo } from "./nodes";
+import { PreviewDialog, type PreviewRequest, type RegionTarget } from "./PreviewDialog";
 import { isActive } from "./useRunner";
 
 const relocateFs: RelocateFs = {
@@ -123,6 +128,60 @@ export function BoardCanvas({ board, table, outputRoot, update, openBoardPath, t
   selectedRef.current = selectedNodes;
   const [focusPrompt, setFocusPrompt] = useState<string | null>(null);
   const missing = useMissingImages(board, outputRoot);
+  const [preview, setPreview] = useState<{ req: PreviewRequest; nonce: number } | null>(null);
+  const previewNonce = useRef(0);
+
+  // 每个图片源节点的透明通道（导入 / 定位时已有缓存，未读的批量补读）；未知不进入 Map。
+  const imageNodes = useMemo(() => board.nodes.filter((n) => n.type === "reference" || n.type === "result"), [board.nodes]);
+  const imageAbsPaths = useMemo(() => imageNodes.map((n) => resolveFromRoot(outputRoot, n.path)), [imageNodes, outputRoot]);
+  const imageInfos = useImageInfos(imageAbsPaths);
+  const alphaByNode = useMemo(() => {
+    const map = new Map<string, boolean>();
+    imageNodes.forEach((n, i) => {
+      const info = imageInfos.get(imageAbsPaths[i]);
+      if (info) map.set(n.id, info.has_alpha);
+    });
+    return map;
+  }, [imageNodes, imageAbsPaths, imageInfos]);
+
+  /** 参考图 / 结果节点扇出到「支持区域指示」任务的图片线，作为弹窗里可编辑区域的目标。 */
+  const regionTargetsOf = useCallback(
+    (nodeId: string): RegionTarget[] =>
+      boardRef.current.edges.flatMap((e) => {
+        if (e.from[0] !== nodeId || imagePortIndex(e.to[1]) === null) return [];
+        const task = boardRef.current.nodes.find((n) => n.id === e.to[0]);
+        if (task?.type !== "task") return [];
+        const render = effectiveRegionRender(findModel(table, task.model));
+        if (!render) return [];
+        const port = imagePortIndex(e.to[1])! + 1;
+        const modelName = findModel(table, task.model)?.display_name ?? task.model;
+        return [{ label: `${modelName} 的图${port}`, edgeRef: { from: e.from, to: e.to }, rects: e.region?.rects ?? [], render }];
+      }),
+    [table],
+  );
+
+  const openNodePreview = useCallback(
+    (nodeId: string) => {
+      const node = boardRef.current.nodes.find((n) => n.id === nodeId);
+      if (node?.type !== "reference" && node?.type !== "result") return;
+      const abs = resolveFromRoot(outputRoot, node.path);
+      const recordLayers = node.type === "result" ? (node.record.layers ?? []) : [];
+      // 本次编辑用到的区域轮廓：产出任务的提交快照（任务已删 / 快照无区域 = 没有可回显的轮廓）。
+      const producer = node.type === "result" ? producerOf(boardRef.current, node.id) : undefined;
+      const snapshotImages = (producer?.last_submitted as { images?: SnapshotImage[] } | null)?.images ?? [];
+      const regionOutlines = snapshotImages.flatMap((img) => img.region?.rects ?? []);
+      const req: PreviewRequest = {
+        title: node.type === "reference" ? node.display_name : node.file,
+        absPath: abs,
+        layers: recordLayers.map((record) => ({ record, absPath: joinPath(dirname(abs), record.file) })),
+        resultId: node.type === "result" ? node.id : undefined,
+        regionTargets: regionTargetsOf(nodeId),
+        regionOutlines,
+      };
+      setPreview({ req, nonce: ++previewNonce.current });
+    },
+    [outputRoot, regionTargetsOf],
+  );
 
   const stored = useStoredStatuses(board, outputRoot, handled);
   const statusOf = useCallback((taskId: string): TaskStatus | null => statuses.get(taskId) ?? stored.get(taskId) ?? null, [statuses, stored]);
@@ -149,19 +208,40 @@ export function BoardCanvas({ board, table, outputRoot, update, openBoardPath, t
       forkPrompt: (promptId, text) => updateBoard((b) => forkPrompt(b, promptId, { newNodeId: crypto.randomUUID(), text })),
       cancelTask: onCancelTask,
       regenerate: onRegenerate,
-      continueEditing: (nodeId) => {
+      continueEditing: (nodeId, sourceLayer = null) => {
         const selected = selectedRef.current;
         const sources = selected.has(nodeId) ? [...selected] : [nodeId];
         const ids = { taskId: crypto.randomUUID(), promptId: crypto.randomUUID() };
-        if (!applyOutcome((b) => continueEditing(b, table, discovery, sources, nodeId, ids))) return;
+        const sourceLayers = sourceLayer === null ? null : new Map([[nodeId, sourceLayer]]);
+        if (!applyOutcome((b) => continueEditing(b, table, discovery, sources, nodeId, ids, sourceLayers))) return;
         setSelectedNodes(new Set([ids.promptId]));
         setFocusPrompt(ids.promptId);
       },
-      addAsReference: (resultId) => {
+      addAsReference: (resultId, sourceLayer = null) => {
         const target = addAsReferenceTarget(boardRef.current, [...selectedRef.current]);
         if (!target.ok) return toast(target.reason);
         if (lockedRef.current.has(target.taskId)) return toast(LOCKED_HINT);
-        applyOutcome((b) => addAsReference(b, table, resultId, target.taskId));
+        applyOutcome((b) => addAsReference(b, table, resultId, target.taskId, sourceLayer));
+      },
+      setEdgeRegion: (ref, region) => {
+        if (lockedRef.current.has(ref.to[0])) return toast(LOCKED_HINT);
+        updateBoard((b) => setEdgeRegion(b, ref, region));
+      },
+      previewNode: openNodePreview,
+      editRegion: (taskId, ref) => {
+        if (lockedRef.current.has(taskId)) return toast(LOCKED_HINT);
+        const target = regionTargetsOf(ref.from[0]).find((t) => t.edgeRef.to[0] === taskId && t.edgeRef.to[1] === ref.to[1]);
+        if (!target) return toast("当前模型不支持区域指示");
+        const src = boardRef.current.nodes.find((n) => n.id === ref.from[0]);
+        if (src?.type !== "reference" && src?.type !== "result") return;
+        const name = src.type === "reference" ? src.display_name : src.file;
+        const req: PreviewRequest = {
+          title: `指示区域 · ${name}`,
+          absPath: resolveFromRoot(outputRoot, src.path),
+          edit: target,
+          regionTargets: [target],
+        };
+        setPreview({ req, nonce: ++previewNonce.current });
       },
       generateVariant: (resultId) => {
         const b = boardRef.current;
@@ -199,7 +279,7 @@ export function BoardCanvas({ board, table, outputRoot, update, openBoardPath, t
           }
         })(),
     }),
-    [table, outputRoot, discovery, update, updateBoard, applyOutcome, onCancelTask, onRegenerate, toast],
+    [table, outputRoot, discovery, update, updateBoard, applyOutcome, onCancelTask, onRegenerate, toast, openNodePreview, regionTargetsOf],
   );
 
   // 选中任一节点即高亮其谱系。
@@ -242,8 +322,25 @@ export function BoardCanvas({ board, table, outputRoot, update, openBoardPath, t
           return [{ ...base, type: "reference", data: { node: n, rules, missing: missing.has(n.id) } }];
         }
         case "task": {
-          const refs = imageRefProblems(board, n.id);
+          const refs = imageRefProblems(board, table, n.id);
           const missingImages = imageSources(board, n.id, outputRoot).flatMap((src, i) => (missing.has(src.nodeId) ? [`图${i + 1} 图片缺失：${src.label}`] : []));
+          const taskEdges = imageEdges(board, n.id);
+          const render = effectiveRegionRender(findModel(table, n.model));
+          const slots: ImageSlotInfo[] = imagePortSlots(board, table, n.id).map((s) => {
+            const src = labelOf(s.edge.from[0]);
+            return s.kind === "overlay"
+              ? { kind: "overlay" as const, port: s.port, label: src.label, absPath: null, handleIndex: null, rects: [], edgeRef: null }
+              : {
+                  kind: "image" as const,
+                  port: s.port,
+                  label: src.label,
+                  absPath: src.absPath,
+                  handleIndex: imagePortIndex(s.edge.to[1]),
+                  rects: s.edge.region?.rects ?? [],
+                  edgeRef: { from: s.edge.from, to: s.edge.to },
+                };
+          });
+          const alphaIssue = transparentAlphaIssue(board, n.id, taskEdges.length === 1 ? alphaByNode.get(taskEdges[0].from[0]) : undefined);
           return [
             {
               ...base,
@@ -251,13 +348,20 @@ export function BoardCanvas({ board, table, outputRoot, update, openBoardPath, t
               data: {
                 node: n,
                 ports: taskPorts(board, table, n.id),
-                issues: [...withAvailability(taskIssues(board, table, n.id), modelAvailabilityIssue(table, discovery, n.model)), ...refs.issues, ...missingImages],
+                issues: [
+                  ...withAvailability(taskIssues(board, table, n.id), modelAvailabilityIssue(table, discovery, n.model)),
+                  ...(alphaIssue ? [alphaIssue] : []),
+                  ...refs.issues,
+                  ...missingImages,
+                ],
                 warnings: refs.warnings,
                 unreferenced: refs.unreferenced,
                 chainDepth: chainDepth(board, n.id),
                 locked: locked.has(n.id),
                 workflow: workflowOf(board, n.id),
-                images: imageEdges(board, n.id).map((e) => labelOf(e.from[0])),
+                images: taskEdges.map((e) => labelOf(e.from[0])),
+                slots,
+                regionRender: render,
                 hasPositive: board.edges.some((e) => e.to[0] === n.id && e.to[1] === "positive"),
                 status: statusOf(n.id),
               },
@@ -266,7 +370,7 @@ export function BoardCanvas({ board, table, outputRoot, update, openBoardPath, t
         }
       }
     });
-  }, [board, table, outputRoot, selectedNodes, measured, statusOf, locked, discovery, highlighted, missing, focusPrompt]);
+  }, [board, table, outputRoot, selectedNodes, measured, statusOf, locked, discovery, highlighted, missing, focusPrompt, alphaByNode]);
 
   const edges = useMemo<Edge[]>(
     () =>
@@ -277,6 +381,7 @@ export function BoardCanvas({ board, table, outputRoot, update, openBoardPath, t
         target: e.to[0],
         targetHandle: e.to[1],
         selected: selectedEdges.has(edgeId(e)),
+        label: (e.region?.rects.length ?? 0) > 0 ? `${e.region!.rects.length} 区域` : undefined,
         deletable: !e.system,
         selectable: !e.system,
         className: [e.system ? "edge-system" : e.to[1] === "negative" ? "edge-negative" : "", highlighted.edges.has(e) ? "edge-lineage" : ""].join(" ").trim() || undefined,
@@ -581,6 +686,7 @@ export function BoardCanvas({ board, table, outputRoot, update, openBoardPath, t
           <Controls />
           <MiniMap pannable zoomable />
         </ReactFlow>
+        {preview && <PreviewDialog key={preview.nonce} req={preview.req} toast={toast} onClose={() => setPreview(null)} />}
       </div>
     </BoardContext.Provider>
   );

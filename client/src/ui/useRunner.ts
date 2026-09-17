@@ -8,12 +8,14 @@ import * as Q from "../core/queue";
 import { CancelledError, executeJob, failureLabel, prepareJob, prepareRegenerate, writeJob, type PreparedJob, type RunDeps, type TaskStatus } from "../core/run";
 import { tableDigest, writeOutcome, type TaskOutcome } from "../core/taskDir";
 import { httpFetch, ipc } from "../shell/ipc";
+import { composeOverlay } from "../shell/overlay";
 
 const deps: RunDeps = {
   readBytes: ipc.readFileBytes,
   writeNewFile: ipc.writeNewFile,
   fetch: httpFetch,
   now: () => new Date(),
+  composeOverlay,
 };
 
 export interface RunTarget {

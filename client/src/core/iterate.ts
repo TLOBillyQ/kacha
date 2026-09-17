@@ -30,6 +30,7 @@ const isImageNode = (n: BoardNode | undefined): n is Extract<BoardNode, { type: 
 /**
  * 以此继续编辑：新任务节点按选中顺序接入触发节点的图片，新空提示词节点接正向，负向扇出复用源任务的。
  * 模型 / 尺寸继承被点击的触发节点的源任务（产出任务已删则按结果记录）；源模型不支持编辑或触发于参考图时用默认编辑模型。不带区域指示。
+ * sourceLayers：节点 id → 图层序号（1 起）时接该图层而非合成结果（规格第 7 节）。
  * 新任务与触发节点同行，横向在最右侧的选中节点右边。
  */
 export function continueEditing(
@@ -39,6 +40,7 @@ export function continueEditing(
   sourceIds: string[],
   triggerId: string,
   ids: { taskId: string; promptId: string },
+  sourceLayers: ReadonlyMap<string, number> | null = null,
 ): Outcome {
   const sources = sourceIds.map((id) => board.nodes.find((n) => n.id === id)).filter(isImageNode);
   if (!sources.length) return { ok: false, reason: "先选中结果或参考图节点" };
@@ -81,7 +83,7 @@ export function continueEditing(
   const edges = [
     ...board.edges,
     userEdge(prompt.id, "out", task.id, "positive"),
-    ...sources.map((s, i) => userEdge(s.id, "out", task.id, `${IMAGE_PORT_PREFIX}${i}`)),
+    ...sources.map((s, i) => ({ ...userEdge(s.id, "out", task.id, `${IMAGE_PORT_PREFIX}${i}`), source_layer: sourceLayers?.get(s.id) ?? null })),
   ];
   const negative = producer && board.edges.find((e) => e.to[0] === producer.id && e.to[1] === "negative");
   if (negative && isSupported(model.workflows.image_edit.supports_negative_prompt)) edges.push(userEdge(negative.from[0], negative.from[1], task.id, "negative"));
@@ -95,13 +97,15 @@ export function addAsReferenceTarget(board: Board, selectedIds: string[]): { ok:
   return tasks.length === 1 ? { ok: true, taskId: tasks[0] } : { ok: false, reason: "先选一个生成任务" };
 }
 
-/** 加为参考图：结果节点接到目标任务的下一个空图片端口；不新增节点、不改参数（目标因图片端口集合变化而变脏）。 */
-export function addAsReference(board: Board, table: CapabilityTable, resultId: string, taskId: string): Outcome {
+/** 加为参考图：结果节点接到目标任务的下一个空图片端口；不新增节点、不改参数（目标因图片端口集合变化而变脏）。sourceLayer（1 起）= 接该图层而非合成结果。 */
+export function addAsReference(board: Board, table: CapabilityTable, resultId: string, taskId: string, sourceLayer: number | null = null): Outcome {
   if (board.nodes.find((n) => n.id === resultId)?.type !== "result") return { ok: false, reason: "只能把结果节点加为参考图" };
   const c = { source: resultId, sourceHandle: "out", target: taskId, targetHandle: `${IMAGE_PORT_PREFIX}${imageEdges(board, taskId).length}` };
   const verdict = canConnect(board, table, c);
   if (!verdict.ok) return verdict;
-  return { ok: true, board: syncImagePorts({ ...board, edges: connect(board, c) }) };
+  let edges = connect(board, c);
+  if (sourceLayer !== null) edges = edges.map((e, i) => (i === edges.length - 1 ? { ...e, source_layer: sourceLayer } : e));
+  return { ok: true, board: syncImagePorts({ ...board, edges }) };
 }
 
 /** 谱系：选中节点沿连线的上游全链与下游全链（并集），不含兄弟旁支。 */

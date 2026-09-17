@@ -206,7 +206,7 @@ describe("网关适配器：夹具响应回放", () => {
       if (exchange.response.status === 200) {
         const outcome = await run;
         if (exchange.request.path === "/v1/models") expect(outcome).toContain("qwen-image-3.0-pro");
-        else expect(await fetchResultImage(fetch, (outcome as Awaited<ReturnType<typeof generate>>).image)).toEqual(PNG_BYTES);
+        else expect(await fetchResultImage(fetch, (outcome as Awaited<ReturnType<typeof generate>>).images[0])).toEqual(PNG_BYTES);
       } else {
         const error = await run.then(
           () => null,
