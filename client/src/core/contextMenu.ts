@@ -59,19 +59,27 @@ export function menuItems(target: MenuTarget, facts: MenuFacts): MenuItem[] {
     case "node": {
       const { board, selected, locked } = facts;
       const node = board.nodes.find((n) => n.id === target.nodeId);
+      // 加为参考图的目标是选区里恰好一个任务；单选结果节点时必然置灰，多选（先选任务再加选结果）才可用。
+      const addAsReferenceItem = () => {
+        const refTarget = addAsReferenceTarget(board, [...selected]);
+        return item("addAsReference", "加为参考图", refTarget.ok ? (locked.has(refTarget.taskId) ? LOCKED_HINT : null) : refTarget.reason);
+      };
       if (selected.size > 1 && selected.has(target.nodeId)) {
         const hasImage = board.nodes.some((n) => selected.has(n.id) && (n.type === "reference" || n.type === "result"));
-        return [...(hasImage ? [item("continueEditing", "以此继续编辑")] : []), item("delete", countLabel("删除", selected.size))];
+        return [
+          ...(hasImage ? [item("continueEditing", "以此继续编辑")] : []),
+          ...(node?.type === "result" ? [addAsReferenceItem()] : []),
+          item("delete", countLabel("删除", selected.size)),
+        ];
       }
       switch (node?.type) {
         case "reference":
           return [item("preview", "放大预览"), item("continueEditing", "以此继续编辑"), item("delete", "删除")];
         case "result": {
-          const refTarget = addAsReferenceTarget(board, [...selected]);
           return [
             item("preview", "放大预览"),
             item("continueEditing", "以此继续编辑"),
-            item("addAsReference", "加为参考图", refTarget.ok ? (locked.has(refTarget.taskId) ? LOCKED_HINT : null) : refTarget.reason),
+            addAsReferenceItem(),
             item("generateVariant", "生成变体", variantBlocker(board, node.id, locked)),
             item("delete", "删除"),
           ];

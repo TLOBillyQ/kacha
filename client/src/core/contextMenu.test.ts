@@ -159,6 +159,16 @@ describe("右键与选区", () => {
     ]);
   });
 
+  it("多选时右键结果节点、选区恰含一个任务：另给加为参考图", () => {
+    const b = board([result("res"), task("t")]);
+    const items = menuItems({ kind: "node", nodeId: "res" }, facts({ board: b, selected: new Set(["res", "t"]) }));
+    expect(summary(items)).toEqual([
+      ["continueEditing", "以此继续编辑", null],
+      ["addAsReference", "加为参考图", null],
+      ["delete", "删除 2 个节点", null],
+    ]);
+  });
+
   it("多选里没有图片节点：只给删除", () => {
     const b = board([task("t1"), task("t2")]);
     const items = menuItems({ kind: "node", nodeId: "t1" }, facts({ board: b, selected: new Set(["t1", "t2"]) }));
