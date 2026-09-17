@@ -3,7 +3,7 @@
 import { ipc } from "./ipc";
 
 // 与 src-tauri/src/logger.rs 的 EVENT_KINDS 保持一致；未知类别会被外壳拒绝。
-export type LogKind = "task" | "connection" | "download" | "system" | "board_save_failed" | "relocate" | "rate_limit" | "queue_dispatch";
+export type LogKind = "task" | "connection" | "download" | "system" | "board_save_failed" | "relocate" | "rate_limit" | "queue_dispatch" | "board_pack";
 
 export function logEvent(kind: LogKind, fields: Record<string, unknown>): void {
   void ipc.logEvent(kind, fields).catch(() => undefined);

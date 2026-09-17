@@ -31,6 +31,22 @@ export interface PackageEntry {
   contains_prompt: boolean;
 }
 
+export interface PackExportSpec {
+  manifest: string;
+  board_entry: string;
+  board_text: string;
+  task_dirs: string[];
+  files: { source: string; entry: string }[];
+}
+
+export interface PackInspected {
+  manifest: string | null;
+  boards: Record<string, string>;
+}
+
+/** 与 src-tauri/src/board_pack.rs 的 CANCELLED 一致：取消时命令以此 reject。 */
+export const PACK_CANCELLED = "已取消";
+
 export const ipc = {
   appPaths: () => invoke<AppPaths>("app_paths"),
   startupArgs: () => invoke<string[]>("startup_args"),
@@ -52,6 +68,12 @@ export const ipc = {
   diagnosticsPreview: (outputRoot: string | null, openBoards: string[]) => invoke<PackageEntry[]>("diagnostics_preview", { outputRoot, openBoards }),
   diagnosticsExport: (outputRoot: string | null, openBoards: string[], target: string, include: string[]) =>
     invoke<PackageEntry[]>("diagnostics_export", { outputRoot, openBoards, target, include }),
+  boardPackExport: (outputRoot: string, target: string, spec: PackExportSpec) =>
+    invoke<{ task_dirs: number; bytes: number }>("board_pack_export", { outputRoot, target, spec }),
+  boardPackInspect: (pack: string) => invoke<PackInspected>("board_pack_inspect", { pack }),
+  boardPackImport: (pack: string, outputRoot: string) =>
+    invoke<{ imported: number; skipped: number; conflicts: string[]; bytes: number }>("board_pack_import", { pack, outputRoot }),
+  boardPackCancel: () => invoke<void>("board_pack_cancel"),
   /** 系统凭据库；不可用时 reject（调用方退回会话内存）。 */
   secretGet: () => invoke<string | null>("secret_get"),
   secretSet: (key: string) => invoke<void>("secret_set", { key }),

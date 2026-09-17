@@ -104,6 +104,8 @@ interface Props {
   onCancelTask: (taskId: string) => void;
   /** fromTaskId：生成变体时按该结果的任务目录重跑；缺省 = 按上次提交。 */
   onRegenerate: (taskId: string, fromTaskId?: string) => void;
+  /** 导出本画板为画板包。 */
+  onExportPack: () => void;
   /** 运行指示跳转：居中并选中该节点；nonce 变化即再跳一次。 */
   focus: { nodeId: string; nonce: number } | null;
 }
@@ -133,6 +135,7 @@ export function BoardCanvas({
   onRun,
   onCancelTask,
   onRegenerate,
+  onExportPack,
   focus,
 }: Props) {
   const flow = useReactFlow();
@@ -851,6 +854,7 @@ export function BoardCanvas({
     else if (action === "addReferences") void pickReferences(at);
     else if (action === "undo") undo();
     else if (action === "redo") redo();
+    else if (action === "exportPack") onExportPack();
     else if (target.kind === "node") {
       const id = target.nodeId;
       if (action === "preview") actions.previewNode(id);

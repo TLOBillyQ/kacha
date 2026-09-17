@@ -188,6 +188,21 @@ export function useBoardSessions(outputRoot: string | null) {
     await flush(key);
   }, [outputRoot, flush, setSessions]);
 
+  /** 导入的画板写进输出根目录画板目录：同名沿用 (2) 自动改名、永不覆盖；写好后在新标签页打开。 */
+  const addImportedBoard = useCallback(
+    async (board: Board): Promise<string> => {
+      if (!outputRoot) throw new Error("输出根目录未就绪");
+      const dir = boardsDir(outputRoot);
+      const onDisk = await ipc.listBoardNames(dir);
+      const openHere = sessionsRef.current.filter((s) => samePath(dirname(s.path), dir)).map((s) => basename(s.path));
+      const path = joinPath(dir, uniqueBoardFileName(board.title, [...onDisk, ...openHere]));
+      await ipc.writeBoard(path, serializeBoard(board));
+      await openPath(path, true);
+      return path;
+    },
+    [outputRoot, openPath],
+  );
+
   const closeBoard = useCallback(
     async (key: string) => {
       const saver = savers.current.get(key);
@@ -260,6 +275,7 @@ export function useBoardSessions(outputRoot: string | null) {
     setActiveKey,
     openPath,
     createBoard,
+    addImportedBoard,
     closeBoard,
     renameBoard,
     saveAs,

@@ -1,5 +1,6 @@
 //! Tauri 壳：只承担日志器、凭据库、单实例、文件系统原子写与系统对话框等原生职责；业务逻辑在前端 TypeScript（规格第 2 节）。
 
+mod board_pack;
 mod diagnostics;
 mod image_info;
 mod logger;
@@ -10,6 +11,7 @@ mod store;
 mod webview2;
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 use serde::Serialize;
@@ -158,6 +160,50 @@ fn diagnostics_export(
     diagnostics::export(&diagnostic_sources(&app, output_root, open_boards)?, Path::new(&target), &include, &version).map_err(err)
 }
 
+/// 画板包导出 / 导入的取消标记；同一时间只有一个模态进度，开始时复位。
+#[derive(Default)]
+struct PackCancel(AtomicBool);
+
+#[derive(Clone, Serialize)]
+struct PackProgress {
+    done: u64,
+    total: u64,
+}
+
+fn emit_pack_progress(app: &tauri::AppHandle) -> impl Fn(u64, u64) + '_ {
+    move |done, total| {
+        let _ = app.emit("board-pack-progress", PackProgress { done, total });
+    }
+}
+
+#[tauri::command(async)]
+fn board_pack_export(
+    app: tauri::AppHandle,
+    cancel: tauri::State<'_, PackCancel>,
+    output_root: String,
+    target: String,
+    spec: board_pack::ExportSpec,
+) -> Result<board_pack::ExportReport, String> {
+    cancel.0.store(false, Ordering::Relaxed);
+    board_pack::export(Path::new(&output_root), &spec, Path::new(&target), &emit_pack_progress(&app), &cancel.0).map_err(err)
+}
+
+#[tauri::command(async)]
+fn board_pack_inspect(pack: String) -> Result<board_pack::Inspected, String> {
+    board_pack::inspect(Path::new(&pack)).map_err(err)
+}
+
+#[tauri::command(async)]
+fn board_pack_import(app: tauri::AppHandle, cancel: tauri::State<'_, PackCancel>, pack: String, output_root: String) -> Result<board_pack::ImportReport, String> {
+    cancel.0.store(false, Ordering::Relaxed);
+    board_pack::import(Path::new(&pack), Path::new(&output_root), &emit_pack_progress(&app), &cancel.0).map_err(err)
+}
+
+#[tauri::command]
+fn board_pack_cancel(cancel: tauri::State<PackCancel>) {
+    cancel.0.store(true, Ordering::Relaxed);
+}
+
 #[tauri::command]
 fn secret_get() -> Result<Option<String>, String> {
     secret::get()
@@ -227,6 +273,7 @@ pub fn run() {
     }
     tauri::Builder::default()
         .manage(OpenedPaths::default())
+        .manage(PackCancel::default())
         // 单实例必须最先注册：第二实例把参数转交第一实例后直接退出，不用锁文件。
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             let args: Vec<String> = argv.into_iter().skip(1).collect();
@@ -268,6 +315,10 @@ pub fn run() {
             log_event,
             diagnostics_preview,
             diagnostics_export,
+            board_pack_export,
+            board_pack_inspect,
+            board_pack_import,
+            board_pack_cancel,
             secret_get,
             secret_set,
             secret_delete,

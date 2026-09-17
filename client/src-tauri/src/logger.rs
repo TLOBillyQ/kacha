@@ -30,6 +30,7 @@ pub const EVENT_KINDS: &[&str] = &[
     "relocate",
     "rate_limit",
     "queue_dispatch",
+    "board_pack",
 ];
 
 fn segment_path(dir: &Path, index: usize) -> PathBuf {

@@ -26,7 +26,8 @@ export type BoardAction =
   | "regenerate"
   | "toggleSettings"
   | "disconnect"
-  | "editRegion";
+  | "editRegion"
+  | "exportPack";
 
 export interface MenuItem {
   action: BoardAction;
@@ -59,6 +60,7 @@ export function menuItems(target: MenuTarget, facts: MenuFacts): MenuItem[] {
         item("addReferences", "添加参考图…"),
         facts.undoLabel ? item("undo", `撤销 ${facts.undoLabel}`) : item("undo", "撤销", "没有可撤销的操作"),
         facts.redoLabel ? item("redo", `重做 ${facts.redoLabel}`) : item("redo", "重做", "没有可重做的操作"),
+        item("exportPack", "导出画板包…"),
       ];
     case "node": {
       const { board, selected, locked } = facts;

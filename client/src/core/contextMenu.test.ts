@@ -17,7 +17,7 @@ function facts(patch: Partial<MenuFacts> = {}): MenuFacts {
 const summary = (items: ReturnType<typeof menuItems>) => items.map((i) => [i.action, i.label, i.disabledReason]);
 
 describe("空白处菜单", () => {
-  it("给出新建三项与撤销 / 重做，撤销文案带上一步描述", () => {
+  it("给出新建三项、撤销 / 重做与导出画板包，撤销文案带上一步描述", () => {
     const items = menuItems({ kind: "pane" }, facts({ undoLabel: "移动 2 个节点", redoLabel: "新建提示词" }));
     expect(summary(items)).toEqual([
       ["newPrompt", "新建提示词", null],
@@ -25,12 +25,13 @@ describe("空白处菜单", () => {
       ["addReferences", "添加参考图…", null],
       ["undo", "撤销 移动 2 个节点", null],
       ["redo", "重做 新建提示词", null],
+      ["exportPack", "导出画板包…", null],
     ]);
   });
 
   it("无可撤销 / 可重做时两项置灰", () => {
     const items = menuItems({ kind: "pane" }, facts());
-    expect(summary(items).slice(3)).toEqual([
+    expect(summary(items).slice(3, 5)).toEqual([
       ["undo", "撤销", "没有可撤销的操作"],
       ["redo", "重做", "没有可重做的操作"],
     ]);

@@ -16,7 +16,7 @@ pub const BOARD_EXTENSION: &str = ".ugcboard.json";
 
 static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-fn temp_path_for(target: &Path) -> PathBuf {
+pub(crate) fn temp_path_for(target: &Path) -> PathBuf {
     let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
     let n = TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
     let name = target.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
