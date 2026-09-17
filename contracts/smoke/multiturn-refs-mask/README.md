@@ -14,6 +14,11 @@ export SMOKE_MODEL='seedream-xxx'          # 默认 qwen-image-3.0-pro
 for k in tu image picture tuzh; do for n in 2 3; do .venv/bin/python batch2.py $k $n; done; done
 for w in maskfield ov1 ov2 ctl hard hardctl; do .venv/bin/python batch3.py $w; done
 .venv/bin/python score.py                  # 主色占比；最终仍需人眼看 out/*/img0.png
+# Seedream（#83）：probe.py 已确认 input.messages 被丢弃，改用 seedream.py（顶层 image 数组）
+for k in tu image tuzh; do for n in 2 3; do .venv/bin/python seedream.py refs $k $n; done; done
+for w in marked overlay bbox; do for r in 1 2; do .venv/bin/python seedream.py region $w $r; done; done; .venv/bin/python seedream.py region ctl 1
+.venv/bin/python seedream.py limit 10; .venv/bin/python seedream.py limit 11   # lite 用 14 / 15
+.venv/bin/python seedream.py burst 10
 ```
 
 串行跑：网关并发 6～10 时 429 且无 Retry-After。每次调用把原始响应与出图存 `out/<name>/`，脱敏交互存 `fixtures/<name>.json`；整理进 `contracts/fixtures/<日期>/` 前须再把 `mask` 等非标准字段的 data-URL 替换为 `[REDACTED_IMAGE]`（见 2026-09-16 夹具）。`in/`、`out/`、`fixtures/`、`.venv/` 不入库。

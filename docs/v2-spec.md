@@ -1,6 +1,6 @@
 # v2 二次开发规格：节点图画布式生图工作台
 
-> **状态（2026-09-16）**：决议齐备，可直接交给 to-tickets 切片实施。实施、走查、发布脚本重写不在本规格范围，另起实施地图。凡标「**待 #83 确认**」的规则以 Seedream 官方文档假定值写成，实测后回填（见第 14 节）。
+> **状态（2026-09-16）**：决议齐备，可直接交给 to-tickets 切片实施。实施、走查、发布脚本重写不在本规格范围，另起实施地图。Seedream 相关规则已按 #83 实测（2026-09-17）回填，结果与遗留项见第 14 节。
 
 本文档汇编 [v2 重构地图：节点图画布式生图工作台](http://lzxsvn:3000/qinyuanj/ugc-image-tool/issues/54) 全部已锁定决议。一个决议只在一张票里有完整讨论，本文只给规则本身；要看取舍与证据，沿链接回票。
 
@@ -40,7 +40,7 @@
 | 0003 明文 HTTP 仅限可信网络 | 不变。设置面板保留风险提示 |
 | 0004 本地能力表 | 概念保留，结构按第 10 节重做 |
 | 0005 档位字段表达上架 | `tier` 字段与「有档位 = 上架」语义保留；UI 部分（分段开关、记住档位）由第 12 节取代 |
-| 0006 图片编辑 JSON 透传 | qwen 系列不变；Seedream 请求形态待 #83 |
+| 0006 图片编辑 JSON 透传 | qwen 系列不变；Seedream 走 `/v1/images/generations` 顶层 `image` 数组（#83） |
 | 0007 Gitea Release 唯一分发、不签名 | 不变，见第 13 节 |
 | 0008 Tauri 2 + React Flow | v2 技术路线 |
 | 0009 节点图画布范式 | 本轮新增 |
@@ -140,7 +140,7 @@
 - **多轮 = 结果回灌**：网关对 `input.messages` 只接受单条 user 消息（#71 实测 400）；Seedream 单次无状态（文档）。上一轮结果接回图片端口重提，不依赖任何会话参数。
 - **「图N」改写与校验**（#69/#71）：用户提示词里 `@图N` → 中文提示词改写为「图N」，英文改写为 `Image N`；沿用数量顺序前缀，按提示词语言：中文「本次提供 N 张参考图，按顺序为图1、图2…」，英文「This request provides N reference images, in order: Image 1, Image 2…」（与 `en_verified` 冒烟所用措辞一致）。编辑与连线时实时角标：引用序号 > 已接端口数 = 红，有线未被引用 = 黄（区域端口不参与黄检查，注入句算引用）；二次确认弹窗红为硬阻断，黄仅警告。**绝不自动改写用户文本**。英文 `en_verified = 待测` 的模型仍改写为 `Image N`，二次确认提示「该模型英文序号未验证」。
 - **qwen 系列请求**：沿 ADR 0006 与 `docs/contracts/team-gateway-contract.md`：文生图 `POST /v1/images/generations`；图片编辑 `POST /v1/images/edits` JSON，参考图 data-URL 按序进 `input.messages[0].content`，`parameters.size` 星号格式，`parameters.n` 固定 1，`fixed_params` 原样合并；出图真源 `metadata.output.choices[].message.content[].image`，兼容 URL 与 base64。
-- **Seedream 系列请求**：网关透传路径未探明，适配器按模型可配「请求形态」，四种候选见 `contracts/smoke/multiturn-refs-mask/probe.py`；**待 #83 确认**。
+- **Seedream 系列请求**（#83 实测）：`POST /v1/images/generations`，顶层 `model` / `prompt` / `size` / `image`（data-URL 数组，按序即图N）/ `response_format:"url"` + `fixed_params`；出图在顶层 `data[].url`。qwen 的 `input.messages` 形态会被静默丢图，不可用。适配器按能力表 `request_shape` 分派。夹具 `contracts/fixtures/2026-09-17-team-gateway-seedream/`。
 - **错误映射**：401 鉴权失败；429 限流（自动退避，第 8 节）；其他 4xx 网关拒绝；5xx 服务错误；网络不可达并入失败。不自动重发生成请求（429 除外），不用幂等键、不做任务查询、不依赖 `Retry-After`。
 - 夹具：`contracts/fixtures/2026-08-17-team-gateway/`、`2026-08-29-team-gateway-edit-json/`、`2026-08-31-team-gateway-edit-boundaries/`、`2026-09-16-team-gateway-multiturn-refs-mask/`。
 
@@ -159,14 +159,14 @@
 
 | 渲染方式 | 发送形态 | 占名额 | 区域端口 | 注入 | 派生图 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| 高亮叠加参考图（qwen） | 原图照发；叠加图作为紧随其后的一张参考图 | 占 1 | 自动长出、锁定、序号顺延 | 末尾追加固定句（能力表模板，`{colors}` 填该图各区域颜色） | 叠加图：按区域编号分色（紫 RGB(128,0,255) / 黄 RGB(255,220,0) / 洋红 RGB(255,0,160)）50% 不透明，多矩形合成一张 | 已实测（#71；多区域分色 2026-09-17） |
-| 图上标记（Seedream 全系） | **标记图替换原图**发送 | 不占 | 无 | 末尾追加固定句，语义「只修改图N红框内的区域，其余保持不变」 | 标记图：红色 RGB(255,0,0) 实线矩形，线宽 = 短边 0.5%（最小 2 px），无箭头无文字，多矩形同一张 | 待 #83 确认 |
-| 坐标标签（Seedream 5.0 pro） | 原图照发 | 不占 | 无 | 末尾追加一句「图N <bbox>x1 y1 x2 y2</bbox> 区域内按上述要求修改，其余保持不变」；多矩形同一句顿号并列，每个带「图N」；0～1 → 0～999 取 `round(v·999)`，保证 x1≤x2、y1≤y2；只用 `<bbox>` 不用 `<point>` | 无 | 待 #83 确认 |
+| 高亮叠加参考图（qwen、Seedream 5.0 pro / lite） | 原图照发；叠加图作为紧随其后的一张参考图 | 占 1 | 自动长出、锁定、序号顺延 | 末尾追加固定句（能力表模板，`{colors}` 填该图各区域颜色） | 叠加图：按区域编号分色（紫 RGB(128,0,255) / 黄 RGB(255,220,0) / 洋红 RGB(255,0,160)）50% 不透明，多矩形合成一张 | 已实测（#71；多区域分色 2026-09-17；Seedream 单区域 #83） |
+| 图上标记（Seedream 5.0 pro / lite） | **标记图替换原图**发送 | 不占 | 无 | 末尾追加固定句，语义「只修改图N红框内的区域，其余保持不变」 | 标记图：红色 RGB(255,0,0) 实线矩形，线宽 = 短边 0.5%（最小 2 px），无箭头无文字，多矩形同一张 | 已实测单区域（#83） |
+| 坐标标签（Seedream 5.0 pro） | 原图照发 | 不占 | 无 | 末尾追加一句「图N <bbox>x1 y1 x2 y2</bbox> 区域内按上述要求修改，其余保持不变」；多矩形同一句顿号并列，每个带「图N」；0～1 → 0～999 取 `round(v·999)`，保证 x1≤x2、y1≤y2；只用 `<bbox>` 不用 `<point>` | 无 | 已实测单区域（#83；lite 也命中但文档不支持，保守不开） |
 
 - 画法与颜色是客户端常量，不进能力表、不开放配置（改了要重测）。
 - 提示词节点文本不变；二次确认与任务快照记录完整发送文本。
 - **区域编号**：一个任务内的区域按图片端口顺序、再按框选先后连续编号为区域1、区域2…，**上限 3 个**（超出标红不可运行）；每个编号固定一种颜色，预览框与节点缩略图按该色回显并标「区域N」。提示词里写「区域N」/ `Region N`，发送时改写为「紫色区域」/ `the purple region`（只改发送文本）；有区域时引用越界编号标红。同色多区域实测 0/3 对应正确（模型按阅读顺序猜），分色后 3/3。
-- 模型同时支持多种时固定优先级 **坐标标签 > 图上标记 > 高亮叠加**，UI 不给切换。
+- 模型同时支持多种时固定优先级 **坐标标签 > 图上标记 > 高亮叠加**，UI 不给切换（即 pro 走坐标标签、lite 走图上标记）。#83 三种单独均命中，未做横向对比，优先级维持原设计。
 - 超名额（含换模型导致上限下降）：连线保留、节点标红不可运行，二次确认列原因，绝不自动删线。
 - 换模型跨渲染方式：区域端口长出或消失、序号顺延或回缩，走通用「图N」校验；区域数据保留。
 
@@ -185,7 +185,7 @@
 - 接回作参考图：侧栏发起「选底图 / 选某一图层」，连线记 `source_layer`，谱系仍指向该结果节点；图层线可挂区域指示。
 - 导出：保存底图 / 保存该图层 / 保存全部图层（文件夹：底图 + 序号图层 PNG + `layers.json` 含 `z_index` / `bounding_box`）。不做 PSD。
 - 换模型：开关保留、节点标红不可运行；「生成变体」「重新生成」按快照原样重跑（含开关）。
-- 状态：qwen 不支持；Seedream 5.0 pro 待测·文档假定（**待 #83 确认**）；其余 Seedream 不支持。
+- 状态：qwen 不支持；Seedream 5.0 pro 待测（#83 未测，文档未给确切参数形态）；lite 不支持。
 
 ### 7.2 透明背景（`transparent_background`，模型级）
 
@@ -298,23 +298,23 @@
 | `model_id`、`display_name` | string | |
 | `tier` | 旗舰 / 经济 / 缺省 | 缺省 = 不上架（ADR 0005） |
 | `help_url` | string | 官方文档链接，露出在任务节点模型说明浮层「查看官方文档」，系统浏览器打开；缺省不显示 |
-| `request_shape` | enum | 网关请求形态；qwen = `/v1/images/edits` + `input.messages`；Seedream **待 #83 确认** |
-| `fixed_params` | 键值对 | 提交时原样合并进请求。qwen：`watermark:false`；Seedream 5.0：`watermark:false, output_format:"png"`；lite/4.x 另加 `sequential_image_generation:"disabled"` |
+| `request_shape` | enum | 网关请求形态；qwen = `/v1/images/edits` + `input.messages`；Seedream = `seedream_images_generations`（`/v1/images/generations` + 顶层 `image` 数组，#83） |
+| `fixed_params` | 键值对 | 提交时原样合并进请求。qwen：`watermark:false`；Seedream 5.0：`watermark:false, output_format:"png"`；lite 另加 `sequential_image_generation:"disabled"`（#83 实测均生效 / 被接受） |
 | `input_image_rule` | 对象 | 格式集合、最大字节、总像素范围、最短边、宽高比范围；连线 / 导入时预校验，违反在参考图节点标黄 |
-| `reference_phrasing` | 对象 | 中文「图N」全模型通用；`en_verified` 三态（qwen 支持，Seedream 待测） |
-| `region_hint` | 集合，每取值三态 | 取值 ∈ {高亮叠加参考图, 图上标记, 坐标标签}；占名额由取值推导（仅高亮叠加占 1）。qwen：高亮叠加 = 支持；Seedream pro：图上标记、坐标标签 = 待测·文档假定；lite：图上标记 = 待测·文档假定 |
-| `region_hint_phrasing` | 取值 × {zh, en} 模板 | 固定句模板；qwen 措辞取 #71 夹具，Seedream **待 #83 确认** |
+| `reference_phrasing` | 对象 | 中文「图N」全模型通用；`en_verified` 三态（qwen、Seedream 5.0 pro / lite 均支持） |
+| `region_hint` | 集合，每取值三态 | 取值 ∈ {高亮叠加参考图, 图上标记, 坐标标签}；占名额由取值推导（仅高亮叠加占 1）。qwen：高亮叠加 = 支持；Seedream pro：三种均支持；lite：高亮叠加、图上标记 = 支持，坐标标签 = 不支持（#83） |
+| `region_hint_phrasing` | 取值 × {zh, en} 模板 | 固定句模板；qwen 措辞取 #71 夹具；Seedream 定稿措辞随 #95 实现，冒烟所用句式见 `contracts/smoke/multiturn-refs-mask/seedream.py` |
 | `native_mask` | 三态 | 全部不支持 |
-| `transparent_background` | 三态 | qwen 不支持；Seedream 5.0 pro 待测·文档假定；其余不支持 |
+| `transparent_background` | 三态 | qwen 不支持；Seedream 5.0 pro 待测；lite 不支持 |
 
 **工作流级**（`text_to_image` / `image_edit`，Seedream 单端点两个工作流填相同约束）
 
 | 字段 | 说明 |
 | --- | --- |
 | `supports_negative_prompt` | qwen 支持；Seedream 全系不支持 → 负向端口不露出 |
-| `min_references` / `max_references` | qwen 编辑 1–3；Seedream 5.0 pro 0–10；lite / 4.5 / 4.0 0–14。Autogrow 上限 |
+| `min_references` / `max_references` | qwen 编辑 1–3；Seedream 5.0 pro 0–10、lite 0–14（#83 实测超限 HTTP 400）。Autogrow 上限 |
 | `size_rule` | **档位 × 比例 → 像素**映射表 + 可选自定义像素区间（总像素、宽高比范围）。UI 统一「档位 + 比例」两个下拉，客户端换算为像素发送。qwen 现有预设归为 1K / 2K；Seedream 按官方映射表填 |
-| `layer_decomposition` | 三态；qwen 不支持；Seedream 5.0 pro 待测·文档假定；其余不支持 |
+| `layer_decomposition` | 三态；qwen 不支持；Seedream 5.0 pro 待测；lite 不支持 |
 
 **删除**：`min_images` / `max_images`（出图数量）、`extra_params`（改 `fixed_params`）、`sequential_generation` / `stream` / `web_search`。
 
@@ -330,7 +330,7 @@
 ### 10.5 初值与上架
 
 - qwen-image-3.0-pro（旗舰）、qwen-image-3.0（经济）：按 v1 实测值上架。
-- Seedream 5.0 pro → 旗舰、5.0 lite → 经济，但 #83 通过前**不赋档位**（不上架）；4.5 / 4.0 只录能力、不上架。
+- Seedream 5.0 pro（`doubao-seedream-5-0-pro-260628`）→ 旗舰、5.0 lite（`doubao-seedream-5-0-lite-260128`，网关不认正式 ID `-5-0-260128`）→ 经济，#83 通过已赋档位；提交链路待 #95 接入请求形态。4.5 / 4.0 已移除。
 - `help_url` 初值：qwen 系列 https://platform.qianwenai.com/docs/developer-guides/image-generation/image-editing；Seedream 系列 https://docs.volcengine.com/docs/82379/1829186?lang=zh 。
 - 资料：`docs/research/seedream-5.md`。
 
@@ -355,26 +355,26 @@
 - **macOS**：`.app` 打 zip，ad-hoc 签名，仅 Apple Silicon，Gatekeeper 绕过写进发布说明。
 - macOS 性能与包体数字在实施切片前补测。
 
-## 14. 待 #83 实测确认清单
+## 14. Seedream 实测结果（#83）
 
-[网关冒烟复测：seedream 5.0 pro / lite](http://lzxsvn:3000/qinyuanj/ugc-image-tool/issues/83) 跑通后回填以下项；回填前 Seedream 四个模型不上架、相关入口在 UI 上不露出：
+[网关冒烟复测：seedream 5.0 pro / lite](http://lzxsvn:3000/qinyuanj/ugc-image-tool/issues/83) 已于 2026-09-17 跑通，夹具 `contracts/fixtures/2026-09-17-team-gateway-seedream/`，合成几何图形、人眼核对：
 
-1. `request_shape`：四种形态哪种被网关接受；lite 用 `size:"2K"` 档位模式。
-2. 多轮 `input.messages` 是否可用（假定不可用，结果回灌）；若可用也不改设计。
-3. `reference_phrasing.en_verified`：`Image N` 3 张参考图命中率。
-4. `region_hint`：图上标记（标记图替换原图）是否有效；pro 的 `<bbox>` 是否透传；高亮叠加对 Seedream 是否有效（当前不列入）。三态由「待测·文档假定」翻成支持 / 不支持。
-5. `region_hint_phrasing`：图上标记与坐标标签的固定句措辞。
-6. 优先级默认值「坐标标签 > 图上标记 > 高亮叠加」是否成立。
-7. `max_references` pro 10 / lite 14；429 阈值是否与 qwen 相同。
-8. `layer_decomposition`（pro，两工作流）、`transparent_background`（pro）翻三态。
-9. 通过后 pro 赋旗舰档、lite 赋经济档。
+1. `request_shape`：顶层 `image` 数组在 `/v1/images/generations` 与 `/v1/images/edits` 均生效，定为前者；`input.messages` 被静默丢弃。出图在顶层 `data[].url`。
+2. 多轮：不可用，结果回灌。
+3. `reference_phrasing.en_verified`：「图N」「Image N」「图一/二/三」3 张参考图下两模型各 6/6 → 支持。
+4. `region_hint`：高亮叠加、图上标记两模型各 2/2；`<bbox>` pro 2/2、lite 2/2（lite 文档不支持，保守标不支持）；无指示对照未命中目标。
+5. `region_hint_phrasing`：冒烟句式有效，定稿随 #95。
+6. 优先级：三种单独均命中，未做横向对比，维持「坐标标签 > 图上标记 > 高亮叠加」。
+7. `max_references`：pro 10 / lite 14，超限 HTTP 400；并发 10 未触发 429（阈值未探）。
+8. `layer_decomposition`、`transparent_background`：未测（文档未给确切参数形态），pro 仍为待测。
+9. 已赋档位：pro 旗舰、lite 经济（a618167）；请求形态实现归 #95。
 
 ## 15. 建议切片顺序（非约束，供实施地图参考）
 
 1. Tauri 壳 + React Flow 画板 + 节点四型 + 画板文件读写、单实例、自动保存（第 2、3、9 节）。
 2. TS 网关适配（qwen）+ 能力表新 schema + 「图N」改写校验 + 运行编排（第 5、8、10 节）。
 3. 迭代动作与布局 + 高级设置 / 密钥 / 日志 / 诊断包（第 4、12 节）。
-4. 区域指示（高亮叠加先行）+ 图层拆分 / 透明背景 UI（第 6、7 节；Seedream 侧等 #83）。
+4. 区域指示（高亮叠加先行）+ 图层拆分 / 透明背景 UI（第 6、7 节；Seedream 请求形态见 #95）。
 5. 预设、打包与发布脚本重写、macOS 数字、v1 清理（第 11、13 节）。
 6. 画板交互：上下文菜单 → 撤销重做 → 选取删除与导航 → 精简节点与悬浮 → 端口连线视觉 → 拖线建节点（4.1）。
 

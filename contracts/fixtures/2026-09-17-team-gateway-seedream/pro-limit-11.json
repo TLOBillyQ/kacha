@@ -1,0 +1,42 @@
+{
+  "interface": "image_edit",
+  "recorded_at": "2026-09-17T10:46:11.521609+00:00",
+  "note": "s_pro_limit_11",
+  "request": {
+    "method": "POST",
+    "path": "/v1/images/generations",
+    "headers": {
+      "Accept": "application/json",
+      "Authorization": "[REDACTED]",
+      "Content-Type": "application/json"
+    },
+    "body": {
+      "model": "doubao-seedream-5-0-pro-260628",
+      "prompt": "[REDACTED_PROMPT]",
+      "size": "2048x2048",
+      "response_format": "url",
+      "watermark": false,
+      "output_format": "png",
+      "image": "[REDACTED_IMAGE]"
+    }
+  },
+  "response": {
+    "status": 400,
+    "headers": {
+      "Content-Type": "application/json; charset=utf-8",
+      "X-New-Api-Version": "v0.0.0",
+      "X-Oneapi-Request-Id": "202609171046108054464008268d9d6m5Cwf5bC",
+      "Date": "Thu, 17 Sep 2026 10:46:10 GMT",
+      "Content-Length": "258",
+      "Connection": "close"
+    },
+    "body": {
+      "error": {
+        "message": "The parameter `image` specified in the request are not valid: number of reference images cannot exceed 10. Request id: 0217896419710973d763aaa7a5e423f9e5323a8c500bc9f4e944c",
+        "type": "BadRequest",
+        "param": "image",
+        "code": "InvalidParameter"
+      }
+    }
+  }
+}

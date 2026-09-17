@@ -40,6 +40,19 @@
 - **高亮叠加有效**：原图 + 「紫色半透明高亮叠加图」作第 2 张参考图并在提示词说明只改高亮区域，3/3 只改高亮区域，且 5 个相同物体只高亮其一时恰好命中；无叠加图对照随机。代价：占用一个参考图名额。
 - **速率限制**：6～10 个请求并发时返回 HTTP 429，无 `Retry-After`；间隔 60 s 串行重试成功。
 
+## 2026-09-17 冒烟：Seedream 5.0 pro / lite
+
+夹具保存于 `contracts/fixtures/2026-09-17-team-gateway-seedream/`（`doubao-seedream-5-0-pro-260628`、`doubao-seedream-5-0-lite-260128`，合成几何图形，脚本 `contracts/smoke/multiturn-refs-mask/seedream.py`）：
+
+- **模型 ID**：网关只认 `-lite-` 别名；文档正式 ID `doubao-seedream-5-0-260128` 返回 HTTP 503 `model_not_found`。
+- **请求形态**：`POST /v1/images/generations`，顶层 `model`、`prompt`、`size`（`WxH` 或 `2K` 档位）、`image`（data-URL 数组）、`response_format:"url"`、`watermark`、`output_format`；`/v1/images/edits` 同形态等价。qwen 的 `input.messages` 形态 HTTP 200 但参考图被静默丢弃（`usage.input_images=0`），不得使用。出图在顶层 `data[].url`，不是 `metadata.output.choices`。
+- **多轮消息不可用**，沿用结果回灌。
+- **参考图序号措辞**：「图N」「Image N」「图一/二/三」各测序号 2 与 3，两模型各 6/6。
+- **区域指示**：高亮叠加参考图、图上标记（红框画在原图上替换原图）两模型各 2/2；`<bbox>` 坐标标签（0～999）pro 2/2，lite 也 2/2 但文档仅 pro 支持，能力表保守不开；无指示对照未命中目标。
+- **参考图上限**：pro 10、lite 14，超限 HTTP 400「number of reference images cannot exceed N」。
+- **速率限制**：每模型 10 并发全部 HTTP 200，未触发 429；阈值未探。
+- **未测**：透明背景、图层拆分。
+
 ## 探测流程
 
 临时密钥只能通过环境变量或权限受限的临时文件提供：

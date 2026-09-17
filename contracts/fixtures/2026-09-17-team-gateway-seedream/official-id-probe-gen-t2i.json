@@ -1,0 +1,39 @@
+{
+  "interface": "image_edit",
+  "recorded_at": "2026-09-17T09:56:46.452237+00:00",
+  "note": "p_doubao-seedream-5-0-260128_gen_t2i",
+  "request": {
+    "method": "POST",
+    "path": "/v1/images/generations",
+    "headers": {
+      "Accept": "application/json",
+      "Authorization": "[REDACTED]",
+      "Content-Type": "application/json"
+    },
+    "body": {
+      "model": "doubao-seedream-5-0-260128",
+      "prompt": "[REDACTED_PROMPT]",
+      "size": "2K",
+      "watermark": false,
+      "response_format": "url"
+    }
+  },
+  "response": {
+    "status": 503,
+    "headers": {
+      "Content-Type": "application/json; charset=utf-8",
+      "X-New-Api-Version": "v0.0.0",
+      "X-Oneapi-Request-Id": "202609170956458214764008268d9d6bSJPXK9l",
+      "Date": "Thu, 17 Sep 2026 09:56:45 GMT",
+      "Content-Length": "210",
+      "Connection": "close"
+    },
+    "body": {
+      "error": {
+        "code": "model_not_found",
+        "message": "分组 default 下模型 doubao-seedream-5-0-260128 无可用渠道（distributor） (request id: 202609170956458214764008268d9d6bSJPXK9l)",
+        "type": "new_api_error"
+      }
+    }
+  }
+}

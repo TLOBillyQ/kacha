@@ -1,0 +1,55 @@
+{
+  "interface": "image_edit",
+  "recorded_at": "2026-09-17T10:31:31.567895+00:00",
+  "note": "p_doubao-seedream-5-0-pro-260628_gen_img",
+  "request": {
+    "method": "POST",
+    "path": "/v1/images/generations",
+    "headers": {
+      "Accept": "application/json",
+      "Authorization": "[REDACTED]",
+      "Content-Type": "application/json"
+    },
+    "body": {
+      "model": "doubao-seedream-5-0-pro-260628",
+      "prompt": "[REDACTED_PROMPT]",
+      "image": "[REDACTED_IMAGE]",
+      "size": "2K",
+      "watermark": false,
+      "response_format": "url"
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Length": "715",
+      "Content-Type": "application/json; charset=utf-8",
+      "Date": "Thu, 17 Sep 2026 10:31:30 GMT",
+      "Server": "istio-envoy",
+      "Vary": "Accept-Encoding",
+      "X-Client-Request-Id": "unknown-20260917183021-UXZSTRPq",
+      "X-Envoy-Upstream-Service-Time": "68962",
+      "X-New-Api-Version": "v0.0.0",
+      "X-Oneapi-Request-Id": "202609171030215623779008268d9d6IaJQexKC",
+      "X-Request-Id": "0217896410218533d763aaa7a5e423f9e5323a8c500bc9f3c047b",
+      "Connection": "close"
+    },
+    "body": {
+      "model": "doubao-seedream-5-0-pro-260628",
+      "created": 1789641090,
+      "data": [
+        {
+          "url": "https://example.invalid/redacted",
+          "size": "2048x2048",
+          "output_format": "jpeg"
+        }
+      ],
+      "usage": {
+        "input_images": 1,
+        "generated_images": 1,
+        "output_tokens": 16384,
+        "total_tokens": 16384
+      }
+    }
+  }
+}

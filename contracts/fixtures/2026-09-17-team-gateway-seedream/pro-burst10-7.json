@@ -1,0 +1,55 @@
+{
+  "interface": "image_edit",
+  "recorded_at": "2026-09-17T10:49:37.316617+00:00",
+  "note": "s_pro_burst10_7",
+  "request": {
+    "method": "POST",
+    "path": "/v1/images/generations",
+    "headers": {
+      "Accept": "application/json",
+      "Authorization": "[REDACTED]",
+      "Content-Type": "application/json"
+    },
+    "body": {
+      "model": "doubao-seedream-5-0-pro-260628",
+      "prompt": "[REDACTED_PROMPT]",
+      "size": "2048x2048",
+      "response_format": "url",
+      "watermark": false,
+      "output_format": "png"
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Length": "713",
+      "Content-Type": "application/json; charset=utf-8",
+      "Date": "Thu, 17 Sep 2026 10:49:36 GMT",
+      "Server": "istio-envoy",
+      "Vary": "Accept-Encoding",
+      "X-Client-Request-Id": "unknown-20260917184847-MXHhAxBA",
+      "X-Envoy-Upstream-Service-Time": "49161",
+      "X-New-Api-Version": "v0.0.0",
+      "X-Oneapi-Request-Id": "202609171048468889294008268d9d6S7Bsm463",
+      "X-Request-Id": "0217896421272103d763aaa7a5e423f9e5323a8c500bc9f3190ce",
+      "Connection": "close"
+    },
+    "body": {
+      "model": "doubao-seedream-5-0-pro-260628",
+      "created": 1789642176,
+      "data": [
+        {
+          "url": "https://example.invalid/redacted",
+          "size": "2048x2048",
+          "output_format": "png"
+        }
+      ],
+      "usage": {
+        "input_images": 0,
+        "generated_images": 1,
+        "output_tokens": 16384,
+        "total_tokens": 16384
+      }
+    }
+  }
+}

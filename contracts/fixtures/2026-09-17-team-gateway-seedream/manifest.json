@@ -1,0 +1,154 @@
+{
+  "schema_version": 1,
+  "verified_at": "2026-09-17T10:57:00Z",
+  "gateway": {
+    "base_url": "http://lzxsvn:3001",
+    "version": "new-api（响应头 X-New-Api-Version: v0.0.0；2026-09-17 实测）",
+    "authentication": {
+      "header": "Authorization",
+      "scheme": "Bearer"
+    },
+    "response_headers": [
+      "X-Oneapi-Request-Id"
+    ]
+  },
+  "interfaces": {
+    "text_to_image": {
+      "path": "/v1/images/generations",
+      "method": "POST",
+      "exchanges": [
+        {
+          "evidence": "official-id-probe-gen-t2i.json",
+          "summary": "文档正式 ID doubao-seedream-5-0-260128：HTTP 503 model_not_found（default 分组无可用渠道）。网关只配 -lite- 别名。"
+        },
+        {
+          "evidence": "pro-probe-gen-t2i.json",
+          "summary": "pro 纯文生图：HTTP 200，出图在顶层 data[].url（OpenAI 形态），usage.input_images=0。"
+        },
+        {
+          "evidence": "lite-probe-gen-t2i.json",
+          "summary": "lite 纯文生图，size=\"2K\" 档位模式：HTTP 200，data[].url，响应 model 为上游名 doubao-seedream-5-0-260128。"
+        },
+        {
+          "evidence": "pro-probe-gen-img.json",
+          "summary": "pro 顶层 image 数组（data-URL）：HTTP 200，usage.input_images=1，参考图被采纳。"
+        },
+        {
+          "evidence": "lite-probe-gen-img.json",
+          "summary": "lite 顶层 image 数组：HTTP 200。"
+        },
+        {
+          "evidence": "pro-refs-tu-2.json",
+          "summary": "refs-{tu,image,tuzh}-{2,3}.json（pro / lite 各 6 次）：3 张参考图取图2 / 图3，「图N」「Image N」「图一/二/三」人眼核对全部命中，两模型各 6/6。"
+        },
+        {
+          "evidence": "pro-region-overlay-1.json",
+          "summary": "region-overlay-{1,2}.json：原图 + 紫色 50% 高亮叠加图（5 个相同方块高亮第 4 个），pro / lite 各 2/2 只改高亮方块。"
+        },
+        {
+          "evidence": "pro-region-marked-1.json",
+          "summary": "region-marked-{1,2}.json：红框画在原图上替换原图发送，pro / lite 各 2/2 命中，输出不残留红框。"
+        },
+        {
+          "evidence": "pro-region-bbox-1.json",
+          "summary": "region-bbox-{1,2}.json：提示词「图1 <bbox>x1 y1 x2 y2</bbox>」（0～999），pro 2/2、lite 2/2 命中。"
+        },
+        {
+          "evidence": "pro-region-ctl-1.json",
+          "summary": "region-ctl-1.json：无区域指示对照，pro 改了第 3 个、lite 改了第 2 个方块，证明上述命中非巧合。"
+        },
+        {
+          "evidence": "pro-limit-10.json",
+          "summary": "pro 10 张参考图 HTTP 200；pro-limit-11.json 11 张 HTTP 400「number of reference images cannot exceed 10」。"
+        },
+        {
+          "evidence": "lite-limit-14.json",
+          "summary": "lite 14 张参考图 HTTP 200；lite-limit-15.json 15 张 HTTP 400「cannot exceed 14」。"
+        },
+        {
+          "evidence": "pro-burst10-0.json",
+          "summary": "{pro,lite}-burst10-0～9.json：每模型 10 个并发纯文生图全部 HTTP 200，无 429。"
+        }
+      ]
+    },
+    "image_edit": {
+      "path": "/v1/images/edits",
+      "method": "POST",
+      "exchanges": [
+        {
+          "evidence": "pro-probe-edits-image.json",
+          "summary": "/v1/images/edits + 顶层 image 数组：HTTP 200，usage.input_images=1，与 generations 等价。"
+        },
+        {
+          "evidence": "lite-probe-edits-image.json",
+          "summary": "lite 同上：HTTP 200。"
+        },
+        {
+          "evidence": "pro-probe-edits-msgs.json",
+          "summary": "/v1/images/edits + input.messages（qwen 形态）：HTTP 200 但 usage.input_images=0，参考图被静默丢弃，按纯文生图出图且带水印（parameters.watermark 亦被忽略）。"
+        },
+        {
+          "evidence": "lite-probe-edits-msgs.json",
+          "summary": "lite 同上：HTTP 200，参考图未生效。"
+        }
+      ]
+    }
+  },
+  "behaviors": {
+    "request_shape": {
+      "status": "confirmed",
+      "evidence": "*-probe-*.json：顶层 model / prompt / size / image（data-URL 数组）/ response_format / watermark / output_format 在 /v1/images/generations 与 /v1/images/edits 均生效；input.messages 被静默丢弃。客户端统一用 /v1/images/generations（能力表 request_shape = seedream_images_generations）。出图真源为顶层 data[].url。"
+    },
+    "multi_turn_messages": {
+      "status": "unsupported",
+      "evidence": "pro-probe-edits-msgs.json：input.messages 不被识别（input_images=0）；多轮修改沿用结果回灌。"
+    },
+    "reference_index_phrasing": {
+      "status": "confirmed",
+      "evidence": "{pro,lite}-refs-*.json：图N / Image N / 图一二三 各取序号 2 与 3，两模型各 6/6。"
+    },
+    "native_mask": {
+      "status": "unsupported",
+      "evidence": "未测字段；官方文档无 mask 参数，按文档记不支持。"
+    },
+    "highlight_overlay_region": {
+      "status": "confirmed",
+      "evidence": "{pro,lite}-region-overlay-*.json 各 2/2；对照 *-region-ctl-1.json。"
+    },
+    "marked_image_region": {
+      "status": "confirmed",
+      "evidence": "{pro,lite}-region-marked-*.json 各 2/2，输出不残留红框。"
+    },
+    "bbox_tag_region": {
+      "status": "confirmed",
+      "evidence": "pro-region-bbox-*.json 2/2（lite 也 2/2，但官方文档仅 pro 支持且样本小，能力表 lite 保守标不支持）。"
+    },
+    "max_references": {
+      "status": "confirmed",
+      "evidence": "pro 10（pro-limit-10/11.json）、lite 14（lite-limit-14/15.json），超限 HTTP 400。"
+    },
+    "rate_limit": {
+      "status": "unknown",
+      "evidence": "{pro,lite}-burst10-*.json：并发 10 未触发 429（qwen 6～10 并发即 429）；阈值未探。"
+    }
+  },
+  "verified_models": [
+    "doubao-seedream-5-0-pro-260628",
+    "doubao-seedream-5-0-lite-260128"
+  ],
+  "untested": [
+    "透明背景、图层拆分（官方文档未给出确切参数形态）",
+    "图上标记 / 坐标标签的固定句模板定稿措辞（region_hint_phrasing，交 #95）",
+    "多种区域指示同时支持时的优先级（三种均命中，未做对比）",
+    "429 确切阈值（并发 > 10 或 RPM）",
+    "真实照片 / 复杂场景下区域指示精度（本轮为合成几何图形）"
+  ],
+  "conclusions": [
+    "请求形态：顶层 image 数组 + /v1/images/generations；不要用 qwen 的 input.messages 形态（静默丢图）。",
+    "网关模型 ID：pro = doubao-seedream-5-0-pro-260628，lite = doubao-seedream-5-0-lite-260128（正式 ID 503）。",
+    "多轮修改沿用结果回灌；「图N」/「Image N」改写规则与 qwen 相同。",
+    "区域指示：高亮叠加、图上标记两模型均有效；坐标标签 pro 有效，lite 保守不露出。",
+    "参考图上限 pro 10 / lite 14；并发 10 无 429，客户端仍沿用全局退避策略。",
+    "fixed_params：watermark:false、output_format:png 生效；lite sequential_image_generation:disabled 被接受。耗时 lite 约 25 s、pro 30～90 s。"
+  ]
+}
