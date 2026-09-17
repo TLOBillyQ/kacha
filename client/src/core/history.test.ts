@@ -229,6 +229,12 @@ describe("撤销时合并系统状态", () => {
     expect(mergeSystemState(target, current, NONE).edges).toEqual([edge(["a", "out"], ["t", "positive"])]);
   });
 
+  it("工具栏选的新建任务模型（last_model）按当前状态", () => {
+    const target = { ...board([]), last_model: "old" };
+    const current = { ...board([]), last_model: "new" };
+    expect(mergeSystemState(target, current, NONE).last_model).toBe("new");
+  });
+
   it("视口与标题按当前状态", () => {
     const target = { ...board([]), title: "旧", viewport: { zoom: 1, x: 0, y: 0 } };
     const current = { ...board([]), title: "新", viewport: { zoom: 2, x: 5, y: 6 } };

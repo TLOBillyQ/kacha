@@ -150,5 +150,5 @@ export function mergeSystemState(target: Board, current: Board, locked: Readonly
   for (const e of current.edges) {
     if (e.system && present.has(e.from[0]) && present.has(e.to[0]) && !edges.some((x) => sameEdge(x, e))) edges.push(e);
   }
-  return { ...target, title: current.title, viewport: current.viewport, nodes, edges };
+  return { ...target, title: current.title, viewport: current.viewport, last_model: current.last_model, nodes, edges };
 }

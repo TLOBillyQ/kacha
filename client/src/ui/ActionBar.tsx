@@ -6,6 +6,7 @@ import { HoverButton } from "./hoverInfo";
 
 const ICONS: Partial<Record<BoardAction, string>> = {
   preview: "⤢",
+  saveAs: "⤓",
   continueEditing: "✎",
   addAsReference: "⊕",
   generateVariant: "↻",

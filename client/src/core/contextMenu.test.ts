@@ -78,10 +78,11 @@ function edge(from: string, fromPort: string, to: string, toPort: string, system
 }
 
 describe("图片节点菜单", () => {
-  it("参考图：放大预览 / 以此继续编辑 / 删除", () => {
+  it("参考图：放大预览 / 另存为 / 以此继续编辑 / 删除", () => {
     const b = board([reference("r")]);
     expect(summary(menuItems({ kind: "node", nodeId: "r" }, facts({ board: b, selected: new Set(["r"]) })))).toEqual([
       ["preview", "放大预览", null],
+      ["saveAs", "另存为…", null],
       ["continueEditing", "以此继续编辑", null],
       ["delete", "删除", null],
     ]);
@@ -91,6 +92,7 @@ describe("图片节点菜单", () => {
     const b = board([result("res")]);
     expect(summary(menuItems({ kind: "node", nodeId: "res" }, facts({ board: b, selected: new Set(["res"]) })))).toEqual([
       ["preview", "放大预览", null],
+      ["saveAs", "另存为…", null],
       ["continueEditing", "以此继续编辑", null],
       ["addAsReference", "加为参考图", "先选一个生成任务"],
       ["generateVariant", "生成变体", "父任务已删除"],
@@ -189,15 +191,17 @@ describe("悬浮动作条", () => {
     const b = board([result("res")]);
     expect(summary(actionBarItems("res", facts({ board: b })))).toEqual([
       ["preview", "放大预览", null],
+      ["saveAs", "另存为…", null],
       ["continueEditing", "以此继续编辑", null],
       ["addAsReference", "加为参考图", "先选一个生成任务"],
       ["generateVariant", "生成变体", "父任务已删除"],
     ]);
   });
 
-  it("参考图：放大预览与以此继续编辑", () => {
+  it("参考图：放大预览、另存为与以此继续编辑", () => {
     expect(summary(actionBarItems("r", facts({ board: board([reference("r")]) })))).toEqual([
       ["preview", "放大预览", null],
+      ["saveAs", "另存为…", null],
       ["continueEditing", "以此继续编辑", null],
     ]);
   });

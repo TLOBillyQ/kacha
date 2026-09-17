@@ -16,7 +16,9 @@ import {
   modelsByTier,
   TIER_LABELS,
   untestedCapabilities,
+  type CapabilityTable,
   type InputImageRule,
+  type ModelCapability,
   type WorkflowName,
 } from "../core/capabilities";
 import type { MenuItem } from "../core/contextMenu";
@@ -270,6 +272,29 @@ export const ResultNodeView = memo(function ResultNodeView({ data, selected, wid
   );
 });
 
+/** 按档位分组的可用模型选项；任务节点与工具栏的模型选择共用。 */
+export function ModelOptions({ table, available }: { table: CapabilityTable; available: ModelCapability[] }) {
+  const ids = new Set(available.map((m) => m.model_id));
+  return (
+    <>
+      {modelsByTier(table).map((g) => {
+        const models = g.models.filter((m) => ids.has(m.model_id));
+        return (
+          models.length > 0 && (
+            <optgroup key={g.tier} label={TIER_LABELS[g.tier]}>
+              {models.map((m) => (
+                <option key={m.model_id} value={m.model_id}>
+                  {m.display_name}
+                </option>
+              ))}
+            </optgroup>
+          )
+        );
+      })}
+    </>
+  );
+}
+
 function ModelInfo({ modelId, onClose }: { modelId: string; onClose: () => void }) {
   const { table } = useBoardActions();
   const model = findModel(table, modelId);
@@ -362,9 +387,6 @@ export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskF
   const model = findModel(table, node.model);
   const rule = model?.workflows[workflow].size_rule;
   const availableIds = new Set(availableModels.map((m) => m.model_id));
-  const groups = modelsByTier(table)
-    .map((g) => ({ ...g, models: g.models.filter((m) => availableIds.has(m.model_id)) }))
-    .filter((g) => g.models.length > 0);
   const listed = availableIds.has(node.model);
   const shelved = modelsByTier(table).some((g) => g.models.some((m) => m.model_id === node.model));
   const modelLabel = !model ? `${node.model}（未知模型）` : listed ? model.display_name : shelved ? `${model.display_name}（网关未提供）` : `${model.display_name}（未上架）`;
@@ -449,15 +471,7 @@ export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskF
           <div className="field nodrag">
             <select value={node.model} onChange={(e) => setTaskModel(node.id, e.target.value)} disabled={locked} aria-label="模型">
               {!listed && <option value={node.model}>{modelLabel}</option>}
-              {groups.map((g) => (
-                <optgroup key={g.tier} label={TIER_LABELS[g.tier]}>
-                  {g.models.map((m) => (
-                    <option key={m.model_id} value={m.model_id}>
-                      {m.display_name}
-                    </option>
-                  ))}
-                </optgroup>
-              ))}
+              <ModelOptions table={table} available={availableModels} />
             </select>
             <HoverButton className="icon" aria-label="模型说明" info={textHoverInfo("模型说明")} onClick={() => setInfoOpen((v) => !v)} disabled={!model}>
               ⓘ

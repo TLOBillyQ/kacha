@@ -22,7 +22,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as R
 import { BOARD_EXTENSION, type Board, type BoardEdge, type KnownNode, type ReferenceNode } from "../core/board";
 import { findModel, modelsByTier, type CapabilityTable, type InputImageRule } from "../core/capabilities";
 import type { TaskStatus } from "../core/run";
-import { availableModels, modelAvailabilityIssue, type Discovery } from "../core/settings";
+import { availableModels, defaultTaskModel, modelAvailabilityIssue, type Discovery } from "../core/settings";
 import {
   canConnect,
   connect,
@@ -57,13 +57,14 @@ import { findReferenceFile, findResultFile, IMAGE_EXTENSIONS, type RelocateFs } 
 import { imageRefProblems, imageSources, type SnapshotImage } from "../core/submission";
 import { ipc } from "../shell/ipc";
 import { logEvent } from "../shell/log";
+import { saveCopyAs } from "../shell/saveFile";
 import { ActionBar } from "./ActionBar";
 import { ContextMenu } from "./ContextMenu";
 import { PresetDialog } from "./PresetDialog";
 import { BoardContext, primeImageInfo, useImageInfos, useMissingImages, useStoredStatuses, type BoardActions } from "./context";
 import { edgeTypes } from "./edges";
 import { HoverButton, HoverProvider, useHoverLayer } from "./hoverInfo";
-import { nodeTypes, type ImagePortInfo, type ImageSlotInfo } from "./nodes";
+import { ModelOptions, nodeTypes, type ImagePortInfo, type ImageSlotInfo } from "./nodes";
 import { DragContext } from "./ports";
 import { PreviewDialog, type PreviewRequest, type RegionTarget } from "./PreviewDialog";
 import { isTyping, useCanvasInteraction, type Selection } from "./useCanvasInteraction";
@@ -832,6 +833,17 @@ export function BoardCanvas({
   };
 
   /** 按 action 执行：与工具栏 / 节点按钮同一套逻辑（删除、断开走 React Flow 删除流程，规则同 Delete 键）。 */
+  const saveNodeAs = async (nodeId: string) => {
+    const node = boardRef.current.nodes.find((n) => n.id === nodeId);
+    if (node?.type !== "reference" && node?.type !== "result") return;
+    try {
+      const saved = await saveCopyAs(resolveFromRoot(outputRoot, node.path));
+      if (saved) toast(`已保存：${saved}`);
+    } catch (e) {
+      toast(`另存失败：${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+
   const performAction = (action: BoardAction, target: MenuTarget, at?: { x: number; y: number }) => {
     if (action === "newPrompt") addPrompt(at);
     else if (action === "newTask") addTask(at);
@@ -841,6 +853,7 @@ export function BoardCanvas({
     else if (target.kind === "node") {
       const id = target.nodeId;
       if (action === "preview") actions.previewNode(id);
+      else if (action === "saveAs") void saveNodeAs(id);
       else if (action === "continueEditing") actions.continueEditing(id);
       else if (action === "addAsReference") actions.addAsReference(id);
       else if (action === "generateVariant") actions.generateVariant(id);
@@ -929,6 +942,18 @@ export function BoardCanvas({
       >
         <div className="toolbar">
           <button onClick={() => setPresetsOpen(true)}>项目预设…</button>
+          {/* 新建生成任务用的模型（board.last_model）：是偏好不是画板编辑，不进撤销。 */}
+          <select
+            className="toolbar-model"
+            value={defaultTaskModel(table, discovery, board.last_model) ?? ""}
+            onChange={(e) => {
+              const modelId = e.target.value;
+              update((b) => ({ ...b, last_model: modelId }), "view");
+            }}
+            aria-label="新建任务模型"
+          >
+            <ModelOptions table={table} available={actions.availableModels} />
+          </select>
           <HoverButton onClick={undo} disabled={!undoLabel} info={textHoverInfo(undoLabel ? `撤销 ${undoLabel}（Ctrl+Z）` : "没有可撤销的操作")} aria-label="撤销">
             ↶
           </HoverButton>

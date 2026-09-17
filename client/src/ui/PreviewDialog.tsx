@@ -1,11 +1,12 @@
 // 放大预览弹窗：纯预览、编辑图片连线的指示区域（拖拽画矩形）、结果节点的图层侧栏与导出。
 // 弹窗必须挂在画布根（BoardCanvas），不能挂进 React Flow 节点内：变换容器里 position:fixed 会失效。
-import { open, save } from "@tauri-apps/plugin-dialog";
+import { open } from "@tauri-apps/plugin-dialog";
 import { useEffect, useRef, useState } from "react";
 import type { PortRef, RegionRender } from "../core/board";
-import { basename, dirname, joinPath } from "../core/paths";
+import { basename, joinPath } from "../core/paths";
 import { layersExportJson, type LayerRecord } from "../core/taskDir";
 import { fileUrl, ipc } from "../shell/ipc";
+import { saveCopyAs, writeNew } from "../shell/saveFile";
 import { useBoardActions, useImageInfos } from "./context";
 import { dragRect, isMeaningful, moveRect, resizeRect, type Corner, type Point01, type Rect01 } from "./rects";
 
@@ -51,29 +52,6 @@ type Drag =
 
 const CORNERS: Corner[] = ["nw", "ne", "sw", "se"];
 const OVERLAY = "rgba(128,0,255,0.5)";
-
-function suffixed(path: string, n: number): string {
-  const name = basename(path);
-  const dot = name.lastIndexOf(".");
-  const stem = dot > 0 ? name.slice(0, dot) : name;
-  const ext = dot > 0 ? name.slice(dot) : "";
-  return joinPath(dirname(path), `${stem} (${n})${ext}`);
-}
-
-/** writeNewFile 只新建不覆盖：重名时在文件名后加序号再试；非重名错误直接抛出。 */
-async function writeNew(bytes: Uint8Array, target: string): Promise<string> {
-  for (let n = 1; n <= 99; n++) {
-    const path = n === 1 ? target : suffixed(target, n);
-    try {
-      await ipc.writeNewFile(path, bytes);
-      return path;
-    } catch (e) {
-      if (await ipc.isFile(path).catch(() => false)) continue;
-      throw e;
-    }
-  }
-  throw new Error("同名文件太多");
-}
 
 export function PreviewDialog({ req, toast, onClose }: Props) {
   const { setEdgeRegion, addAsReference, continueEditing } = useBoardActions();
@@ -179,10 +157,8 @@ export function PreviewDialog({ req, toast, onClose }: Props) {
   };
   const exportOne = (absPath: string) =>
     runExport(async () => {
-      const target = await save({ defaultPath: basename(absPath) });
-      if (!target) return null;
-      const bytes = await ipc.readFileBytes(absPath);
-      return `已保存：${await writeNew(bytes, target)}`;
+      const saved = await saveCopyAs(absPath);
+      return saved && `已保存：${saved}`;
     });
   const exportAll = () =>
     runExport(async () => {

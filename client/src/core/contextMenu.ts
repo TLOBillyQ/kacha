@@ -16,6 +16,7 @@ export type BoardAction =
   | "undo"
   | "redo"
   | "preview"
+  | "saveAs"
   | "continueEditing"
   | "addAsReference"
   | "generateVariant"
@@ -77,10 +78,11 @@ export function menuItems(target: MenuTarget, facts: MenuFacts): MenuItem[] {
       }
       switch (node?.type) {
         case "reference":
-          return [item("preview", "放大预览"), item("continueEditing", "以此继续编辑"), item("delete", "删除")];
+          return [item("preview", "放大预览"), item("saveAs", "另存为…"), item("continueEditing", "以此继续编辑"), item("delete", "删除")];
         case "result": {
           return [
             item("preview", "放大预览"),
+            item("saveAs", "另存为…"),
             item("continueEditing", "以此继续编辑"),
             addAsReferenceItem(),
             item("generateVariant", "生成变体", variantBlocker(board, node.id, locked)),
@@ -114,7 +116,7 @@ export function menuItems(target: MenuTarget, facts: MenuFacts): MenuItem[] {
   }
 }
 
-const ACTION_BAR_ACTIONS: ReadonlySet<BoardAction> = new Set(["preview", "continueEditing", "addAsReference", "generateVariant"]);
+const ACTION_BAR_ACTIONS: ReadonlySet<BoardAction> = new Set(["preview", "saveAs", "continueEditing", "addAsReference", "generateVariant"]);
 
 /**
  * 悬浮动作条：图片节点的放大预览与迭代动作，取自同一节点的菜单条目（同一组置灰原因）。
