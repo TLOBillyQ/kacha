@@ -236,3 +236,31 @@ describe("复制粘贴", () => {
     expect(pasteClip(changed, clip, newId).board.nodes.some((x) => x.type === "prompt" && x.text === "猫" && x.id !== "p")).toBe(true);
   });
 });
+
+describe("图层接回", () => {
+  const layered = (id: string): BoardNode => {
+    const r = result(id) as Extract<BoardNode, { type: "result" }>;
+    return {
+      ...r,
+      layer_count: 2,
+      record: { ...r.record, layers: [{ file: "layers/01.png", z_index: 1, bounding_box: [] }, { file: "layers/02.png", z_index: 2, bounding_box: [] }] },
+    };
+  };
+
+  it("加为参考图：sourceLayer 记在触发连线上", () => {
+    const b = board([layered("x"), task("t")]);
+    const outcome = addAsReference(b, BUILTIN_TABLE, "x", "t", 2);
+    expect(outcome.ok).toBe(true);
+    if (outcome.ok) expect(outcome.board.edges.at(-1)).toMatchObject({ from: ["x", "out"], to: ["t", "image:0"], source_layer: 2 });
+  });
+
+  it("以此继续编辑：按 sourceLayers 接图层而非合成结果", () => {
+    const b = board([layered("x")]);
+    const outcome = continueEditing(b, BUILTIN_TABLE, NONE, ["x"], "x", ids, new Map([["x", 1]]));
+    expect(outcome.ok).toBe(true);
+    if (outcome.ok) {
+      const imageEdge = outcome.board.edges.find((e) => e.from[0] === "x");
+      expect(imageEdge).toMatchObject({ source_layer: 1 });
+    }
+  });
+});

@@ -1,6 +1,9 @@
 // 任务目录：输出根目录/<UTC 日期>/<task_id>/（ADR 0010，任务目录是真源）。
 // 派发时一次写入参考图快照与 task.json，之后不可变；成功后再写结果图，失败 / 取消时写结局记录。文件系统由调用方注入。
 import type { CapabilityTable } from "./capabilities";
+import type { LayerRecord, RegionRender } from "./board";
+
+export type { LayerRecord };
 import type { ReferenceImage } from "./gateway";
 import { joinPath } from "./paths";
 import type { SizeSpec } from "./size";
@@ -53,7 +56,16 @@ export function tableDigest(table: CapabilityTable): Promise<string> {
 
 export type ReferenceSource =
   | { kind: "reference"; path: string; sha256: string }
-  | { kind: "result"; task_id: string; file: string };
+  | { kind: "result"; task_id: string; file: string; source_layer?: number | null }
+  /** 区域叠加图：由第 of 张（1 起）参考图合成。 */
+  | { kind: "overlay"; of: number };
+
+/** 叠加参考图记录的区域：矩形（归一化）、渲染方式、原图端口序号（规格第 6 节）。 */
+export interface ReferenceRegion {
+  rects: [number, number, number, number][];
+  render: RegionRender;
+  source_port: number;
+}
 
 export interface SubmissionPlan {
   taskId: string;
@@ -62,14 +74,16 @@ export interface SubmissionPlan {
   prompt: string;
   negativePrompt: string;
   sendText: string;
+  /** 区域指示固定句（每个叠加参考图一句），追加在发送文本末尾。 */
+  regionPhrases: string[];
   sizeSpec: SizeSpec;
   size: { width: number; height: number };
   layerDecomposition: boolean;
   transparentBackground: boolean;
   capabilityFormatVersion: number;
   capabilityTableSha256: string;
-  /** 按参考图序号排列。 */
-  references: { bytes: Uint8Array; source: ReferenceSource }[];
+  /** 按参考图序号排列；叠加图紧随其原图。 */
+  references: { bytes: Uint8Array; source: ReferenceSource; region?: ReferenceRegion }[];
 }
 
 function taskPath(outputRoot: string, relDir: string, file: string): string {
@@ -88,7 +102,7 @@ export async function writeSubmission(fs: TaskFs, outputRoot: string, plan: Subm
   for (const [i, ref] of plan.references.entries()) {
     const file = `reference-${i + 1}.${kinds[i].ext}`;
     await fs.writeNewFile(taskPath(outputRoot, dir, file), ref.bytes);
-    references.push({ file, media_type: kinds[i].mediaType, sha256: await sha256Hex(ref.bytes), source: ref.source });
+    references.push({ file, media_type: kinds[i].mediaType, sha256: await sha256Hex(ref.bytes), source: ref.source, ...(ref.region ? { region: ref.region } : {}) });
   }
   const record = {
     task_id: plan.taskId,
@@ -117,6 +131,31 @@ export async function saveResult(fs: TaskFs, outputRoot: string, relDir: string,
   const file = `result.${kind.ext}`;
   await fs.writeNewFile(taskPath(outputRoot, relDir, file), bytes);
   return { file, path: `${relDir}/${file}` };
+}
+
+export interface LayerImage {
+  bytes: Uint8Array;
+  zIndex: number;
+  boundingBox: number[];
+}
+
+/** 拆分图层落盘：按 z_index 升序写 layers/01.<ext>…（规格第 7 节）；返回写盘后的图层记录。 */
+export async function saveLayers(fs: TaskFs, outputRoot: string, relDir: string, layers: LayerImage[]): Promise<LayerRecord[]> {
+  const ordered = [...layers].sort((a, b) => a.zIndex - b.zIndex);
+  const out: LayerRecord[] = [];
+  for (const [i, layer] of ordered.entries()) {
+    const kind = sniffImage(layer.bytes);
+    if (!kind) throw new Error(`图层${i + 1} 不是可识别的图片`);
+    const file = `layers/${pad(i + 1)}.${kind.ext}`;
+    await fs.writeNewFile(taskPath(outputRoot, relDir, file), layer.bytes);
+    out.push({ file, z_index: layer.zIndex, bounding_box: layer.boundingBox });
+  }
+  return out;
+}
+
+/** 导出用 layers.json 内容：与结果记录里的 layers 一致（规格第 7 节）。 */
+export function layersExportJson(layers: LayerRecord[]): string {
+  return `${JSON.stringify({ layers }, null, 2)}\n`;
 }
 
 /** 没有结果图的任务的结局；没有记录 = 上次进行中时程序异常退出（已中断）。 */

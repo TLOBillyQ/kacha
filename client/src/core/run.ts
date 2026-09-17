@@ -3,13 +3,15 @@
 import type { Board, ResultRecord } from "./board";
 import { findModel, type CapabilityTable, type ModelCapability } from "./capabilities";
 import { composeSendText, ERROR_CATEGORY_LABELS, fetchResultImage, GatewayError, generate, type FetchLike, type GenerationInput } from "./gateway";
-import { workflowOf } from "./graph";
+import { imagePortSlots, workflowOf } from "./graph";
+import { promptLanguage } from "./imageRefs";
 import { addResultNode } from "./layout";
+import { overlayPhrases, type SlotRef } from "./region";
 import { resolveSize } from "./size";
 import { imageSources, snapshotOf, withSubmitted } from "./submission";
 import { joinPath } from "./paths";
 import type { SizeSpec } from "./size";
-import { newTaskId, saveResult, sniffImage, taskDirOf, taskDirOfTaskId, writeSubmission, type ReferenceSource, type SubmissionPlan, type TaskFs } from "./taskDir";
+import { newTaskId, saveLayers, saveResult, sniffImage, taskDirOf, taskDirOfTaskId, writeSubmission, type LayerRecord, type ReferenceRegion, type ReferenceSource, type SubmissionPlan, type TaskFs } from "./taskDir";
 
 /** 任务目录 task.json 里重新生成要用的字段。 */
 interface TaskJson {
@@ -21,7 +23,7 @@ interface TaskJson {
   size: { width: number; height: number };
   layer_decomposition: boolean;
   transparent_background: boolean;
-  references: { file: string; source: ReferenceSource }[];
+  references: { file: string; source: ReferenceSource; region?: ReferenceRegion }[];
 }
 
 export type TaskStatus =
@@ -39,6 +41,8 @@ export interface RunDeps extends TaskFs {
   readBytes(absPath: string): Promise<Uint8Array>;
   fetch: FetchLike;
   now(): Date;
+  /** 把区域矩形以高亮叠加画到源图上，返回编码后的图片（壳层 canvas 实现）；有区域任务时必须注入。 */
+  composeOverlay?(image: Uint8Array, rects: [number, number, number, number][]): Promise<Uint8Array>;
 }
 
 export interface PreparedJob {
@@ -88,19 +92,36 @@ export async function prepareJob(
   if (!size) throw new LocalError("生成尺寸不在模型尺寸表内");
 
   const sources = imageSources(board, taskNodeId, outputRoot);
-  const references: SubmissionPlan["references"] = [];
+  const slots = imagePortSlots(board, table, taskNodeId);
+  // 先按用户连线读全部源图，再按展开槽组装：叠加槽由其原图合成。
+  const sourceBytes: Uint8Array[] = [];
   for (const [i, src] of sources.entries()) {
-    const image = snapshot.images[i];
-    let bytes: Uint8Array;
     try {
-      bytes = await deps.readBytes(src.absPath);
+      sourceBytes.push(await deps.readBytes(src.absPath));
     } catch (e) {
       throw readError(`图${i + 1}（${src.label}）`, e);
     }
-    const source: ReferenceSource =
-      image.kind === "reference" ? { kind: "reference", path: image.path, sha256: image.sha256 } : { kind: "result", task_id: image.task_id, file: image.file };
-    references.push({ bytes, source });
   }
+  const references: SubmissionPlan["references"] = [];
+  let imageIndex = 0;
+  for (const slot of slots) {
+    if (slot.kind === "image") {
+      const i = imageIndex++;
+      const image = snapshot.images[i];
+      const source: ReferenceSource =
+        image.kind === "reference"
+          ? { kind: "reference", path: image.path, sha256: image.sha256 }
+          : { kind: "result", task_id: image.task_id, file: image.file, ...(image.source_layer !== null ? { source_layer: image.source_layer } : {}) };
+      references.push({ bytes: sourceBytes[i], source });
+    } else {
+      if (!deps.composeOverlay) throw new LocalError("框选修改区域需要叠加合成能力，当前环境不支持");
+      const sourcePort = slot.sourcePort!;
+      const region = slot.edge.region!;
+      const bytes = await deps.composeOverlay(sourceBytes[sourcePort - 1], region.rects);
+      references.push({ bytes, source: { kind: "overlay", of: sourcePort }, region: { rects: region.rects, render: "highlight_overlay", source_port: sourcePort } });
+    }
+  }
+  const regionPhrases = overlayPhrases(model, slots, promptLanguage(snapshot.prompt));
 
   const submittedAt = deps.now();
   const taskId = newTaskId(submittedAt);
@@ -110,7 +131,8 @@ export async function prepareJob(
     model: model.model_id,
     prompt: snapshot.prompt,
     negativePrompt: snapshot.negative_prompt,
-    sendText: composeSendText({ prompt: snapshot.prompt, negativePrompt: snapshot.negative_prompt, referenceCount: references.length }),
+    sendText: composeSendText({ prompt: snapshot.prompt, negativePrompt: snapshot.negative_prompt, referenceCount: references.length, regionPhrases }),
+    regionPhrases,
     sizeSpec: snapshot.size_spec,
     size,
     layerDecomposition: snapshot.layer_decomposition,
@@ -128,7 +150,7 @@ function jobOf(taskNodeId: string, plan: SubmissionPlan, model: ModelCapability)
     taskId: plan.taskId,
     relDir: taskDirOf(plan.submittedAt, plan.taskId),
     plan,
-    input: { model, prompt: plan.prompt, negativePrompt: plan.negativePrompt, size: plan.size, references: [] },
+    input: { model, prompt: plan.prompt, negativePrompt: plan.negativePrompt, size: plan.size, references: [], regionPhrases: plan.regionPhrases },
     record: {
       model: plan.model,
       prompt: plan.prompt,
@@ -168,11 +190,16 @@ export async function prepareRegenerate(
   const references: SubmissionPlan["references"] = [];
   for (const [i, ref] of previous.references.entries()) {
     try {
-      references.push({ bytes: await deps.readBytes(path(ref.file)), source: ref.source });
+      references.push({ bytes: await deps.readBytes(path(ref.file)), source: ref.source, ...(ref.region ? { region: ref.region } : {}) });
     } catch (e) {
       throw readError(`上次任务的图${i + 1}`, e);
     }
   }
+  // 固定句按当前能力表模板重建：请求文本由请求形态现场组装，不能只用 task.json 里的 send_text。
+  const slots: SlotRef[] = previous.references.map((ref, i) =>
+    ref.region ? { kind: "overlay", port: i + 1, sourcePort: ref.region.source_port } : { kind: "image", port: i + 1, sourcePort: null },
+  );
+  const regionPhrases = overlayPhrases(model, slots, promptLanguage(previous.prompt));
 
   const submittedAt = deps.now();
   const taskId = newTaskId(submittedAt);
@@ -183,6 +210,7 @@ export async function prepareRegenerate(
     prompt: previous.prompt,
     negativePrompt: previous.negative_prompt,
     sendText: previous.send_text,
+    regionPhrases,
     sizeSpec: previous.size_spec,
     size: previous.size,
     layerDecomposition: previous.layer_decomposition,
@@ -216,17 +244,31 @@ export async function executeJob(
 ): Promise<(board: Board) => Board> {
   const { job, signal } = args;
   // 网关侧的计算停不下来；取消只是不再等待、不落结果。
-  const { image } = await generate({ baseUrl: args.baseUrl, apiKey: args.apiKey, fetch: deps.fetch }, job.input);
+  const { images } = await generate({ baseUrl: args.baseUrl, apiKey: args.apiKey, fetch: deps.fetch }, job.input);
   if (signal?.aborted) throw new CancelledError();
-  const bytes = await fetchResultImage(deps.fetch, image);
-  if (signal?.aborted) throw new CancelledError();
-  if (!sniffImage(bytes)) throw new GatewayError("invalid_response", "结果不是可识别的图片");
+  const fetched: { bytes: Uint8Array; layer?: { z_index: number; bounding_box: number[] } }[] = [];
+  for (const image of images) {
+    const bytes = await fetchResultImage(deps.fetch, image);
+    if (signal?.aborted) throw new CancelledError();
+    if (!sniffImage(bytes)) throw new GatewayError("invalid_response", "结果不是可识别的图片");
+    fetched.push({ bytes, layer: image.layer });
+  }
   let saved: { file: string; path: string };
+  let layers: LayerRecord[] | undefined;
   try {
-    saved = await saveResult(deps, args.outputRoot, job.relDir, bytes);
+    saved = await saveResult(deps, args.outputRoot, job.relDir, fetched[0].bytes);
+    // 图层拆分：首张是合成结果，其余按 z_index 升序落盘 layers/01.<ext>…（无上架模型可跑，按契约夹具验收）。
+    if (job.plan.layerDecomposition && fetched.length > 1) {
+      layers = await saveLayers(
+        deps,
+        args.outputRoot,
+        job.relDir,
+        fetched.slice(1).map((f, i) => ({ bytes: f.bytes, zIndex: f.layer?.z_index ?? i + 1, boundingBox: f.layer?.bounding_box ?? [] })),
+      );
+    }
   } catch (e) {
     throw new LocalError(`保存结果图失败：${e instanceof Error ? e.message : String(e)}`);
   }
   return (board) =>
-    addResultNode(board, { id: args.newNodeId, taskId: job.taskNodeId, submittedTaskId: job.taskId, file: saved.file, path: saved.path, record: job.record });
+    addResultNode(board, { id: args.newNodeId, taskId: job.taskNodeId, submittedTaskId: job.taskId, file: saved.file, path: saved.path, record: job.record, layers });
 }

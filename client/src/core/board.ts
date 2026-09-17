@@ -47,12 +47,21 @@ export interface TaskNode extends NodeBase {
   last_submitted: Json | null;
 }
 
+export interface LayerRecord {
+  /** 相对任务目录，形如 layers/01.png（按 z_index 升序编号）。 */
+  file: string;
+  z_index: number;
+  bounding_box: number[];
+}
+
 export interface ResultRecord {
   model: string;
   prompt: string;
   negative_prompt: string;
   size_spec: SizeSpec;
   submitted_at: string;
+  /** 拆分图层（有图层时写入）。 */
+  layers?: LayerRecord[];
   [key: string]: unknown;
 }
 
@@ -297,7 +306,7 @@ const WINDOWS_RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
 function fileStem(title: string): string {
   // 去 Windows / macOS 非法字符与控制字符；Windows 不允许结尾空格和点。
   // eslint-disable-next-line no-control-regex
-  let stem = title.replace(/[<>:"/\\|?* -]/g, "").trim().replace(/[. ]+$/, "");
+  let stem = title.replace(/[<>:"/\\|?*\x00-\x1f]/g, "").trim().replace(/[. ]+$/, "");
   if (!stem) stem = DEFAULT_BOARD_TITLE;
   if (WINDOWS_RESERVED.test(stem)) stem = `${stem}_`;
   return stem;

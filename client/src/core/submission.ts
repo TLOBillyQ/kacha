@@ -2,9 +2,10 @@
 import type { Board, Region, TaskNode } from "./board";
 import { findModel, type CapabilityTable } from "./capabilities";
 import { composeSendText, isRequestShapeImplemented } from "./gateway";
-import { CHAIN_DEPTH_HINT, chainDepth, imageEdges, taskIssues } from "./graph";
+import { CHAIN_DEPTH_HINT, chainDepth, imageEdges, imagePortSlots, taskIssues, transparentAlphaIssue } from "./graph";
 import { checkImageRefs, promptLanguage } from "./imageRefs";
 import { resolveFromRoot } from "./paths";
+import { overlayPhrases } from "./region";
 import { modelAvailabilityIssue, type Discovery } from "./settings";
 import type { SizeSpec } from "./size";
 
@@ -131,7 +132,15 @@ export function imageSources(board: Board, taskId: string, outputRoot: string): 
   return imageEdges(board, taskId).flatMap((e) => {
     const src = board.nodes.find((n) => n.id === e.from[0]);
     if (src?.type === "reference") return [{ nodeId: src.id, label: src.display_name, absPath: resolveFromRoot(outputRoot, src.path) }];
-    if (src?.type === "result") return [{ nodeId: src.id, label: src.file, absPath: resolveFromRoot(outputRoot, src.path) }];
+    if (src?.type === "result") {
+      // 接了某一图层：路径指向 layers/NN.<ext>（文件名以结果记录为准），标签点明图层序号。
+      if (e.source_layer !== null) {
+        const file = src.record.layers?.[e.source_layer - 1]?.file ?? `layers/${String(e.source_layer).padStart(2, "0")}.png`;
+        const dir = src.path.slice(0, src.path.length - src.file.length);
+        return [{ nodeId: src.id, label: `${src.file} 图层${e.source_layer}`, absPath: resolveFromRoot(outputRoot, `${dir}${file}`) }];
+      }
+      return [{ nodeId: src.id, label: src.file, absPath: resolveFromRoot(outputRoot, src.path) }];
+    }
     return [];
   });
 }
@@ -151,9 +160,17 @@ export interface ConfirmItem {
 }
 
 /** 「图N」实时角标：红 = 引用越界（不可运行），黄 = 有线未被引用。任务节点与二次确认共用。 */
-export function imageRefProblems(board: Board, taskId: string): { issues: string[]; warnings: string[]; unreferenced: number[] } {
-  const count = imageEdges(board, taskId).length;
-  const check = checkImageRefs(promptText(board, taskId, "positive"), count);
+export function imageRefProblems(board: Board, table: CapabilityTable, taskId: string): { issues: string[]; warnings: string[]; unreferenced: number[] } {
+  const prompt = promptText(board, taskId, "positive");
+  const task = findTask(board, taskId);
+  const model = task && findModel(table, task.model);
+  // 序号按展开后口径：区域叠加图紧随原图，占 1 个参考图序号。
+  const slots = imagePortSlots(board, table, taskId);
+  const count = slots.length;
+  const check = checkImageRefs(prompt, count, {
+    injected: model ? overlayPhrases(model, slots, promptLanguage(prompt)) : [],
+    exempt: slots.filter((s) => s.kind === "overlay").map((s) => s.port),
+  });
   return {
     issues: check.outOfRange.map((n) => `提示词引用了图${n}，但只接了 ${count} 张参考图`),
     warnings: check.unreferenced.map((n) => `图${n} 已接线但提示词未引用`),
@@ -170,6 +187,8 @@ export interface ConfirmContext {
   discovery: Discovery;
   /** 图片文件缺失的参考图 / 结果节点 id。 */
   missingNodes: ReadonlySet<string>;
+  /** 节点 id → 是否带透明通道（导入时检测；缺省 = 未知，不拦）。 */
+  alphaByNode?: ReadonlyMap<string, boolean>;
 }
 
 export function buildConfirmItems(board: Board, table: CapabilityTable, taskIds: string[], ctx: ConfirmContext): ConfirmItem[] {
@@ -186,7 +205,7 @@ export function buildConfirmItems(board: Board, table: CapabilityTable, taskIds:
     if (model && !isRequestShapeImplemented(model)) issues.push(`模型 ${model.display_name} 的请求形态尚未接入`);
     const unavailable = model && modelAvailabilityIssue(table, ctx.discovery, model.model_id);
     if (unavailable) issues.push(unavailable);
-    const refs = imageRefProblems(board, taskId);
+    const refs = imageRefProblems(board, table, taskId);
     issues.push(...refs.issues);
     const warnings = [...refs.warnings];
     if (model && images.length > 0 && promptLanguage(prompt) === "en" && model.reference_phrasing.en_verified === "untested") {
@@ -197,14 +216,19 @@ export function buildConfirmItems(board: Board, table: CapabilityTable, taskIds:
     images.forEach((img, i) => {
       if (ctx.missingNodes.has(img.nodeId)) issues.push(`图${i + 1} 图片缺失：${img.label}`);
     });
+    const edges = imageEdges(board, taskId);
+    const alphaIssue = transparentAlphaIssue(board, taskId, edges.length === 1 ? ctx.alphaByNode?.get(edges[0].from[0]) : undefined);
+    if (alphaIssue) issues.push(alphaIssue);
+    const slots = imagePortSlots(board, table, taskId);
+    const regionPhrases = model ? overlayPhrases(model, slots, promptLanguage(prompt)) : [];
     return [
       {
         taskId,
         modelName: model?.display_name ?? task.model,
         firstLine: prompt.split("\n").find((line) => line.trim())?.trim() ?? "",
         negativePrompt,
-        sendText: composeSendText({ prompt, negativePrompt, referenceCount: images.length }),
-        referenceCount: images.length,
+        sendText: composeSendText({ prompt, negativePrompt, referenceCount: slots.length, regionPhrases }),
+        referenceCount: slots.length,
         issues: [...new Set(issues)],
         warnings,
       },

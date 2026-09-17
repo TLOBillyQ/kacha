@@ -2,7 +2,14 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { Handle, Position, useUpdateNodeInternals, type Node, type NodeProps } from "@xyflow/react";
 import { memo, useEffect, useRef, useState, type ReactNode } from "react";
-import type { PromptNode as PromptModel, ReferenceNode as ReferenceModel, ResultNode as ResultModel, TaskNode as TaskModel } from "../core/board";
+import type {
+  PromptNode as PromptModel,
+  PortRef,
+  ReferenceNode as ReferenceModel,
+  ResultNode as ResultModel,
+  RegionRender,
+  TaskNode as TaskModel,
+} from "../core/board";
 import {
   findModel,
   isSupported,
@@ -18,6 +25,7 @@ import { resolveFromRoot } from "../core/paths";
 import { ratiosForSizeTier, sizeTiersOf } from "../core/size";
 import { fileUrl } from "../shell/ipc";
 import { useBoardActions, useImageInfo } from "./context";
+import type { Rect01 } from "./rects";
 
 /** recorded：直接下游有已提交过的任务，编辑时三选；autoFocus：「以此继续编辑」刚新建的空提示词。 */
 export type PromptFlowNode = Node<{ node: PromptModel; recorded: boolean; autoFocus: boolean }, "prompt">;
@@ -39,6 +47,19 @@ export interface ImagePortInfo {
   /** 源图片绝对路径，用于判断透明背景前提（是否带 alpha）。 */
   absPath: string | null;
 }
+/** 端口行按 imagePortSlots 展开口径：带区域的线在 highlight_overlay 下多出紧随的「叠加」锁定行。 */
+export interface ImageSlotInfo {
+  kind: "image" | "overlay";
+  /** 图N 的 N（1 起，展开后发送序）。 */
+  port: number;
+  label: string;
+  absPath: string | null;
+  /** 用户图片端口序号（0 起）；叠加行没有连线，为 null。 */
+  handleIndex: number | null;
+  /** 该区域连线的矩形（归一化）；叠加行为空。 */
+  rects: Rect01[];
+  edgeRef: { from: PortRef; to: PortRef } | null;
+}
 export type TaskFlowNode = Node<
   {
     node: TaskModel;
@@ -53,6 +74,10 @@ export type TaskFlowNode = Node<
     locked: boolean;
     workflow: WorkflowName;
     images: ImagePortInfo[];
+    /** 展开后的端口槽（含区域叠加锁定行）。 */
+    slots: ImageSlotInfo[];
+    /** 当前模型生效的区域渲染方式；null = 不支持区域指示。 */
+    regionRender: RegionRender | null;
     hasPositive: boolean;
     status: TaskStatus | null;
   },
@@ -68,13 +93,13 @@ function Shell({ kind, title, className = "", children }: { kind: string; title:
   );
 }
 
-function Thumb({ absPath, alt }: { absPath: string; alt: string }) {
+function Thumb({ absPath, alt, onOpen }: { absPath: string; alt: string; onOpen?: () => void }) {
   const [missing, setMissing] = useState(false);
   useEffect(() => setMissing(false), [absPath]);
   return missing ? (
     <div className="thumb thumb-missing">图片缺失</div>
   ) : (
-    <img className="thumb" src={fileUrl(absPath)} alt={alt} draggable={false} onError={() => setMissing(true)} />
+    <img className="thumb" src={fileUrl(absPath)} alt={alt} draggable={false} onError={() => setMissing(true)} onDoubleClick={onOpen} title={onOpen ? "双击放大预览" : undefined} />
   );
 }
 
@@ -166,14 +191,14 @@ export const PromptNodeView = memo(function PromptNodeView({ data }: NodeProps<P
 });
 
 export const ReferenceNodeView = memo(function ReferenceNodeView({ data }: NodeProps<ReferenceFlowNode>) {
-  const { outputRoot, continueEditing } = useBoardActions();
+  const { outputRoot, continueEditing, previewNode } = useBoardActions();
   const { node, rules, missing } = data;
   const abs = resolveFromRoot(outputRoot, node.path);
   const info = useImageInfo(abs);
   const warnings = info ? [...new Set(rules.flatMap((rule) => imageRuleViolations(info, rule)))] : [];
   return (
     <Shell kind="reference" title="参考图" className={warnings.length ? "node-warn" : ""}>
-      {missing ? <MissingImage nodeId={node.id} name={node.display_name} /> : <Thumb absPath={abs} alt={node.display_name} />}
+      {missing ? <MissingImage nodeId={node.id} name={node.display_name} /> : <Thumb absPath={abs} alt={node.display_name} onOpen={() => previewNode(node.id)} />}
       <div className="caption" title={node.path}>
         {info?.has_alpha && <span className="badge">透明</span>}
         {node.display_name}
@@ -186,6 +211,9 @@ export const ReferenceNodeView = memo(function ReferenceNodeView({ data }: NodeP
         </ul>
       )}
       <ImageActions>
+        <button onClick={() => previewNode(node.id)} title="放大查看（也可双击图片）；若下游任务支持，可在预览里框选修改区域">
+          放大预览
+        </button>
         <button onClick={() => continueEditing(node.id)} title="新建生成任务，以这张图为图1（多选时按选中顺序接入）">
           以此继续编辑
         </button>
@@ -196,7 +224,7 @@ export const ReferenceNodeView = memo(function ReferenceNodeView({ data }: NodeP
 });
 
 export const ResultNodeView = memo(function ResultNodeView({ data }: NodeProps<ResultFlowNode>) {
-  const { outputRoot, table, continueEditing, addAsReference, generateVariant } = useBoardActions();
+  const { outputRoot, table, continueEditing, addAsReference, generateVariant, previewNode } = useBoardActions();
   const { node, missing, referenceTarget, variantBlocker } = data;
   const abs = resolveFromRoot(outputRoot, node.path);
   const info = useImageInfo(abs);
@@ -206,7 +234,7 @@ export const ResultNodeView = memo(function ResultNodeView({ data }: NodeProps<R
   return (
     <Shell kind="result" title="结果">
       <Handle type="target" position={Position.Left} id="in" isConnectable={false} />
-      {missing ? <MissingImage nodeId={node.id} name={node.file} /> : <Thumb absPath={abs} alt={node.file} />}
+      {missing ? <MissingImage nodeId={node.id} name={node.file} /> : <Thumb absPath={abs} alt={node.file} onOpen={() => previewNode(node.id)} />}
       <div className="badges">
         {info?.has_alpha && <span className="badge">透明</span>}
         {node.layer_count > 0 && <span className="badge">{node.layer_count} 图层</span>}
@@ -228,6 +256,12 @@ export const ResultNodeView = memo(function ResultNodeView({ data }: NodeProps<R
         </dd>
       </dl>
       <ImageActions>
+        <button
+          onClick={() => previewNode(node.id)}
+          title={node.layer_count > 0 ? "放大查看（也可双击图片）；可勾选图层叠加显示、按图层继续编辑 / 加为参考图、导出图层" : "放大查看（也可双击图片）"}
+        >
+          放大预览
+        </button>
         <button onClick={() => continueEditing(node.id)} title="新建生成任务，以这张图为图1（多选时按选中顺序接入）">
           以此继续编辑
         </button>
@@ -340,8 +374,8 @@ function PortRow({
 }
 
 export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskFlowNode>) {
-  const { table, updateNode, moveImagePort, availableModels, setTaskModel, cancelTask, regenerate } = useBoardActions();
-  const { node, ports, issues, warnings, unreferenced, chainDepth, locked, workflow, images, hasPositive, status } = data;
+  const { table, updateNode, moveImagePort, availableModels, setTaskModel, cancelTask, regenerate, editRegion } = useBoardActions();
+  const { node, ports, issues, warnings, unreferenced, chainDepth, locked, workflow, images, slots, regionRender, hasPositive, status } = data;
   const [infoOpen, setInfoOpen] = useState(false);
   const [dragFrom, setDragFrom] = useState<number | null>(null);
   const updateInternals = useUpdateNodeInternals();
@@ -389,7 +423,7 @@ export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskF
   }, [dragFrom, node.id, moveImagePort]);
 
   // 端口数量或顺序变化后，React Flow 需要重新测量 Handle 位置。
-  const portSignature = `${ports.negative}|${ports.imageSlots}|${images.map((i) => i.label).join(",")}`;
+  const portSignature = `${ports.negative}|${ports.imageSlots}|${slots.map((s) => `${s.kind}:${s.port}:${s.label}`).join(",")}`;
   useEffect(() => updateInternals(node.id), [portSignature, node.id, updateInternals]);
 
   const tiers = rule ? sizeTiersOf(rule) : [];
@@ -499,26 +533,66 @@ export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskF
       <div className="ports">
         <PortRow id="positive" label="正向提示词" className={hasPositive ? "" : "port-required"} connectable={!locked} />
         {ports.negative && <PortRow id="negative" label="负向提示词" connectable={!locked} />}
-        {Array.from({ length: ports.imageSlots }, (_, i) => {
-          const image = images[i];
+        {slots.map((slot) => {
+          if (slot.kind === "overlay") {
+            return (
+              <PortRow
+                key={`overlay-${slot.port}`}
+                id={`overlay:${slot.port}`}
+                connectable={false}
+                className="nodrag port-overlay"
+                label={`图${slot.port} · 叠加`}
+              >
+                <span className="muted small" title="区域叠加图由系统按紧随的原图自动生成，不可重排、不可断开">
+                  锁定
+                </span>
+              </PortRow>
+            );
+          }
+          const i = slot.handleIndex!;
           return (
             <PortRow
-              key={i}
+              key={`image-${i}`}
               id={`${IMAGE_PORT_PREFIX}${i}`}
               connectable={!locked}
-              className={`nodrag ${image ? "port-filled" : "port-empty"} ${unreferenced.includes(i + 1) ? "port-unreferenced" : ""} ${dragFrom === i ? "port-dragging" : ""} ${dropTo === i ? "port-drop" : ""}`}
-              label={image ? `图${i + 1} · ${image.label}` : `图${i + 1}（空）`}
-              data-port-index={image ? i : undefined}
+              className={`nodrag port-filled ${unreferenced.includes(slot.port) ? "port-unreferenced" : ""} ${dragFrom === i ? "port-dragging" : ""} ${dropTo === i ? "port-drop" : ""}`}
+              label={`图${slot.port} · ${slot.label}`}
+              data-port-index={i}
               onPointerDown={(e) => {
-                if (!image || locked || e.button !== 0 || (e.target as HTMLElement).closest(".react-flow__handle")) return;
+                if (locked || e.button !== 0 || (e.target as HTMLElement).closest(".react-flow__handle, button")) return;
                 e.preventDefault();
                 setDragFrom(i);
               }}
             >
-              {image && !locked && <span className="grip" title="拖动调整参考图顺序">⋮⋮</span>}
+              {slot.absPath && (
+                <span className="port-thumb" title={slot.rects.length ? `已框选 ${slot.rects.length} 个修改区域` : undefined}>
+                  <img src={fileUrl(slot.absPath)} alt={slot.label} draggable={false} />
+                  {slot.rects.map((r, k) => (
+                    <span
+                      key={k}
+                      className="port-thumb-rect"
+                      style={{ left: `${r[0] * 100}%`, top: `${r[1] * 100}%`, width: `${(r[2] - r[0]) * 100}%`, height: `${(r[3] - r[1]) * 100}%` }}
+                    />
+                  ))}
+                </span>
+              )}
+              {slot.edgeRef && regionRender !== null && !locked && (
+                <button
+                  className="link small"
+                  title="在放大预览里框出希望模型修改的位置"
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={() => editRegion(node.id, slot.edgeRef!)}
+                >
+                  框选修改区域{slot.rects.length > 0 ? `（${slot.rects.length}）` : ""}
+                </button>
+              )}
+              {!locked && <span className="grip" title="拖动调整参考图顺序">⋮⋮</span>}
             </PortRow>
           );
         })}
+        {ports.imageSlots > images.length && (
+          <PortRow id={`${IMAGE_PORT_PREFIX}${images.length}`} connectable={!locked} className="nodrag port-empty" label={`图${slots.length + 1}（空）`} />
+        )}
         {model && !isSupported(model.workflows[workflow].supports_negative_prompt) && ports.negative && (
           <div className="muted small">当前模型不支持负向提示词</div>
         )}

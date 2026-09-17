@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState } from "react";
-import type { Board, KnownNode } from "../core/board";
+import type { Board, KnownNode, PortRef, Region } from "../core/board";
 import type { CapabilityTable, ModelCapability } from "../core/capabilities";
 import { joinPath, resolveFromRoot } from "../core/paths";
 import type { TaskStatus } from "../core/run";
@@ -20,12 +20,18 @@ export interface BoardActions {
   forkPrompt: (promptId: string, text: string) => void;
   cancelTask: (taskId: string) => void;
   regenerate: (taskId: string) => void;
-  /** 迭代动作：触发节点在多选内时按选中顺序带上其余图片节点。 */
-  continueEditing: (nodeId: string) => void;
-  addAsReference: (resultId: string) => void;
+  /** 迭代动作：触发节点在多选内时按选中顺序带上其余图片节点；sourceLayer（1 起）= 接该图层而非合成结果。 */
+  continueEditing: (nodeId: string, sourceLayer?: number | null) => void;
+  addAsReference: (resultId: string, sourceLayer?: number | null) => void;
   generateVariant: (resultId: string) => void;
   /** 缺图节点：pick = 选文件，search = 在输出根目录内按身份找。 */
   relocate: (nodeId: string, mode: "pick" | "search") => void;
+  /** 设置 / 清除一条图片连线的指示区域。 */
+  setEdgeRegion: (ref: { from: PortRef; to: PortRef }, region: Region | null) => void;
+  /** 参考图 / 结果节点的「放大预览」：弹窗里可再选扇出任务编辑区域。 */
+  previewNode: (nodeId: string) => void;
+  /** 任务端口行的「指示区域」：直接编辑该条连线的区域。 */
+  editRegion: (taskId: string, ref: { from: PortRef; to: PortRef }) => void;
 }
 
 export const BoardContext = createContext<BoardActions | null>(null);
@@ -54,6 +60,23 @@ export function useImageInfo(absPath: string | null): ImageInfo | null | undefin
 
 export function primeImageInfo(absPath: string, info: ImageInfo): void {
   imageInfoCache.set(absPath, Promise.resolve(info));
+}
+
+/** 批量读取图片信息（画布级：透明通道接线等）；path → 信息，读取失败为 null。 */
+export function useImageInfos(absPaths: string[]): ReadonlyMap<string, ImageInfo | null> {
+  const [infos, setInfos] = useState<ReadonlyMap<string, ImageInfo | null>>(new Map());
+  const signature = JSON.stringify(absPaths);
+  useEffect(() => {
+    let alive = true;
+    void Promise.all(absPaths.map(async (abs) => [abs, await cachedImageInfo(abs)] as const)).then(
+      (entries) => alive && setInfos(new Map(entries)),
+    );
+    return () => {
+      alive = false;
+    };
+    // absPaths 由 signature 概括。
+  }, [signature]);
+  return infos;
 }
 
 function cachedImageInfo(absPath: string): Promise<ImageInfo | null> {

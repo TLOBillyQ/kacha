@@ -153,3 +153,123 @@ describe("单任务端到端", () => {
     expect(failureLabel(err)).toBe("网关限流");
   });
 });
+
+describe("区域指示：提交链路", () => {
+  const REGION = { rects: [[0.1, 0.1, 0.5, 0.5] as [number, number, number, number]], render: "highlight_overlay" as const };
+
+  function regionBoard(): Board {
+    const b = board(true);
+    b.edges = b.edges.map((e) => (e.to[1] === "image:0" ? { ...e, region: REGION } : e));
+    return b;
+  }
+
+  const withOverlay = (d: RunDeps, composed: Uint8Array) => {
+    const calls: { bytes: Uint8Array; rects: unknown }[] = [];
+    d.composeOverlay = async (image, rects) => {
+      calls.push({ bytes: image, rects });
+      return composed;
+    };
+    return calls;
+  };
+
+  it("叠加图紧随原图作参考图；task.json 记端口序号 + 矩形 + 渲染方式；固定句进发送文本与请求", async () => {
+    const { d, files, requests } = deps(ok);
+    const calls = withOverlay(d, PNG);
+    const { job: prepared, board: b1 } = await prepareJob(d, { board: regionBoard(), table: BUILTIN_TABLE, tableSha256: "x", outputRoot: "/root", taskNodeId: "t" });
+    expect(calls).toHaveLength(1);
+    expect(calls[0].bytes).toEqual(PNG);
+    expect(calls[0].rects).toEqual(REGION.rects);
+    expect(prepared.input.regionPhrases?.[0]).toContain("图2 是图1 的标注版");
+
+    const job = await writeJob(d, "/root", prepared);
+    const dir = `/root/${job.relDir}`;
+    const taskJson = JSON.parse(new TextDecoder().decode(files.get(`${dir}/task.json`)));
+    expect(taskJson.references).toHaveLength(2);
+    expect(taskJson.references[1]).toMatchObject({
+      source: { kind: "overlay", of: 1 },
+      region: { rects: REGION.rects, render: "highlight_overlay", source_port: 1 },
+    });
+    expect(taskJson.send_text).toContain("本次提供 2 张参考图，按顺序为图1、图2。");
+    expect(taskJson.send_text).toContain("输出图里不要出现紫色高亮。");
+
+    await executeJob(d, { job, outputRoot: "/root", baseUrl: "http://gw", apiKey: "k", newNodeId: "res" });
+    const body = JSON.parse(String(requests[0].init.body));
+    expect(body.input.messages[0].content).toHaveLength(3);
+    expect(body.input.messages[0].content[2].text).toContain("图2 是图1 的标注版");
+    void b1;
+  });
+
+  it("重新生成：按 task.json 的 region 记录重建固定句，参考图原样重发", async () => {
+    const { d, files } = deps(ok);
+    withOverlay(d, PNG);
+    const { job: first, board: b1 } = await prepareJob(d, { board: regionBoard(), table: BUILTIN_TABLE, tableSha256: "x", outputRoot: "/root", taskNodeId: "t" });
+    await writeJob(d, "/root", first);
+    d.now = () => new Date("2026-09-17T01:00:00Z");
+    const { job: again } = await prepareRegenerate(d, { board: b1, table: BUILTIN_TABLE, tableSha256: "y", outputRoot: "/root", taskNodeId: "t" });
+    expect(again.plan.references[1]).toMatchObject({ source: { kind: "overlay", of: 1 }, region: { source_port: 1 } });
+    expect(again.input.regionPhrases?.[0]).toContain("图2 是图1 的标注版");
+    const job = await writeJob(d, "/root", again);
+    expect(files.get(`/root/${job.relDir}/reference-2.png`)).toEqual(PNG);
+  });
+
+  it("有区域但没注入叠加合成能力：本地错误", async () => {
+    const { d } = deps(ok);
+    const err = await prepareJob(d, { board: regionBoard(), table: BUILTIN_TABLE, tableSha256: "x", outputRoot: "/root", taskNodeId: "t" }).catch((e) => e);
+    expect(failureLabel(err)).toBe("本地文件错误");
+  });
+});
+
+describe("图层拆分：执行", () => {
+  const multi = () => ({
+    status: 200,
+    body: JSON.stringify({
+      metadata: {
+        output: {
+          choices: [
+            {
+              message: {
+                content: [
+                  { image: PNG_B64 },
+                  { image: PNG_B64, z_index: 2, bounding_box: [0, 0, 10, 10] },
+                  { image: PNG_B64, z_index: 1, bounding_box: [5, 5, 20, 20] },
+                ],
+              },
+            },
+          ],
+        },
+      },
+    }),
+  });
+
+  it("拆分开关下多张返回：首张 result.png，其余按 z_index 落盘 layers/NN，结果节点记 layer_count 与 layers", async () => {
+    const { d, files } = deps(multi);
+    const b = board(false);
+    (b.nodes[1] as TaskNode).layer_decomposition = true;
+    const { job: prepared, board: b1 } = await prepareJob(d, { board: b, table: BUILTIN_TABLE, tableSha256: "x", outputRoot: "/root", taskNodeId: "t" });
+    const job = await writeJob(d, "/root", prepared);
+    const apply = await executeJob(d, { job, outputRoot: "/root", baseUrl: "http://gw", apiKey: "k", newNodeId: "res" });
+    const dir = `/root/${job.relDir}`;
+    expect(files.get(`${dir}/result.png`)).toEqual(PNG);
+    expect(files.get(`${dir}/layers/01.png`)).toEqual(PNG);
+    expect(files.get(`${dir}/layers/02.png`)).toEqual(PNG);
+    const b2 = apply(b1);
+    const res = b2.nodes.find((n) => n.id === "res") as ResultNode;
+    expect(res.layer_count).toBe(2);
+    expect(res.record.layers).toEqual([
+      { file: "layers/01.png", z_index: 1, bounding_box: [5, 5, 20, 20] },
+      { file: "layers/02.png", z_index: 2, bounding_box: [0, 0, 10, 10] },
+    ]);
+  });
+
+  it("拆分只返回一张：按普通结果处理，无图层", async () => {
+    const { d, files } = deps(ok);
+    const b = board(false);
+    (b.nodes[1] as TaskNode).layer_decomposition = true;
+    const { job: prepared, board: b1 } = await prepareJob(d, { board: b, table: BUILTIN_TABLE, tableSha256: "x", outputRoot: "/root", taskNodeId: "t" });
+    const job = await writeJob(d, "/root", prepared);
+    const apply = await executeJob(d, { job, outputRoot: "/root", baseUrl: "http://gw", apiKey: "k", newNodeId: "res" });
+    const b2 = apply(b1);
+    expect((b2.nodes.find((n) => n.id === "res") as ResultNode).layer_count).toBe(0);
+    expect([...files.keys()].some((k) => k.includes("layers/"))).toBe(false);
+  });
+});

@@ -244,3 +244,64 @@ describe("已中断：重开时推导", () => {
     expect(isInterrupted(board([task("t")], []), "t", new Set())).toBe(false);
   });
 });
+
+describe("区域指示：图N 校验与发送文本", () => {
+  const ctx = { discovery: { source: "none" as const }, missingNodes: new Set<string>() };
+  const REGION = { rects: [[0.1, 0.1, 0.5, 0.5] as [number, number, number, number]], render: "highlight_overlay" as const };
+  const regionBoard = (text: string) =>
+    board([prompt("p", text), reference("r1"), task("t")], [edge("p", "t", "positive"), { ...edge("r1", "t", "image:0"), region: REGION }]);
+
+  it("叠加图紧随原图占序号：固定句算引用、叠加序号豁免黄检、固定句进发送文本", () => {
+    const [item] = buildConfirmItems(regionBoard("把@图1 的帽子改成红色"), BUILTIN_TABLE, ["t"], ctx);
+    expect(item.issues).toEqual([]);
+    expect(item.warnings).toEqual([]);
+    expect(item.referenceCount).toBe(2);
+    expect(item.sendText).toBe(
+      "本次提供 2 张参考图，按顺序为图1、图2。\n把图1 的帽子改成红色\n图2 是图1 的标注版，紫色半透明高亮标出的区域是要修改的范围。只修改图1 中高亮区域内的内容，高亮区域之外的所有内容保持完全不变，输出图里不要出现紫色高亮。",
+    );
+  });
+
+  it("引用越界按展开后序号", () => {
+    const [item] = buildConfirmItems(regionBoard("把@图3 的颜色用到@图1 上"), BUILTIN_TABLE, ["t"], ctx);
+    expect(item.issues).toEqual(["提示词引用了图3，但只接了 2 张参考图"]);
+  });
+
+  it("区域变更让任务变脏", () => {
+    const b = regionBoard("把@图1 的帽子改成红色");
+    const done = submitted(b, "t");
+    expect(isDirty(done, "t")).toBe(false);
+    const moved = {
+      ...done,
+      edges: done.edges.map((e) => (e.to[1] === "image:0" ? { ...e, region: { rects: [[0.2, 0.2, 0.6, 0.6] as [number, number, number, number]], render: "highlight_overlay" as const } } : e)),
+    };
+    expect(isDirty(moved, "t")).toBe(true);
+  });
+});
+
+describe("图层来源", () => {
+  it("source_layer 指向 layers/NN 文件，标签点明图层序号", () => {
+    const r = result("x") as Extract<BoardNode, { type: "result" }>;
+    const withLayers = {
+      ...r,
+      layer_count: 2,
+      record: { ...r.record, layers: [{ file: "layers/01.png", z_index: 1, bounding_box: [] }, { file: "layers/02.jpg", z_index: 2, bounding_box: [] }] },
+    };
+    const b = board([prompt("p", "@图1 改色"), withLayers, task("t")], [edge("p", "t", "positive"), { ...edge("x", "t", "image:0"), source_layer: 2 }]);
+    expect(imageSources(b, "t", "/root")).toEqual([{ nodeId: "x", label: "result.png 图层2", absPath: "/root/2026-09-16/task-x/layers/02.jpg" }]);
+    // 快照也记 source_layer：换图层让任务变脏。
+    expect(snapshotOf(b, "t")?.images[0]).toMatchObject({ kind: "result", source_layer: 2 });
+  });
+});
+
+describe("透明背景：二次确认标红", () => {
+  it("源图不带透明通道时标红（alpha 由界面注入；缺省未知不拦）", () => {
+    const b = board(
+      [prompt("p", "抠出@图1 的主体"), reference("r1"), task("t", { transparent_background: true })],
+      [edge("p", "t", "positive"), edge("r1", "t", "image:0")],
+    );
+    const [bad] = buildConfirmItems(b, BUILTIN_TABLE, ["t"], { discovery: { source: "none" }, missingNodes: new Set(), alphaByNode: new Map([["r1", false]]) });
+    expect(bad.issues).toContain("该图不带透明通道");
+    const [unknown] = buildConfirmItems(b, BUILTIN_TABLE, ["t"], { discovery: { source: "none" }, missingNodes: new Set() });
+    expect(unknown.issues).not.toContain("该图不带透明通道");
+  });
+});

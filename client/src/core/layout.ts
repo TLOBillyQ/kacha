@@ -1,6 +1,7 @@
 // 自动落位（规格第 4 节「布局」）：任务右侧结果列自上而下累积；迭代动作新建的节点落在触发节点旁。
 // 只找就近空位，不推开、不重排，用户摆过的位置永远不动。
 import type { Board, ResultNode, ResultRecord } from "./board";
+import type { LayerRecord } from "./taskDir";
 
 export const RESULT_NODE_SIZE: [number, number] = [220, 300];
 export const TASK_NODE_SIZE: [number, number] = [280, 260];
@@ -53,6 +54,8 @@ export interface NewResult {
   file: string;
   path: string;
   record: ResultRecord;
+  /** 拆分图层（已按 z_index 升序落盘）；有则写进记录并作为 layer_count。 */
+  layers?: LayerRecord[];
 }
 
 /** 加结果节点与系统连线；任务节点已被删除时原样返回。 */
@@ -68,8 +71,8 @@ export function addResultNode(board: Board, result: NewResult): Board {
     task_id: result.submittedTaskId,
     file: result.file,
     path: result.path,
-    layer_count: 0,
-    record: result.record,
+    layer_count: result.layers?.length ?? 0,
+    record: result.layers?.length ? { ...result.record, layers: result.layers } : result.record,
   };
   return {
     ...board,

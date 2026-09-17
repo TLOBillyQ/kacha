@@ -66,9 +66,14 @@ export interface GenerationInput {
   size: { width: number; height: number };
   /** 按参考图序号排列；0 张 = 文生图。 */
   references: ReferenceImage[];
+  /** 区域指示固定句，追加在发送文本末尾。 */
+  regionPhrases?: string[];
 }
 
-export type GeneratedImage = { kind: "url"; url: string } | { kind: "bytes"; bytes: Uint8Array };
+export type GeneratedImage = ({ kind: "url"; url: string } | { kind: "bytes"; bytes: Uint8Array }) & {
+  /** 图层信息（z_index / bounding_box 取自 content item，合成形状待 #83 确认）。 */
+  layer?: { z_index: number; bounding_box: number[] };
+};
 
 // ---- 请求构造 ----
 
@@ -86,15 +91,27 @@ function referenceNote(count: number, language: PromptLanguage): string {
 /**
  * 完整发送文本：二次确认弹窗展示、任务记录保存的都是它。
  * 提示词里的 @图N 按语言改写（只改发送文本）；文生图即改写后的提示词（负向走独立字段）；
- * 图片编辑注入数量顺序前缀，负向并入文本（契约「开放试用」一节）。
+ * 图片编辑注入数量顺序前缀，负向并入文本（契约「开放试用」一节）；区域指示固定句追加在末尾。
  */
-export function composeSendText({ prompt, negativePrompt, referenceCount }: { prompt: string; negativePrompt: string; referenceCount: number }): string {
+export function composeSendText({
+  prompt,
+  negativePrompt,
+  referenceCount,
+  regionPhrases = [],
+}: {
+  prompt: string;
+  negativePrompt: string;
+  referenceCount: number;
+  /** 区域指示固定句（每个叠加参考图一句），逐句追加在末尾。 */
+  regionPhrases?: string[];
+}): string {
+  const phrases = regionPhrases.length ? `\n${regionPhrases.join("\n")}` : "";
   const text = rewriteImageRefs(prompt);
-  if (referenceCount === 0) return text;
+  if (referenceCount === 0) return `${text}${phrases}`;
   const language = promptLanguage(prompt);
   const withNote = `${referenceNote(referenceCount, language)}\n${text}`;
-  if (!negativePrompt) return withNote;
-  return `${withNote}\n${language === "en" ? "Avoid: " : "避免出现："}${negativePrompt}`;
+  if (!negativePrompt) return `${withNote}${phrases}`;
+  return `${withNote}\n${language === "en" ? "Avoid: " : "避免出现："}${negativePrompt}${phrases}`;
 }
 
 function toBase64(bytes: Uint8Array): string {
@@ -115,7 +132,7 @@ const qwenImagesEdits: RequestShape = (input) => {
     Object.assign(body, { n: 1, size: `${size.width}x${size.height}` }, model.fixed_params);
     return { path: TEXT_TO_IMAGE_PATH, body };
   }
-  const text = composeSendText({ prompt, negativePrompt, referenceCount: references.length });
+  const text = composeSendText({ prompt, negativePrompt, referenceCount: references.length, regionPhrases: input.regionPhrases ?? [] });
   const content = [...references.map((r) => ({ image: `data:${r.mediaType};base64,${toBase64(r.bytes)}` })), { text }];
   return {
     path: IMAGE_EDIT_PATH,
@@ -215,23 +232,27 @@ export function parseGeneratedImages(body: unknown): GeneratedImage[] {
     for (const item of content) {
       const image = item?.image;
       if (typeof image !== "string" || !image) continue;
-      if (/^https?:\/\//i.test(image)) out.push({ kind: "url", url: image });
+      // 图层字段的合成形状待 #83 确认：z_index 数字、bounding_box 数字数组，缺一不算图层。
+      const zIndex = typeof item?.z_index === "number" ? item.z_index : null;
+      const box = Array.isArray(item?.bounding_box) && item.bounding_box.every((n: unknown) => typeof n === "number") ? (item.bounding_box as number[]) : null;
+      const layer = zIndex !== null && box !== null ? { z_index: zIndex, bounding_box: box } : undefined;
+      if (/^https?:\/\//i.test(image)) out.push({ kind: "url", url: image, ...(layer ? { layer } : {}) });
       else {
         const bytes = decodeBase64(image);
-        if (bytes) out.push({ kind: "bytes", bytes });
+        if (bytes) out.push({ kind: "bytes", bytes, ...(layer ? { layer } : {}) });
       }
     }
   }
   return out;
 }
 
-/** 提交一个生成任务；一个任务恰取一张结果（ADR 0011）。 */
-export async function generate(config: GatewayConfig, input: GenerationInput): Promise<{ image: GeneratedImage; requestId: string | null }> {
+/** 提交一个生成任务；图层拆分时可能返回多张（首张为合成结果）。 */
+export async function generate(config: GatewayConfig, input: GenerationInput): Promise<{ images: GeneratedImage[]; requestId: string | null }> {
   const { path, body } = buildGenerationRequest(input);
   const response = await send(config, "POST", path, body);
-  const [image] = parseGeneratedImages(response.body);
-  if (!image) throw new GatewayError("invalid_response", "网关没有返回图片", 200, response.requestId);
-  return { image, requestId: response.requestId };
+  const images = parseGeneratedImages(response.body);
+  if (!images.length) throw new GatewayError("invalid_response", "网关没有返回图片", 200, response.requestId);
+  return { images, requestId: response.requestId };
 }
 
 /** 取结果图字节；临时地址下载不带网关鉴权头。 */
