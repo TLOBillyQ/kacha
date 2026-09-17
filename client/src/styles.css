@@ -865,3 +865,30 @@ button.primary:disabled {
   flex-direction: column;
   gap: 6px;
 }
+
+.context-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 160px;
+  padding: 4px 0;
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgb(0 0 0 / 15%);
+}
+.context-menu button {
+  padding: 6px 14px;
+  text-align: left;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+.context-menu button:hover:not(:disabled) {
+  background: #eef1f4;
+}
+.context-menu button:disabled {
+  color: #8c959f;
+  cursor: default;
+}

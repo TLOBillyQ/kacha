@@ -14,7 +14,7 @@ import {
   type OnConnectEnd,
   type Viewport,
 } from "@xyflow/react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { BOARD_EXTENSION, type Board, type BoardEdge, type KnownNode, type TaskNode } from "../core/board";
 import { findModel, modelsByTier, type CapabilityTable, type InputImageRule } from "../core/capabilities";
 import type { TaskStatus } from "../core/run";
@@ -39,6 +39,7 @@ import {
   workflowOf,
   type Connection,
 } from "../core/graph";
+import { LOCKED_HINT, menuItems, selectionForMenu, variantBlocker, type BoardAction, type MenuTarget } from "../core/contextMenu";
 import { countLabel, MERGE_PAUSE_MS, nodeEditChange, type Change, type UserChange } from "../core/history";
 import { addAsReference, addAsReferenceTarget, continueEditing, copySelection, lineage, pasteClip, PASTE_OFFSET, producerOf, type Clip, type Outcome } from "../core/iterate";
 import { PROMPT_NODE_SIZE, TASK_NODE_SIZE } from "../core/layout";
@@ -50,6 +51,7 @@ import { defaultSizeSpec } from "../core/size";
 import { imageRefProblems, imageSources, type SnapshotImage } from "../core/submission";
 import { ipc } from "../shell/ipc";
 import { logEvent } from "../shell/log";
+import { ContextMenu } from "./ContextMenu";
 import { PresetDialog } from "./PresetDialog";
 import { BoardContext, primeImageInfo, useImageInfos, useMissingImages, useStoredStatuses, type BoardActions } from "./context";
 import { nodeTypes, type ImagePortInfo, type ImageSlotInfo } from "./nodes";
@@ -96,8 +98,6 @@ interface Props {
   /** 运行指示跳转：居中并选中该节点；nonce 变化即再跳一次。 */
   focus: { nodeId: string; nonce: number } | null;
 }
-
-const LOCKED_HINT = "任务排队 / 执行中：模型、尺寸、开关、图片端口与连线已锁定";
 
 const edgeId = (e: BoardEdge) => `${e.from.join(":")}->${e.to.join(":")}`;
 const dims = (w: number | undefined, h: number | undefined) => ({ width: w, height: h });
@@ -357,11 +357,8 @@ export function BoardCanvas({
       switch (n.type) {
         case "prompt":
           return [{ ...base, type: "prompt", data: { node: n, recorded: hasDownstreamRecords(board, n.id), autoFocus: focusPrompt === n.id } }];
-        case "result": {
-          const parent = producerOf(board, n.id);
-          const variantBlocker = !parent ? "父任务已删除" : locked.has(parent.id) ? "父任务正在排队 / 执行" : null;
-          return [{ ...base, type: "result", data: { node: n, missing: missing.has(n.id), referenceTarget, variantBlocker } }];
-        }
+        case "result":
+          return [{ ...base, type: "result", data: { node: n, missing: missing.has(n.id), referenceTarget, variantBlocker: variantBlocker(board, n.id, locked) } }];
         case "reference": {
           const downstream = board.edges.filter((e) => e.from[0] === n.id).map((e) => board.nodes.find((t) => t.id === e.to[0]));
           const modelIds = downstream.flatMap((t) => (t?.type === "task" ? [t.model] : []));
@@ -624,8 +621,9 @@ export function BoardCanvas({
     [update],
   );
 
-  const addPrompt = () =>
-    addNode({ type: "prompt", id: crypto.randomUUID(), pos: posOf(centerPosition()), size: PROMPT_NODE_SIZE, text: "", extra: {} }, { label: "新建提示词" });
+  // 新建类动作：at = 节点左上角的画布坐标（上下文菜单的点击处）；缺省 = 视口中央（工具栏）。
+  const addPrompt = (at = centerPosition()) =>
+    addNode({ type: "prompt", id: crypto.randomUUID(), pos: posOf(at), size: PROMPT_NODE_SIZE, text: "", extra: {} }, { label: "新建提示词" });
 
   const applyPreset = (preset: Preset) => {
     // 先在空画板上落好节点再并入：更新函数可能延后执行，选中的 id 要先定下来。
@@ -635,14 +633,14 @@ export function BoardCanvas({
     setPresetsOpen(false);
   };
 
-  const addTask = () => {
+  const addTask = (at = centerPosition()) => {
     const modelId = defaultTaskModel(table, discovery, board.last_model);
     const model = modelId ? findModel(table, modelId) : undefined;
     if (!model) return toast("能力表中没有上架模型");
     const node: TaskNode = {
       type: "task",
       id: crypto.randomUUID(),
-      pos: posOf(centerPosition()),
+      pos: posOf(at),
       size: TASK_NODE_SIZE,
       model: model.model_id,
       size_spec: defaultSizeSpec(model.workflows.text_to_image.size_rule),
@@ -686,9 +684,9 @@ export function BoardCanvas({
     [update, outputRoot, toast],
   );
 
-  const pickReferences = async () => {
+  const pickReferences = async (at?: { x: number; y: number }) => {
     const picked = await open({ multiple: true, filters: [{ name: "图片", extensions: IMAGE_EXTENSIONS }] });
-    if (picked) await importReferences(Array.isArray(picked) ? picked : [picked], centerPosition());
+    if (picked) await importReferences(Array.isArray(picked) ? picked : [picked], at ?? centerPosition());
   };
 
   // 撤销 / 重做（供工具栏与上下文菜单）：锁定任务按当前状态保留。
@@ -732,6 +730,61 @@ export function BoardCanvas({
     return () => window.removeEventListener("keydown", onKey);
   }, [updateBoard, undo, redo]);
 
+  // 上下文菜单：client = 弹出处的窗口坐标，at = 同一点的画布坐标（新建节点落点）。
+  const [menu, setMenu] = useState<{ target: MenuTarget; client: { x: number; y: number }; at: { x: number; y: number } } | null>(null);
+  const closeMenu = useCallback(() => setMenu(null), []);
+  const openMenu = (e: ReactMouseEvent | MouseEvent, target: MenuTarget) => {
+    e.preventDefault();
+    if (target.kind === "node") {
+      const next = selectionForMenu(selectedRef.current, target.nodeId);
+      if (next !== selectedRef.current) setSelectedNodes(new Set(next));
+    }
+    const client = { x: e.clientX, y: e.clientY };
+    setMenu({ target, client, at: flow.screenToFlowPosition(client) });
+  };
+
+  /** 按 action 执行：与工具栏 / 节点按钮同一套逻辑（删除、断开走 React Flow 删除流程，规则同 Delete 键）。 */
+  const performAction = (action: BoardAction, target: MenuTarget, at: { x: number; y: number }) => {
+    const nodeId = target.kind === "node" ? target.nodeId : null;
+    const edge = target.kind === "edge" ? target.edge : null;
+    switch (action) {
+      case "newPrompt":
+        return addPrompt(at);
+      case "newTask":
+        return addTask(at);
+      case "addReferences":
+        return void pickReferences(at);
+      case "undo":
+        return undo();
+      case "redo":
+        return redo();
+      case "preview":
+        return nodeId && actions.previewNode(nodeId);
+      case "continueEditing":
+        return nodeId && actions.continueEditing(nodeId);
+      case "addAsReference":
+        return nodeId && actions.addAsReference(nodeId);
+      case "generateVariant":
+        return nodeId && actions.generateVariant(nodeId);
+      case "run":
+        return nodeId && onRun([nodeId]);
+      case "cancel":
+        return nodeId && onCancelTask(nodeId);
+      case "regenerate":
+        return nodeId && onRegenerate(nodeId);
+      case "delete":
+        return nodeId && void flow.deleteElements({ nodes: [...selectionForMenu(selectedRef.current, nodeId)].map((id) => ({ id })) });
+      case "disconnect":
+        return edge && void flow.deleteElements({ edges: [{ id: edgeId(edge) }] });
+      case "editRegion":
+        return edge && actions.editRegion(edge.to[0], { from: edge.from, to: edge.to });
+    }
+  };
+
+  const menuEntries = menu
+    ? menuItems(menu.target, { board, table, selected: menu.target.kind === "node" ? selectionForMenu(selectedNodes, menu.target.nodeId) : selectedNodes, locked, undoLabel, redoLabel })
+    : [];
+
   // 从资源管理器拖入：画板文件打开为标签页，其余当参考图导入。
   useEffect(() => {
     let disposed = false;
@@ -756,10 +809,11 @@ export function BoardCanvas({
 
   return (
     <BoardContext.Provider value={actions}>
-      <div className="canvas" ref={wrapper}>
+      {/* 画布内屏蔽 WebView 默认右键菜单；可编辑元素保留原生菜单（复制粘贴）。 */}
+      <div className="canvas" ref={wrapper} onContextMenu={(e) => !isTyping(e.target) && e.preventDefault()}>
         <div className="toolbar">
-          <button onClick={addPrompt}>＋ 提示词</button>
-          <button onClick={addTask}>＋ 生成任务</button>
+          <button onClick={() => addPrompt()}>＋ 提示词</button>
+          <button onClick={() => addTask()}>＋ 生成任务</button>
           <button onClick={() => void pickReferences()}>＋ 参考图…</button>
           <button onClick={() => setPresetsOpen(true)}>＋ 从预设…</button>
           <button onClick={undo} disabled={!undoLabel} title={undoLabel ? `撤销 ${undoLabel}（Ctrl+Z）` : "没有可撤销的操作"} aria-label="撤销">
@@ -784,7 +838,15 @@ export function BoardCanvas({
           onConnectEnd={onConnectEnd}
           onBeforeDelete={onBeforeDelete}
           onDelete={onDelete}
+          onMoveStart={closeMenu}
           onMoveEnd={onMoveEnd}
+          onPaneContextMenu={(e) => openMenu(e, { kind: "pane" })}
+          onNodeContextMenu={(e, n) => !isTyping(e.target) && openMenu(e, { kind: "node", nodeId: n.id })}
+          onSelectionContextMenu={(e, ns) => ns[0] && openMenu(e, { kind: "node", nodeId: ns[0].id })}
+          onEdgeContextMenu={(e, fe) => {
+            const target = board.edges.find((be) => edgeId(be) === fe.id);
+            if (target) openMenu(e, { kind: "edge", edge: target });
+          }}
           onNodeDragStart={onDragStart}
           onNodeDragStop={onDragStop}
           onSelectionDragStart={onDragStart}
@@ -796,6 +858,9 @@ export function BoardCanvas({
           <Controls />
           <MiniMap pannable zoomable />
         </ReactFlow>
+        {menu && menuEntries.length > 0 && (
+          <ContextMenu at={menu.client} items={menuEntries} onPick={(action) => performAction(action, menu.target, menu.at)} onClose={closeMenu} />
+        )}
         {presetsOpen && <PresetDialog onUse={applyPreset} onClose={() => setPresetsOpen(false)} />}
         {preview && <PreviewDialog key={preview.nonce} req={preview.req} toast={toast} onClose={() => setPreview(null)} />}
       </div>

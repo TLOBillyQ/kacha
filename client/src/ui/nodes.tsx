@@ -20,6 +20,7 @@ import {
   type WorkflowName,
 } from "../core/capabilities";
 import type { TaskStatus } from "../core/run";
+import { regenerateBlocker } from "../core/contextMenu";
 import { CHAIN_DEPTH_HINT, IMAGE_PORT_PREFIX, imageRuleViolations, type TaskPorts } from "../core/graph";
 import { resolveFromRoot } from "../core/paths";
 import { ratiosForSizeTier, sizeTiersOf } from "../core/size";
@@ -621,8 +622,8 @@ export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskF
         ) : (
           <button
             onClick={() => regenerate(node.id)}
-            disabled={node.last_submitted === null}
-            title={node.last_submitted === null ? "还没有提交过" : "按上次提交的参数再生成一张（新任务、新结果节点）"}
+            disabled={regenerateBlocker(node) !== null}
+            title={regenerateBlocker(node) ?? "按上次提交的参数再生成一张（新任务、新结果节点）"}
           >
             重新生成
           </button>
