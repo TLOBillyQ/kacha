@@ -1012,6 +1012,11 @@ button.primary[aria-disabled="true"] {
 .context-menu button:hover:not([aria-disabled="true"]) {
   background: #eef1f4;
 }
+.context-menu-separator {
+  height: 1px;
+  margin: 4px 0;
+  background: var(--border);
+}
 .context-menu button[aria-disabled="true"] {
   color: #8c959f;
   cursor: default;

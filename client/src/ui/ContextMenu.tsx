@@ -1,5 +1,5 @@
 // 上下文菜单的弹出层：条目由 core/contextMenu 按对象给出，这里只负责摆放、置灰（悬浮给原因）与关闭（点外面 / Esc）。
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { clampMenuPosition, type BoardAction, type MenuItem } from "../core/contextMenu";
 import { textHoverInfo } from "../core/hoverInfo";
 import { HoverButton } from "./hoverInfo";
@@ -45,18 +45,20 @@ export function ContextMenu({ at, items, onPick, onClose }: Props) {
   return (
     <div className="context-menu" role="menu" ref={ref} style={{ left: pos.x, top: pos.y }} onContextMenu={(e) => e.preventDefault()}>
       {items.map((item) => (
-        <HoverButton
-          key={item.action}
-          role="menuitem"
-          disabled={item.disabledReason !== null}
-          info={item.disabledReason ? textHoverInfo(item.disabledReason) : null}
-          onClick={() => {
-            onClose();
-            onPick(item.action);
-          }}
-        >
-          {item.label}
-        </HoverButton>
+        <Fragment key={item.action}>
+          {item.separatorBefore && <div className="context-menu-separator" role="separator" />}
+          <HoverButton
+            role="menuitem"
+            disabled={item.disabledReason !== null}
+            info={item.disabledReason ? textHoverInfo(item.disabledReason) : null}
+            onClick={() => {
+              onClose();
+              onPick(item.action);
+            }}
+          >
+            {item.label}
+          </HoverButton>
+        </Fragment>
       ))}
     </div>
   );

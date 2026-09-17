@@ -14,7 +14,8 @@ function facts(patch: Partial<MenuFacts> = {}): MenuFacts {
   return { board: board(), table: BUILTIN_TABLE, selected: new Set(), locked: new Set(), expanded: new Set(), undoLabel: null, redoLabel: null, ...patch };
 }
 
-const summary = (items: ReturnType<typeof menuItems>) => items.map((i) => [i.action, i.label, i.disabledReason]);
+/** 分隔线记作 "---" 一行。 */
+const summary = (items: ReturnType<typeof menuItems>) => items.flatMap((i) => [...(i.separatorBefore ? ["---"] : []), [i.action, i.label, i.disabledReason]]);
 
 describe("空白处菜单", () => {
   it("给出新建三项、撤销 / 重做与导出画板包，撤销文案带上一步描述", () => {
@@ -23,15 +24,17 @@ describe("空白处菜单", () => {
       ["newPrompt", "新建提示词", null],
       ["newTask", "新建生成任务", null],
       ["addReferences", "添加参考图…", null],
+      "---",
       ["undo", "撤销 移动 2 个节点", null],
       ["redo", "重做 新建提示词", null],
+      "---",
       ["exportPack", "导出画板包…", null],
     ]);
   });
 
   it("无可撤销 / 可重做时两项置灰", () => {
     const items = menuItems({ kind: "pane" }, facts());
-    expect(summary(items).slice(3, 5)).toEqual([
+    expect(summary(items).slice(4, 6)).toEqual([
       ["undo", "撤销", "没有可撤销的操作"],
       ["redo", "重做", "没有可重做的操作"],
     ]);
@@ -82,9 +85,11 @@ describe("图片节点菜单", () => {
   it("参考图：放大预览 / 另存为 / 以此继续编辑 / 删除", () => {
     const b = board([reference("r")]);
     expect(summary(menuItems({ kind: "node", nodeId: "r" }, facts({ board: b, selected: new Set(["r"]) })))).toEqual([
+      ["continueEditing", "以此继续编辑", null],
+      "---",
       ["preview", "放大预览", null],
       ["saveAs", "另存为…", null],
-      ["continueEditing", "以此继续编辑", null],
+      "---",
       ["delete", "删除", null],
     ]);
   });
@@ -92,11 +97,13 @@ describe("图片节点菜单", () => {
   it("结果：另有加为参考图与生成变体，置灰原因同节点按钮", () => {
     const b = board([result("res")]);
     expect(summary(menuItems({ kind: "node", nodeId: "res" }, facts({ board: b, selected: new Set(["res"]) })))).toEqual([
-      ["preview", "放大预览", null],
-      ["saveAs", "另存为…", null],
       ["continueEditing", "以此继续编辑", null],
       ["addAsReference", "加为参考图", "先选一个生成任务"],
       ["generateVariant", "生成变体", "父任务已删除"],
+      "---",
+      ["preview", "放大预览", null],
+      ["saveAs", "另存为…", null],
+      "---",
       ["delete", "删除", null],
     ]);
   });
@@ -114,10 +121,12 @@ describe("任务 / 提示词节点菜单", () => {
   it("空闲任务：展开设置在首；运行可用，取消置灰；没提交过时重新生成置灰", () => {
     const b = board([task("t")]);
     expect(summary(menuItems({ kind: "node", nodeId: "t" }, facts({ board: b, selected: new Set(["t"]) })))).toEqual([
-      ["toggleSettings", "展开设置", null],
       ["run", "运行", null],
-      ["cancel", "取消", "任务不在排队 / 执行中"],
       ["regenerate", "重新生成", "还没有提交过"],
+      ["cancel", "取消", "任务不在排队 / 执行中"],
+      "---",
+      ["toggleSettings", "展开设置", null],
+      "---",
       ["delete", "删除", null],
     ]);
   });
@@ -125,10 +134,12 @@ describe("任务 / 提示词节点菜单", () => {
   it("排队 / 执行中的任务：只有取消可用（删除走删除规则）", () => {
     const b = board([task("t", { last_submitted: submitted })]);
     expect(summary(menuItems({ kind: "node", nodeId: "t" }, facts({ board: b, selected: new Set(["t"]), locked: new Set(["t"]) })))).toEqual([
-      ["toggleSettings", "展开设置", null],
       ["run", "运行", "任务正在排队 / 执行"],
-      ["cancel", "取消", null],
       ["regenerate", "重新生成", "任务正在排队 / 执行"],
+      ["cancel", "取消", null],
+      "---",
+      ["toggleSettings", "展开设置", null],
+      "---",
       ["delete", "删除", null],
     ]);
   });
@@ -136,7 +147,7 @@ describe("任务 / 提示词节点菜单", () => {
   it("已展开的任务：该项为收起设置", () => {
     const b = board([task("t")]);
     const items = menuItems({ kind: "node", nodeId: "t" }, facts({ board: b, selected: new Set(["t"]), expanded: new Set(["t"]) }));
-    expect(summary(items)[0]).toEqual(["toggleSettings", "收起设置", null]);
+    expect(items.find((i) => i.action === "toggleSettings")?.label).toBe("收起设置");
   });
 
   it("提交过的空闲任务可重新生成", () => {
@@ -166,6 +177,7 @@ describe("右键与选区", () => {
     const items = menuItems({ kind: "node", nodeId: "t" }, facts({ board: b, selected: new Set(["r", "res", "t"]) }));
     expect(summary(items)).toEqual([
       ["continueEditing", "以此继续编辑", null],
+      "---",
       ["delete", "删除 3 个节点", null],
     ]);
   });
@@ -176,6 +188,7 @@ describe("右键与选区", () => {
     expect(summary(items)).toEqual([
       ["continueEditing", "以此继续编辑", null],
       ["addAsReference", "加为参考图", null],
+      "---",
       ["delete", "删除 2 个节点", null],
     ]);
   });
@@ -242,8 +255,9 @@ describe("连线菜单", () => {
 
   it("图片线在下游模型支持区域指示时另有框选修改区域", () => {
     expect(summary(menuItems({ kind: "edge", edge: imageLine }, facts({ board: b, table: withRegion(true) })))).toEqual([
-      ["disconnect", "断开", null],
       ["editRegion", "框选修改区域", null],
+      "---",
+      ["disconnect", "断开", null],
     ]);
   });
 
