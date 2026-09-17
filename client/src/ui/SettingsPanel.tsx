@@ -159,8 +159,9 @@ export function SettingsPanel({ settings, outputRoot, defaultOutputRoot, openBoa
             value={concurrency}
             onChange={(e) => setConcurrency(Math.min(MAX_CONCURRENCY, Math.max(MIN_CONCURRENCY, Math.round(Number(e.target.value) || MIN_CONCURRENCY))))}
           />
-          <span className="muted small">1～5，默认 3</span>
+          <span className="muted small">1～{MAX_CONCURRENCY}，默认 {DEFAULT_SETTINGS.concurrency}</span>
         </label>
+        {concurrency > 5 && <div className="muted small form-hint">qwen 模型曾在 6 个以上并发时触发网关限流；限流时整条队列会暂停等待。</div>}
 
         <DiagnosticsSection outputRoot={outputRoot} openBoards={openBoards} />
 

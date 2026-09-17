@@ -15,9 +15,9 @@ import {
 } from "./settings";
 
 describe("高级设置 settings.json", () => {
-  it("缺失时用默认值：v1 网关地址、输出根目录跟随默认、并发 3", () => {
+  it("缺失时用默认值：v1 网关地址、输出根目录跟随默认、并发 4", () => {
     expect(parseSettings(null)).toEqual({ kind: "ok", settings: DEFAULT_SETTINGS });
-    expect(DEFAULT_SETTINGS).toMatchObject({ format_version: 1, base_url: "http://lzxsvn:3001", output_root: null, concurrency: 3 });
+    expect(DEFAULT_SETTINGS).toMatchObject({ format_version: 1, base_url: "http://lzxsvn:3001", output_root: null, concurrency: 4 });
   });
 
   it("往返并保留未知字段", () => {
@@ -36,15 +36,17 @@ describe("高级设置 settings.json", () => {
   });
 
   it("损坏报错并用默认值", () => {
-    for (const text of ["{oops", "[]", '{"format_version":1,"base_url":3}', '{"format_version":1,"concurrency":9}', '{"format_version":0}']) {
+    for (const text of ["{oops", "[]", '{"format_version":1,"base_url":3}', '{"format_version":1,"concurrency":11}', '{"format_version":0}']) {
       const parsed = parseSettings(text);
       expect(parsed.kind, text).toBe("corrupt");
       expect(parsed.settings).toEqual(DEFAULT_SETTINGS);
     }
   });
 
-  it("并发上限只接受 1～5 的整数", () => {
+  it("并发上限只接受 1～10 的整数", () => {
     expect(parseSettings('{"format_version":1,"concurrency":1}').kind).toBe("ok");
+    expect(parseSettings('{"format_version":1,"concurrency":10}').kind).toBe("ok");
+    expect(parseSettings('{"format_version":1,"concurrency":11}').kind).toBe("corrupt");
     expect(parseSettings('{"format_version":1,"concurrency":2.5}').kind).toBe("corrupt");
     expect(parseSettings('{"format_version":1,"concurrency":0}').kind).toBe("corrupt");
   });

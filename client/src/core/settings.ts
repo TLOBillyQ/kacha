@@ -3,7 +3,7 @@ import { type CapabilityTable, type ModelCapability, modelsByTier } from "./capa
 
 export const SETTINGS_FORMAT_VERSION = 1;
 export const MIN_CONCURRENCY = 1;
-export const MAX_CONCURRENCY = 5;
+export const MAX_CONCURRENCY = 10;
 
 type Json = Record<string, unknown>;
 
@@ -21,7 +21,7 @@ export const DEFAULT_SETTINGS: Settings = {
   format_version: SETTINGS_FORMAT_VERSION,
   base_url: "http://lzxsvn:3001",
   output_root: null,
-  concurrency: 3,
+  concurrency: 4,
   extra: {},
 };
 
