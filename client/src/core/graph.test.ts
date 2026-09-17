@@ -223,7 +223,7 @@ describe("任务节点露出", () => {
 
   it("开关按能力露出；待测不露出", () => {
     const g = board([task("t", SEEDREAM_PRO)]);
-    expect(taskPorts(g, table, "t")).toMatchObject({ layerDecomposition: false, transparentBackground: false });
+    expect(taskPorts(g, table, "t")).toMatchObject({ layerDecomposition: false });
     const t = withModel((m) => {
       m.transparent_background = "supported";
       m.workflows.text_to_image.layer_decomposition = "supported";

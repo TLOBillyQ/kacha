@@ -47,9 +47,10 @@ describe("渲染方式推导", () => {
     expect(effectiveRegionRender(undefined)).toBeNull();
   });
 
-  it("bbox_tag 优先于 highlight_overlay", () => {
-    const model = { ...qwen, region_hint: { highlight_overlay: "supported" as const, marked_image: "unsupported" as const, bbox_tag: "supported" as const } };
-    expect(effectiveRegionRender(model)).toBe("bbox_tag");
+  it("highlight_overlay 优先于 bbox_tag，bbox_tag 优先于 marked_image", () => {
+    const model = { ...qwen, region_hint: { highlight_overlay: "supported" as const, marked_image: "supported" as const, bbox_tag: "supported" as const } };
+    expect(effectiveRegionRender(model)).toBe("highlight_overlay");
+    expect(effectiveRegionRender({ ...model, region_hint: { ...model.region_hint, highlight_overlay: "unsupported" as const } })).toBe("bbox_tag");
   });
 });
 

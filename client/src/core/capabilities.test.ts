@@ -41,7 +41,6 @@ describe("三态", () => {
   it("列出模型的待测能力供模型说明浮层展示", () => {
     const pro = BUILTIN_TABLE.models.find((m) => m.model_id.startsWith("doubao-seedream-5-0-pro"))!;
     expect(untestedCapabilities(pro)).toEqual([
-      "透明背景",
       "拆分图层（文生图）",
       "拆分图层（图片编辑）",
     ]);

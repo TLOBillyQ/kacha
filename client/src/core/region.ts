@@ -5,8 +5,8 @@ import { isSupported, type ModelCapability } from "./capabilities";
 import type { PromptLanguage } from "./imageRefs";
 import { REGION_COLORS } from "./overlay";
 
-/** 渲染方式选择优先级：取模型支持的第一个。 */
-export const RENDER_PRIORITY: RegionRender[] = ["bbox_tag", "marked_image", "highlight_overlay"];
+/** 渲染方式选择优先级：取模型支持的第一个。高亮叠加居首：分色 +「区域N」改写在 qwen 与 Seedream 上均已实测多区域命中（#83）。 */
+export const RENDER_PRIORITY: RegionRender[] = ["highlight_overlay", "bbox_tag", "marked_image"];
 
 /** 模型当前生效的区域渲染方式；全部不支持 / 待测为 null。 */
 export function effectiveRegionRender(model: ModelCapability | undefined): RegionRender | null {

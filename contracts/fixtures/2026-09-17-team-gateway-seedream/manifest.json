@@ -68,6 +68,18 @@
         {
           "evidence": "pro-burst10-0.json",
           "summary": "{pro,lite}-burst10-0～9.json：每模型 10 个并发纯文生图全部 HTTP 200，无 429。"
+        },
+        {
+          "evidence": "pro-multi-overlay-1.json",
+          "summary": "{pro,lite}-multi-{overlay,marked,bbox}-{1,2,3}.json：双区域不同指令（第 2 个方块改红、第 4 个改绿）。高亮叠加（紫 / 黄分色）、图上标记（紫 / 黄框）、坐标标签（两段 <bbox>）两模型各 3/3 全对，输出无高亮 / 框线残留。"
+        },
+        {
+          "evidence": "pro-transparent-1.json",
+          "summary": "pro 单张带 alpha 输入 + background:\"transparent\"：输出 RGBA，透明像素 81%（pro-transparent-2.json 同）；对照 pro-transparent-ctl.json 不带参数输出 RGB 白底。lite-transparent-1.json 带参数仍输出 RGB（被忽略）。"
+        },
+        {
+          "evidence": "pro-layers-a.json",
+          "summary": "pro-layers-{a,b,c}.json：猜测参数 layer_decomposition=true / \"enabled\" / {enabled:true} 均 HTTP 200 但被忽略，只出一张图、无图层字段。"
         }
       ]
     },
@@ -130,6 +142,18 @@
     "rate_limit": {
       "status": "unknown",
       "evidence": "{pro,lite}-burst10-*.json：并发 10 未触发 429（qwen 6～10 并发即 429）；阈值未探。"
+    },
+    "multi_region": {
+      "status": "confirmed",
+      "evidence": "{pro,lite}-multi-*.json：三种渲染方式双区域各 3/3。"
+    },
+    "transparent_background": {
+      "status": "confirmed",
+      "evidence": "pro-transparent-{1,2,ctl}.json：pro 支持 background:\"transparent\"；lite-transparent-1.json：lite 忽略。"
+    },
+    "layer_decomposition": {
+      "status": "unknown",
+      "evidence": "pro-layers-*.json：三种猜测参数均被忽略；官方 API 文档页为前端渲染无法抓取，参数形态未知。"
     }
   },
   "verified_models": [
@@ -137,9 +161,8 @@
     "doubao-seedream-5-0-lite-260128"
   ],
   "untested": [
-    "透明背景、图层拆分（官方文档未给出确切参数形态）",
+    "图层拆分的真实参数形态（官方文档未取得）",
     "图上标记 / 坐标标签的固定句模板定稿措辞（region_hint_phrasing，交 #95）",
-    "多种区域指示同时支持时的优先级（三种均命中，未做对比）",
     "429 确切阈值（并发 > 10 或 RPM）",
     "真实照片 / 复杂场景下区域指示精度（本轮为合成几何图形）"
   ],
@@ -147,8 +170,9 @@
     "请求形态：顶层 image 数组 + /v1/images/generations；不要用 qwen 的 input.messages 形态（静默丢图）。",
     "网关模型 ID：pro = doubao-seedream-5-0-pro-260628，lite = doubao-seedream-5-0-lite-260128（正式 ID 503）。",
     "多轮修改沿用结果回灌；「图N」/「Image N」改写规则与 qwen 相同。",
-    "区域指示：高亮叠加、图上标记两模型均有效；坐标标签 pro 有效，lite 保守不露出。",
+    "区域指示：三种方式两模型多区域均 3/3；客户端统一用高亮叠加（复用分色 +「区域N」改写），坐标标签 / 图上标记能力如实记录但不实现。",
     "参考图上限 pro 10 / lite 14；并发 10 无 429，客户端仍沿用全局退避策略。",
-    "fixed_params：watermark:false、output_format:png 生效；lite sequential_image_generation:disabled 被接受。耗时 lite 约 25 s、pro 30～90 s。"
+    "fixed_params：watermark:false、output_format:png 生效；lite sequential_image_generation:disabled 被接受。耗时 lite 约 25 s、pro 30～90 s。",
+    "透明背景：pro 用 background:\"transparent\" 生效（单张带 alpha 输入），lite 不支持。图层拆分参数未知，保持待测。"
   ]
 }
