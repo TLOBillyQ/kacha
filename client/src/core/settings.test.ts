@@ -103,12 +103,13 @@ describe("模型发现", () => {
 describe("新建任务默认模型", () => {
   const live = (ids: string[]) => ({ source: "live" as const, ids, fetchedAt: "t" });
 
-  it("优先画板级最近选择；不可用时退回可用列表第一个", () => {
+  it("优先画板级最近选择；否则首选 Seedream 5.0 lite；都不可用时退回可用列表第一个", () => {
     expect(defaultTaskModel(BUILTIN_TABLE, { source: "none" }, "qwen-image-3.0")).toBe("qwen-image-3.0");
-    expect(defaultTaskModel(BUILTIN_TABLE, { source: "none" }, null)).toBe("qwen-image-3.0-pro");
+    expect(defaultTaskModel(BUILTIN_TABLE, { source: "none" }, null)).toBe("doubao-seedream-5-0-lite-260128");
     expect(defaultTaskModel(BUILTIN_TABLE, live(["qwen-image-3.0"]), "qwen-image-3.0-pro")).toBe("qwen-image-3.0");
     expect(defaultTaskModel(BUILTIN_TABLE, { source: "none" }, "doubao-seedream-5-0-pro-260628")).toBe("doubao-seedream-5-0-pro-260628");
-    expect(defaultTaskModel(BUILTIN_TABLE, { source: "none" }, "nope")).toBe("qwen-image-3.0-pro");
+    expect(defaultTaskModel(BUILTIN_TABLE, { source: "none" }, "nope")).toBe("doubao-seedream-5-0-lite-260128");
+    expect(defaultTaskModel(BUILTIN_TABLE, live(["qwen-image-3.0-pro", "doubao-seedream-5-0-pro-260628"]), null)).toBe("qwen-image-3.0-pro");
   });
 
   it("网关一个上架模型都没有时仍给上架清单第一个（节点会标红）", () => {

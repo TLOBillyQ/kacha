@@ -30,7 +30,7 @@ const isImageNode = (n: BoardNode | undefined): n is Extract<BoardNode, { type: 
 
 /**
  * 以此继续编辑：新任务节点按选中顺序接入触发节点的图片，新空提示词节点接正向，负向扇出复用源任务的。
- * 模型 / 尺寸继承被点击的触发节点的源任务（产出任务已删则按结果记录）；源模型不支持编辑或触发于参考图时用默认编辑模型。不带区域指示。
+ * 模型 / 尺寸继承被点击的触发节点的源任务（产出任务已删则按结果记录）；源模型不支持编辑或触发于参考图时用工具栏模型（不支持编辑再退回默认编辑模型）。不带区域指示。
  * sourceLayers：节点 id → 图层序号（1 起）时接该图层而非合成结果（规格第 7 节）。
  * 新任务与触发节点同行，横向在最右侧的选中节点右边；taskAt = 新任务左上角的指定落点（拖线建节点的松手处）。
  */
@@ -52,7 +52,7 @@ export function continueEditing(
   const inherited: { model: string; size_spec: SizeSpec } | null =
     trigger.type === "reference" ? null : producer ? { model: producer.model, size_spec: producer.size_spec } : { model: trigger.record.model, size_spec: trigger.record.size_spec };
   const inheritedModel = inherited && findModel(table, inherited.model);
-  const model: ModelCapability | null = inheritedModel && inheritedModel.workflows.image_edit.max_references > 0 ? inheritedModel : defaultEditModel(table, discovery);
+  const model: ModelCapability | null = inheritedModel && inheritedModel.workflows.image_edit.max_references > 0 ? inheritedModel : defaultEditModel(table, discovery, board.last_model);
   if (!model) return { ok: false, reason: "上架清单中没有支持图片编辑的模型" };
   const rule = model.workflows.image_edit.size_rule;
   const size_spec = inherited && resolveSize(rule, inherited.size_spec) ? { ...inherited.size_spec } : defaultSizeSpec(rule);

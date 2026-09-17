@@ -116,13 +116,15 @@ describe("以此继续编辑", () => {
     expect(images).toEqual(["r1", "r2"]);
   });
 
-  it("触发于参考图节点：用上架清单默认编辑模型，不接负向", () => {
+  it("触发于参考图节点：用工具栏模型，不接负向", () => {
     const b = ok(continueEditing(board([reference("r")]), BUILTIN_TABLE, NONE, ["r"], "r", ids));
-    expect(find<TaskNode>(b, "new-task").model).toBe("qwen-image-3.0-pro");
+    expect(find<TaskNode>(b, "new-task").model).toBe("doubao-seedream-5-0-lite-260128");
     expect(b.edges.some((e) => e.to[1] === "negative")).toBe(false);
+    const picked = ok(continueEditing({ ...board([reference("r")]), last_model: "qwen-image-3.0" }, BUILTIN_TABLE, NONE, ["r"], "r", ids));
+    expect(find<TaskNode>(picked, "new-task").model).toBe("qwen-image-3.0");
   });
 
-  it("源模型不支持图片编辑：换默认编辑模型，尺寸不在其尺寸表内时用默认尺寸", () => {
+  it("源模型与工具栏模型都不支持图片编辑：换默认编辑模型，尺寸不在其尺寸表内时用默认尺寸", () => {
     const b0 = lineage();
     const src = find<TaskNode>(b0, "src");
     src.model = "doubao-seedream-5-0-lite-260128";
@@ -143,7 +145,7 @@ describe("以此继续编辑", () => {
 
   it("选中的图片超过模型参考图上限：拒绝，画板不变", () => {
     const refs = ["a", "b", "c", "d"].map((id) => reference(id));
-    const r = continueEditing(board(refs), BUILTIN_TABLE, NONE, ["a", "b", "c", "d"], "a", ids);
+    const r = continueEditing({ ...board(refs), last_model: "qwen-image-3.0" }, BUILTIN_TABLE, NONE, ["a", "b", "c", "d"], "a", ids);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toMatch(/最多接 3 张参考图，选中了 4 张/);
   });

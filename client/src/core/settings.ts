@@ -144,15 +144,21 @@ export function modelAvailabilityIssue(table: CapabilityTable, discovery: Discov
   return `网关未提供模型 ${name}`;
 }
 
-/** 新建任务节点的模型：画板级最近选择（仍可用时）→ 可用列表第一个 → 上架清单第一个；都没有为 null。 */
+/** 画板没有最近选择时的首选模型。 */
+export const PREFERRED_TASK_MODEL = "doubao-seedream-5-0-lite-260128";
+
+/** 新建任务节点的模型：画板级最近选择（仍可用时）→ 首选模型（可用时）→ 可用列表第一个 → 上架清单第一个；都没有为 null。 */
 export function defaultTaskModel(table: CapabilityTable, discovery: Discovery, lastModel: string | null | undefined): string | null {
   const available = availableModels(table, discovery);
   if (lastModel && available.some((m) => m.model_id === lastModel)) return lastModel;
+  if (available.some((m) => m.model_id === PREFERRED_TASK_MODEL)) return PREFERRED_TASK_MODEL;
   return available[0]?.model_id ?? shelved(table)[0]?.model_id ?? null;
 }
 
-/** 迭代动作用的默认编辑模型：可用列表里第一个支持图片编辑的 → 上架清单里第一个；都没有为 null。 */
-export function defaultEditModel(table: CapabilityTable, discovery: Discovery): ModelCapability | null {
+/** 迭代动作用的默认编辑模型：工具栏模型（支持图片编辑时）→ 可用列表里第一个支持图片编辑的 → 上架清单里第一个；都没有为 null。 */
+export function defaultEditModel(table: CapabilityTable, discovery: Discovery, lastModel: string | null | undefined): ModelCapability | null {
   const canEdit = (m: ModelCapability) => m.workflows.image_edit.max_references > 0;
+  const toolbar = table.models.find((m) => m.model_id === defaultTaskModel(table, discovery, lastModel));
+  if (toolbar && canEdit(toolbar)) return toolbar;
   return availableModels(table, discovery).find(canEdit) ?? shelved(table).find(canEdit) ?? null;
 }
