@@ -151,10 +151,10 @@ export function copySelection(board: Board, ids: string[]): Clip {
 }
 
 /** 粘贴：新 id、整体偏移；任务节点的提交记录清空（新节点从未提交过）。 */
-export function pasteClip(board: Board, clip: Clip, newId: () => string): { board: Board; ids: string[] } {
+export function pasteClip(board: Board, clip: Clip, newId: () => string, offset = PASTE_OFFSET): { board: Board; ids: string[] } {
   const idMap = new Map(clip.nodes.map((n) => [n.id, newId()]));
   const nodes = clip.nodes.map((n): BoardNode => {
-    const copy = { ...structuredClone(n), id: idMap.get(n.id)!, pos: [n.pos[0] + PASTE_OFFSET, n.pos[1] + PASTE_OFFSET] as [number, number] };
+    const copy = { ...structuredClone(n), id: idMap.get(n.id)!, pos: [n.pos[0] + offset, n.pos[1] + offset] as [number, number] };
     return copy.type === "task" ? { ...copy, last_submitted: null } : copy;
   });
   const edges = clip.edges.map((e) => ({ ...structuredClone(e), from: [idMap.get(e.from[0])!, e.from[1]] as [string, string], to: [idMap.get(e.to[0])!, e.to[1]] as [string, string] }));

@@ -23,7 +23,6 @@ import {
   canConnect,
   connect,
   chainDepth,
-  deletionBlocker,
   disconnect,
   forkPrompt,
   hasDownstreamRecords,
@@ -40,7 +39,7 @@ import {
   type Connection,
 } from "../core/graph";
 import { menuItems, selectionForMenu, type BoardAction, type MenuTarget } from "../core/contextMenu";
-import { countLabel, MERGE_PAUSE_MS, nodeEditChange, type Change, type UserChange } from "../core/history";
+import { countLabel, nodeEditChange, type Change, type UserChange } from "../core/history";
 import { addAsReference, addAsReferenceTarget, continueEditing, copySelection, lineage, LOCKED_HINT, pasteClip, PASTE_OFFSET, producerOf, variantBlocker, type Clip, type Outcome } from "../core/iterate";
 import { PROMPT_NODE_SIZE, TASK_NODE_SIZE } from "../core/layout";
 import { placePreset, type Preset } from "../core/presets";
@@ -54,8 +53,10 @@ import { logEvent } from "../shell/log";
 import { ContextMenu } from "./ContextMenu";
 import { PresetDialog } from "./PresetDialog";
 import { BoardContext, primeImageInfo, useImageInfos, useMissingImages, useStoredStatuses, type BoardActions } from "./context";
+import { edgeTypes } from "./edges";
 import { nodeTypes, type ImagePortInfo, type ImageSlotInfo } from "./nodes";
 import { PreviewDialog, type PreviewRequest, type RegionTarget } from "./PreviewDialog";
+import { isTyping, useCanvasInteraction, type Selection } from "./useCanvasInteraction";
 import { isActive } from "./useRunner";
 
 const relocateFs: RelocateFs = {
@@ -66,9 +67,6 @@ const relocateFs: RelocateFs = {
 
 /** 复制粘贴的剪贴板：应用内共享，可粘到另一个画板（只带节点之间的连线，不跨画板连线）。 */
 let clipboard: Clip | null = null;
-
-const isTyping = (target: EventTarget | null) =>
-  target instanceof HTMLElement && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName));
 
 interface Props {
   board: Board;
@@ -128,8 +126,8 @@ export function BoardCanvas({
 }: Props) {
   const flow = useReactFlow();
   const wrapper = useRef<HTMLDivElement>(null);
-  const [selectedNodes, setSelectedNodes] = useState<Set<string>>(new Set());
-  const [selectedEdges, setSelectedEdges] = useState<Set<string>>(new Set());
+  const [selectedNodes, setSelectedNodes] = useState<ReadonlySet<string>>(new Set());
+  const [selectedEdges, setSelectedEdges] = useState<ReadonlySet<string>>(new Set());
   const [presetsOpen, setPresetsOpen] = useState(false);
   const [measured, setMeasured] = useState<Record<string, { width?: number; height?: number }>>({});
 
@@ -164,9 +162,16 @@ export function BoardCanvas({
     const present = new Set(board.nodes.map((n) => n.id));
     setSelectedNodes((s) => ([...s].every((id) => present.has(id)) ? s : new Set([...s].filter((id) => present.has(id)))));
   }, [board.nodes]);
+  const selectedEdgesRef = useRef(selectedEdges);
+  selectedEdgesRef.current = selectedEdges;
   const [focusPrompt, setFocusPrompt] = useState<string | null>(null);
   const missing = useMissingImages(board, outputRoot);
   const [preview, setPreview] = useState<{ req: PreviewRequest; nonce: number } | null>(null);
+  // 预设 / 预览弹窗开着时快捷键不作用于背后的画板。
+  const dialogOpenRef = useRef(false);
+  dialogOpenRef.current = presetsOpen || preview !== null;
+  const selection = useMemo<Selection>(() => ({ nodes: selectedRef, edges: selectedEdgesRef, setNodes: setSelectedNodes, setEdges: setSelectedEdges }), []);
+  const nav = useCanvasInteraction({ wrapper, boardRef, selection, dialogOpen: dialogOpenRef, updateBoard });
   const previewNonce = useRef(0);
 
   // 每个图片源节点的透明通道（导入 / 定位时已有缓存，未读的批量补读）；未知不进入 Map。
@@ -352,7 +357,7 @@ export function BoardCanvas({
         position: { x: n.pos[0], y: n.pos[1] },
         selected: selectedNodes.has(n.id),
         measured: measured[n.id],
-        className: highlighted.nodes.has(n.id) ? "in-lineage" : undefined,
+        className: highlighted.nodes.has(n.id) ? "in-lineage" : selectedNodes.size ? "dimmed" : undefined,
       };
       switch (n.type) {
         case "prompt":
@@ -432,46 +437,49 @@ export function BoardCanvas({
         label: (e.region?.rects.length ?? 0) > 0 ? `${e.region!.rects.length} 区域` : undefined,
         deletable: !e.system,
         selectable: !e.system,
-        className: [e.system ? "edge-system" : e.to[1] === "negative" ? "edge-negative" : "", highlighted.edges.has(e) ? "edge-lineage" : ""].join(" ").trim() || undefined,
+        className:
+          [e.system ? "edge-system" : e.to[1] === "negative" ? "edge-negative" : "", highlighted.edges.has(e) ? "edge-lineage" : selectedNodes.size ? "dimmed" : ""].join(" ").trim() ||
+          undefined,
       })),
-    [board.edges, selectedEdges, highlighted],
+    [board.edges, selectedEdges, selectedNodes, highlighted],
   );
 
   /** 进行中的拖动编号（0 = 没在拖）；每次拖动一个新合并键。 */
   const activeDrag = useRef(0);
   const dragCounter = useRef(0);
-  const onDragStart = useCallback(() => {
-    activeDrag.current = ++dragCounter.current;
-  }, []);
+  /** Alt + 拖复制时这次拖动的步描述（复制与移动合为一步）。 */
+  const dragLabel = useRef<string | null>(null);
+  const onDragStart = useCallback(
+    (event: MouseEvent | TouchEvent | React.MouseEvent, ...rest: [Node, Node[]] | [Node[]]) => {
+      activeDrag.current = ++dragCounter.current;
+      dragLabel.current = nav.startDrag(event, rest.length === 2 ? rest[1] : rest[0], `drag:${activeDrag.current}`);
+    },
+    [nav.startDrag],
+  );
   const onDragStop = useCallback(() => {
+    nav.stopDrag();
     activeDrag.current = 0;
-  }, []);
+    dragLabel.current = null;
+  }, [nav.stopDrag]);
 
   const onNodesChange = useCallback(
     (changes: NodeChange[]) => {
       const moves = new Map<string, { x: number; y: number }>();
+      nav.selectNodes(changes.flatMap((c) => (c.type === "select" ? [c] : [])));
       for (const c of changes) {
         if (c.type === "position" && c.position) moves.set(c.id, c.position);
         else if (c.type === "dimensions" && c.dimensions) {
           const { width, height } = c.dimensions;
           setMeasured((m) => (m[c.id]?.width === width && m[c.id]?.height === height ? m : { ...m, [c.id]: dims(width, height) }));
-        } else if (c.type === "select") {
-          setSelectedNodes((s) => {
-            if (s.has(c.id) === c.selected) return s;
-            const next = new Set(s);
-            if (c.selected) next.add(c.id);
-            else next.delete(c.id);
-            return next;
-          });
         }
         // remove 由 onBeforeDelete / onDelete 统一处理。
       }
       if (moves.size) {
-        // 一次拖动（含多选）从开始到 onNodeDragStop 合为一步；拖动之外的位置变更（方向键微移）连按合为一步。
+        // 一次拖动（含多选、Alt + 拖复制）从开始到 onNodeDragStop 合为一步；方向键微移不经这里（useCanvasInteraction）。
         const drag = activeDrag.current;
         const change: UserChange = drag
-          ? { label: countLabel("移动", moves.size), merge: { key: `drag:${drag}` } }
-          : { label: countLabel("微移", moves.size), merge: { key: `nudge:${[...moves.keys()].sort().join(",")}`, windowMs: MERGE_PAUSE_MS } };
+          ? { label: dragLabel.current ?? countLabel("移动", moves.size), merge: { key: `drag:${drag}` } }
+          : { label: countLabel("移动", moves.size) };
         update((b) => {
           let changed = false;
           const nodes = b.nodes.map((n) => {
@@ -484,21 +492,13 @@ export function BoardCanvas({
         }, change);
       }
     },
-    [update],
+    [update, nav.selectNodes],
   );
 
-  const onEdgesChange = useCallback((changes: EdgeChange[]) => {
-    for (const c of changes) {
-      if (c.type !== "select") continue;
-      setSelectedEdges((s) => {
-        if (s.has(c.id) === c.selected) return s;
-        const next = new Set(s);
-        if (c.selected) next.add(c.id);
-        else next.delete(c.id);
-        return next;
-      });
-    }
-  }, []);
+  const onEdgesChange = useCallback(
+    (changes: EdgeChange[]) => nav.selectEdges(changes.flatMap((c) => (c.type === "select" ? [c] : []))),
+    [nav.selectEdges],
+  );
 
   const toConnection = (c: { source: string; sourceHandle?: string | null; target: string; targetHandle?: string | null }): Connection => ({
     source: c.source,
@@ -541,16 +541,13 @@ export function BoardCanvas({
   const onBeforeDelete = useCallback(
     async ({ nodes: ns, edges: es }: { nodes: Node[]; edges: Edge[] }) => {
       const ids = ns.map((n) => n.id);
-      const blocker = deletionBlocker(board, ids);
-      if (blocker) {
-        toast(blocker);
-        return false;
-      }
-      const gone = new Set(ids);
+      // 删除不设禁删、一般不弹确认（靠撤销兜底），只有删排队 / 执行中的任务节点要确认先取消；gone 含级联删除的结果列。
+      const gone = new Set(removeNodes(board, ids).removedIds);
       // 系统连线只能随节点一起消失，用户不能单独删。
       const userEdges = es.filter((e) => e.deletable !== false || gone.has(e.source) || gone.has(e.target));
-      // 锁定任务的连线不能动（任务本身一起删除除外）。
-      if (userEdges.some((e) => locked.has(e.target) && !gone.has(e.target))) {
+      // 锁定任务的输入连线不能动（规格第 8 节运行期锁定；任务本身一起删除除外），级联断开的也算。
+      const seversLocked = board.edges.some((e) => !e.system && gone.has(e.from[0]) && locked.has(e.to[0]) && !gone.has(e.to[0]));
+      if (seversLocked || userEdges.some((e) => locked.has(e.target) && !gone.has(e.target))) {
         toast(LOCKED_HINT);
         return false;
       }
@@ -573,18 +570,21 @@ export function BoardCanvas({
   const onDelete = useCallback(
     ({ nodes: ns, edges: es }: { nodes: Node[]; edges: Edge[] }) => {
       const removedIds = new Set(es.map((e) => e.id));
-      const label = ns.length ? countLabel("删除", ns.length) : countLabel("断开", es.length, "条连线");
+      const nodeIds = ns.map((n) => n.id);
+      // React Flow 报来的连线含与被删节点相连的；toast 的节点数与断开条数按删除前的画板只数节点删除。
+      const removal = removeNodes(boardRef.current, nodeIds);
+      const removed = removal.removedIds.length;
+      const label = ns.length ? countLabel("删除", removed) : countLabel("断开", es.length, "条连线");
       updateBoard((b) => {
-        let next = b;
-        const userRemoved = next.edges.filter((e) => removedIds.has(edgeId(e)) && !e.system);
-        if (userRemoved.length) next = { ...next, edges: disconnect(next, userRemoved) };
-        if (ns.length) next = removeNodes(next, ns.map((n) => n.id));
-        return next;
+        const userRemoved = b.edges.filter((e) => removedIds.has(edgeId(e)) && !e.system);
+        const next = userRemoved.length ? { ...b, edges: disconnect(b, userRemoved) } : b;
+        return nodeIds.length ? removeNodes(next, nodeIds).board : next;
       }, { label });
+      if (ns.length) toast(`已删除 ${removed} 个节点${removal.severed ? `、断开 ${removal.severed} 条连线` : ""}，Ctrl+Z 撤销`);
       setSelectedNodes(new Set());
       setSelectedEdges(new Set());
     },
-    [updateBoard],
+    [updateBoard, toast],
   );
 
   const onMoveEnd = useCallback(
@@ -692,9 +692,6 @@ export function BoardCanvas({
   // 撤销 / 重做（供工具栏与上下文菜单）：锁定任务按当前状态保留。
   const undo = useCallback(() => onUndo(lockedRef.current), [onUndo]);
   const redo = useCallback(() => onRedo(lockedRef.current), [onRedo]);
-  // 预设 / 预览弹窗开着时快捷键不撤销背后的画板。
-  const dialogOpenRef = useRef(false);
-  dialogOpenRef.current = presetsOpen || preview !== null;
 
   // 通用复制粘贴：Ctrl/⌘+C 复制选中节点，Ctrl/⌘+V 粘贴（新节点整体偏移、从未提交过）。
   // Ctrl/⌘+Z 撤销，Ctrl/⌘+Shift+Z、Ctrl/⌘+Y 重做；文本框聚焦时交给原生撤销。
@@ -796,12 +793,21 @@ export function BoardCanvas({
   return (
     <BoardContext.Provider value={actions}>
       {/* 画布内屏蔽 WebView 默认右键菜单；可编辑元素保留原生菜单（复制粘贴）。 */}
-      <div className="canvas" ref={wrapper} onContextMenu={(e) => !isTyping(e.target) && e.preventDefault()}>
+      <div
+        className={nav.hand ? "canvas hand" : "canvas"}
+        ref={wrapper}
+        onContextMenu={(e) => !isTyping(e.target) && e.preventDefault()}
+        onPointerDownCapture={nav.onPointerDownCapture}
+        onPointerUpCapture={nav.onPointerUpCapture}
+      >
         <div className="toolbar">
           <button onClick={() => addPrompt()}>＋ 提示词</button>
           <button onClick={() => addTask()}>＋ 生成任务</button>
           <button onClick={() => void pickReferences()}>＋ 参考图…</button>
           <button onClick={() => setPresetsOpen(true)}>＋ 从预设…</button>
+          <button className={nav.hand ? "active" : undefined} onClick={nav.toggleHand} onMouseUp={(e) => e.currentTarget.blur()} aria-pressed={nav.hand} title="手形：左键拖动平移画布（H）" aria-label="手形">
+            ✋
+          </button>
           <button onClick={undo} disabled={!undoLabel} title={undoLabel ? `撤销 ${undoLabel}（Ctrl+Z）` : "没有可撤销的操作"} aria-label="撤销">
             ↶
           </button>
@@ -816,6 +822,8 @@ export function BoardCanvas({
           nodes={nodes}
           edges={edges}
           nodeTypes={nodeTypes}
+          edgeTypes={edgeTypes}
+          {...nav.flowProps}
           defaultViewport={board.viewport}
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
@@ -837,7 +845,6 @@ export function BoardCanvas({
           onNodeDragStop={onDragStop}
           onSelectionDragStart={onDragStart}
           onSelectionDragStop={onDragStop}
-          deleteKeyCode={["Delete", "Backspace"]}
           minZoom={0.1}
         >
           <Background />

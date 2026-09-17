@@ -5,7 +5,6 @@ import {
   canConnect,
   chainDepth,
   connect,
-  deletionBlocker,
   removeNodes,
   syncImagePorts,
   disconnect,
@@ -158,30 +157,52 @@ describe("断线与端口重排", () => {
 });
 
 describe("删除节点", () => {
-  it("连带删除相关连线（含系统连线），下游图片端口序号紧凑，image_ports 同步", () => {
-    const g = board([node("a", "reference"), node("b", "reference"), node("res", "result"), task("t"), task("up")], [
-      edge("up", "result", "res", "in", true),
-    ]);
-    for (const id of ["a", "b"]) g.edges = connect(g, conn(id, "out", "t", `image:${g.edges.length - 1}`));
-    const after = removeNodes(syncImagePorts(g), ["a", "up"]);
-    expect(after.nodes.map((n) => n.id)).toEqual(["b", "res", "t"]);
+  it("连带删除相关连线，下游图片端口序号紧凑，image_ports 同步", () => {
+    const g = board([node("a", "reference"), node("b", "reference"), task("t")]);
+    for (const id of ["a", "b"]) g.edges = connect(g, conn(id, "out", "t", `image:${g.edges.length}`));
+    const after = removeNodes(syncImagePorts(g), ["a"]).board;
+    expect(after.nodes.map((n) => n.id)).toEqual(["b", "t"]);
     expect(after.edges.map((e) => [e.from[0], e.to[1]])).toEqual([["b", "image:0"]]);
     expect((after.nodes.find((n) => n.id === "t") as TaskNode).image_ports).toBe(1);
   });
 
-  it("被下游图片端口引用的结果节点禁止删除", () => {
-    const g = board([node("res", "result"), task("t")], [edge("res", "out", "t", "image:0")]);
-    expect(deletionBlocker(g, ["res"])).toBe("结果已被下游生成任务引用，请先断开连线");
-    expect(deletionBlocker(g, ["res", "t"])).toBeNull();
-    expect(deletionBlocker(g, ["t"])).toBeNull();
+  it("被下游引用的结果节点照删：级联断开下游连线并报告断开条数", () => {
+    const g = board([node("res", "result"), task("up"), task("t"), task("t2")], [
+      edge("up", "result", "res", "in", true),
+      edge("res", "out", "t", "image:0"),
+      edge("res", "out", "t2", "image:0"),
+    ]);
+    const r = removeNodes(g, ["res"]);
+    expect(r.board.nodes.map((n) => n.id)).toEqual(["up", "t", "t2"]);
+    expect(r.board.edges).toEqual([]);
+    expect(r).toMatchObject({ removedIds: ["res"], severed: 2 });
   });
 
-  it("未被引用的结果节点删除即丢弃：只去掉节点与系统连线，产出任务不受影响", () => {
+  it("删任务节点级联删除其结果列；结果的下游连线一并断开", () => {
+    const g = board([node("p", "prompt"), task("up"), node("r1", "result"), node("r2", "result"), node("other", "result"), task("t")], [
+      edge("p", "out", "up", "positive"),
+      edge("up", "result", "r1", "in", true),
+      edge("up", "result", "r2", "in", true),
+      edge("r2", "out", "t", "image:0"),
+    ]);
+    const r = removeNodes(g, ["up"]);
+    expect(r.board.nodes.map((n) => n.id)).toEqual(["p", "other", "t"]);
+    expect(r.board.edges).toEqual([]);
+    // 上游输入线随任务消失不算「断开」；断开 = 通往保留节点的下游连线。
+    expect(r).toMatchObject({ removedIds: ["up", "r1", "r2"], severed: 1 });
+  });
+
+  it("一同删除的两端之间的连线不算断开", () => {
+    const g = board([node("res", "result"), task("t")], [edge("res", "out", "t", "image:0")]);
+    expect(removeNodes(g, ["res", "t"])).toMatchObject({ removedIds: ["res", "t"], severed: 0 });
+  });
+
+  it("未被引用的结果节点删除：只去掉节点与系统连线，产出任务不受影响", () => {
     const g = board([node("res", "result"), task("t", "qwen-image-3.0-pro", { last_submitted: { task_id: "t-res" } })], [edge("t", "result", "res", "in", true)]);
-    expect(deletionBlocker(g, ["res"])).toBeNull();
-    const after = removeNodes(g, ["res"]);
-    expect(after.nodes).toEqual([g.nodes[1]]);
-    expect(after.edges).toEqual([]);
+    const r = removeNodes(g, ["res"]);
+    expect(r.board.nodes).toEqual([g.nodes[1]]);
+    expect(r.board.edges).toEqual([]);
+    expect(r.severed).toBe(0);
   });
 });
 

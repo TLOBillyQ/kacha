@@ -141,25 +141,31 @@ export function syncImagePorts(board: Board): Board {
   return changed ? { ...board, nodes } : board;
 }
 
-/** 删除节点及其全部连线（含系统连线），受影响任务的图片端口序号紧凑。 */
-export function removeNodes(board: Board, ids: string[]): Board {
-  const gone = new Set(ids);
+export interface Removal {
+  board: Board;
+  /** 实际删除的节点 id，按画板顺序（含级联的结果列）。 */
+  removedIds: string[];
+  /** 断开的通往保留节点的用户连线数（下游任务因此变脏）。 */
+  severed: number;
+}
+
+/**
+ * 删除节点（规格第 4 节「删除」）：不设禁删，删任务节点级联删除其结果列（系统连线指向的结果节点），
+ * 连带删除相关连线（含系统连线），受影响任务的图片端口序号紧凑。删排队 / 执行中任务前的「先取消再删」确认由界面负责。
+ */
+export function removeNodes(board: Board, ids: string[]): Removal {
+  const gone = new Set(ids.filter((id) => board.nodes.some((n) => n.id === id)));
+  for (const e of board.edges) {
+    if (e.system && gone.has(e.from[0]) && board.nodes.find((n) => n.id === e.to[0])?.type === "result") gone.add(e.to[0]);
+  }
   const nodes = board.nodes.filter((n) => !gone.has(n.id));
   const touched = board.edges.filter((e) => gone.has(e.from[0]) || gone.has(e.to[0]));
   let edges = board.edges.filter((e) => !touched.includes(e));
+  const severed = touched.filter((e) => !e.system && gone.has(e.from[0]) && !gone.has(e.to[0])).length;
   const tasks = new Set(touched.filter((e) => !gone.has(e.to[0]) && imagePortIndex(e.to[1]) !== null).map((e) => e.to[0]));
   for (const taskId of tasks) edges = renumber(edges, taskId, imageEdges({ ...board, edges }, taskId));
-  return syncImagePorts({ ...board, nodes, edges });
-}
-
-/** 结果节点被（不一同删除的）下游图片端口引用时禁止删除。 */
-export function deletionBlocker(board: Board, ids: string[]): string | null {
-  const gone = new Set(ids);
-  const referenced = board.edges.some((e) => {
-    const source = board.nodes.find((n) => n.id === e.from[0]);
-    return source?.type === "result" && gone.has(source.id) && !gone.has(e.to[0]) && imagePortIndex(e.to[1]) !== null;
-  });
-  return referenced ? "结果已被下游生成任务引用，请先断开连线" : null;
+  const removedIds = board.nodes.filter((n) => gone.has(n.id)).map((n) => n.id);
+  return { board: syncImagePorts({ ...board, nodes, edges }), removedIds, severed };
 }
 
 export interface TaskPorts {
