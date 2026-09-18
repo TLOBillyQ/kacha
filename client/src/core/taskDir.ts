@@ -15,6 +15,18 @@ export interface TaskFs {
   writeNewFile(absPath: string, bytes: Uint8Array): Promise<void>;
 }
 
+/** 本地准备阶段的失败（读图、读写任务目录）。 */
+export class LocalError extends Error {
+  override name = "LocalError";
+}
+
+function readError(label: string, e: unknown): LocalError {
+  return new LocalError(`读取${label}失败：${e instanceof Error ? e.message : String(e)}`);
+}
+
+/** 任务记录文件名。 */
+export const TASK_RECORD_FILE = "task.json";
+
 const pad = (n: number, width = 2) => String(n).padStart(width, "0");
 
 /** `YYYYMMDDTHHMMSSZ-xxxxxxxx`：可按时间排序，随机段避免同秒冲突。 */
@@ -91,6 +103,38 @@ function taskPath(outputRoot: string, relDir: string, file: string): string {
   return joinPath(outputRoot, ...relDir.split("/"), file);
 }
 
+/** task.json 里的一条参考图记录。 */
+export interface TaskRecordReference {
+  /** 参考图快照文件名，相对任务目录。 */
+  file: string;
+  media_type: string;
+  sha256: string;
+  source: ReferenceSource;
+  region?: ReferenceRegion;
+  /** 发送前按模型规则处理过（#116）；#116 之前的任务目录没有，缺省即未处理。 */
+  fitted?: FittedRecord;
+}
+
+/** 任务记录（task.json）：writeSubmission 写出、readSubmission 读回的同一份形状。 */
+export interface TaskRecord {
+  task_id: string;
+  submitted_at: string;
+  workflow: "image_edit" | "text_to_image";
+  model: string;
+  capability_format_version: number;
+  capability_table_sha256: string;
+  prompt: string;
+  negative_prompt: string;
+  /** 旧任务可能是旧口径（#113：叠加图占用户序号），仅供追溯；重新生成按当前规则重算。 */
+  send_text: string;
+  size_spec: SizeSpec;
+  size: { width: number; height: number };
+  layer_decomposition: boolean;
+  transparent_background: boolean;
+  /** 按发送序号排列。 */
+  references: TaskRecordReference[];
+}
+
 /** 写参考图快照 reference-N.ext 与 task.json；返回发给网关的参考图。 */
 export async function writeSubmission(fs: TaskFs, outputRoot: string, plan: SubmissionPlan): Promise<ReferenceImage[]> {
   const kinds = plan.references.map((ref, i) => {
@@ -99,13 +143,13 @@ export async function writeSubmission(fs: TaskFs, outputRoot: string, plan: Subm
     return kind;
   });
   const dir = taskDirOf(plan.submittedAt, plan.taskId);
-  const references = [];
+  const references: TaskRecordReference[] = [];
   for (const [i, ref] of plan.references.entries()) {
     const file = `reference-${i + 1}.${kinds[i].ext}`;
     await fs.writeNewFile(taskPath(outputRoot, dir, file), ref.bytes);
     references.push({ file, media_type: kinds[i].mediaType, sha256: await sha256Hex(ref.bytes), source: ref.source, ...(ref.region ? { region: ref.region } : {}), ...(ref.fitted ? { fitted: ref.fitted } : {}) });
   }
-  const record = {
+  const record: TaskRecord = {
     task_id: plan.taskId,
     submitted_at: plan.submittedAt.toISOString(),
     workflow: plan.send.workflow,
@@ -121,8 +165,59 @@ export async function writeSubmission(fs: TaskFs, outputRoot: string, plan: Subm
     transparent_background: plan.transparentBackground,
     references,
   };
-  await fs.writeNewFile(taskPath(outputRoot, dir, "task.json"), new TextEncoder().encode(`${JSON.stringify(record, null, 2)}\n`));
+  await fs.writeNewFile(taskPath(outputRoot, dir, TASK_RECORD_FILE), new TextEncoder().encode(`${JSON.stringify(record, null, 2)}\n`));
   return plan.references.map((ref, i) => ({ mediaType: kinds[i].mediaType, bytes: ref.bytes }));
+}
+
+const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+/** 快照文件名只能是任务目录里的普通文件名，不许带目录。 */
+const isPlainFileName = (v: unknown): v is string => typeof v === "string" && v !== "" && !/[\\/]/.test(v) && v !== "." && v !== "..";
+
+/** 解析 task.json；只校验重新生成必需的字段（model、prompt、size、references[].file / source），不合格即损坏。 */
+function parseTaskRecord(bytes: Uint8Array): TaskRecord {
+  const corrupt = () => new LocalError("上次任务的任务记录已损坏");
+  let raw: unknown;
+  try {
+    raw = JSON.parse(new TextDecoder().decode(bytes));
+  } catch {
+    throw corrupt();
+  }
+  const valid =
+    isObject(raw) &&
+    typeof raw.model === "string" &&
+    typeof raw.prompt === "string" &&
+    isObject(raw.size) &&
+    typeof raw.size.width === "number" &&
+    typeof raw.size.height === "number" &&
+    Array.isArray(raw.references) &&
+    raw.references.every((ref) => isObject(ref) && isPlainFileName(ref.file) && isObject(ref.source) && typeof ref.source.kind === "string");
+  if (!valid) throw corrupt();
+  return raw as unknown as TaskRecord;
+}
+
+/**
+ * 读回一次提交：任务记录与全部参考图快照（references 与 record.references 同序），与 writeSubmission 对称。
+ * 只校验重新生成必需的字段；未知字段忽略，fitted / region 缺省即旧口径。
+ */
+export async function readSubmission(fs: { readFile(absPath: string): Promise<Uint8Array> }, outputRoot: string, taskId: string): Promise<{ record: TaskRecord; references: Uint8Array[] }> {
+  const dir = taskDirOfTaskId(taskId);
+  if (!dir) throw new LocalError(`上次任务的任务编号无效：${taskId}`);
+  let bytes: Uint8Array;
+  try {
+    bytes = await fs.readFile(taskPath(outputRoot, dir, TASK_RECORD_FILE));
+  } catch (e) {
+    throw readError("上次任务的任务记录", e);
+  }
+  const record = parseTaskRecord(bytes);
+  const references: Uint8Array[] = [];
+  for (const [i, ref] of record.references.entries()) {
+    try {
+      references.push(await fs.readFile(taskPath(outputRoot, dir, ref.file)));
+    } catch (e) {
+      throw readError(`上次任务的图${i + 1}`, e);
+    }
+  }
+  return { record, references };
 }
 
 /** 写结果图 result.<ext>；返回文件名与相对输出根目录的路径（画板结果节点的主引用）。 */

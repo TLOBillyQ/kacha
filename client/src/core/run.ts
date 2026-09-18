@@ -12,7 +12,7 @@ import { isAutoRatio, resolveSize } from "./size";
 import { imageSources, snapshotOf } from "./submission";
 import { joinPath } from "./paths";
 import type { SizeSpec } from "./size";
-import { newTaskId, saveLayers, saveResult, sniffImage, taskDirOf, taskDirOfTaskId, writeSubmission, type LayerRecord, type ReferenceRegion, type ReferenceSource, type SubmissionPlan, type TaskFs } from "./taskDir";
+import { LocalError, newTaskId, saveLayers, saveResult, sniffImage, taskDirOf, taskDirOfTaskId, writeSubmission, type LayerRecord, type ReferenceRegion, type ReferenceSource, type SubmissionPlan, type TaskFs } from "./taskDir";
 
 /** 任务目录 task.json 里重新生成要用的字段。 */
 interface TaskJson {
@@ -62,10 +62,7 @@ export interface PreparedJob {
   record: ResultRecord;
 }
 
-/** 本地准备阶段的失败（读图、写任务目录）。 */
-export class LocalError extends Error {
-  override name = "LocalError";
-}
+export { LocalError };
 
 /** 执行中被取消：不存结果、不加结果节点。 */
 export class CancelledError extends Error {

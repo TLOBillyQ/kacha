@@ -1,0 +1,66 @@
+{
+  "task_id": "20260916T091500Z-aea3c5c6",
+  "submitted_at": "2026-09-16T09:15:00.000Z",
+  "workflow": "image_edit",
+  "model": "qwen-image-3.0-pro",
+  "capability_format_version": 1,
+  "capability_table_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+  "prompt": "把@图3的少女放入图1",
+  "negative_prompt": "",
+  "send_text": "本次提供 3 张参考图，按顺序为图1、图2、图3。\n把图3的少女放入图1\n图2 是图1 的标注版，紫色半透明高亮标出的是要修改的区域。只修改图1 中高亮区域内的内容，高亮区域之外的所有内容保持完全不变，输出图里不要出现任何高亮颜色。",
+  "size_spec": {
+    "tier": "1K",
+    "ratio": "1:1",
+    "width": null,
+    "height": null
+  },
+  "size": {
+    "width": 1024,
+    "height": 1024
+  },
+  "layer_decomposition": false,
+  "transparent_background": false,
+  "references": [
+    {
+      "file": "reference-1.png",
+      "media_type": "image/png",
+      "sha256": "c414cd0e204de974f73753c7e28d7638e7b3691bb8b1a2bab6b25bb7fed7ce77",
+      "source": {
+        "kind": "reference",
+        "path": "refs/cat.png",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    },
+    {
+      "file": "reference-2.png",
+      "media_type": "image/png",
+      "sha256": "c414cd0e204de974f73753c7e28d7638e7b3691bb8b1a2bab6b25bb7fed7ce77",
+      "source": {
+        "kind": "overlay",
+        "of": 1
+      },
+      "region": {
+        "rects": [
+          [
+            0.1,
+            0.1,
+            0.5,
+            0.5
+          ]
+        ],
+        "render": "highlight_overlay",
+        "source_port": 1
+      }
+    },
+    {
+      "file": "reference-3.png",
+      "media_type": "image/png",
+      "sha256": "c414cd0e204de974f73753c7e28d7638e7b3691bb8b1a2bab6b25bb7fed7ce77",
+      "source": {
+        "kind": "reference",
+        "path": "refs/cat.png",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    }
+  ]
+}
