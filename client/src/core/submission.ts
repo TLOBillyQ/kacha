@@ -5,7 +5,7 @@ import { composeSendText, isRequestShapeImplemented } from "./gateway";
 import { imageEdges, imagePortSlots, taskIssues, transparentAlphaIssue } from "./graph";
 import { checkImageRefs, promptLanguage } from "./imageRefs";
 import { resolveFromRoot } from "./paths";
-import { overlayPhrases, referencedRegions, regionNames } from "./region";
+import { imageRefMap, overlayPhrases, referencedRegions, regionNames } from "./region";
 import { modelAvailabilityIssue, type Discovery } from "./settings";
 import type { SizeSpec } from "./size";
 
@@ -164,12 +164,13 @@ export function imageRefProblems(board: Board, table: CapabilityTable, taskId: s
   const prompt = promptText(board, taskId, "positive");
   const task = findTask(board, taskId);
   const model = task && findModel(table, task.model);
-  // 序号按展开后口径：区域叠加图紧随原图，占 1 个参考图序号。
+  // 按用户序号判断：区域叠加图不占「图N」；固定句按发送序号书写，换回用户序号再算引用。
   const slots = imagePortSlots(board, table, taskId);
-  const count = slots.length;
+  const map = imageRefMap(slots);
+  const count = map.length;
   const check = checkImageRefs(prompt, count, {
     injected: model ? overlayPhrases(model, slots, promptLanguage(prompt)) : [],
-    exempt: slots.filter((s) => s.kind === "overlay").map((s) => s.port),
+    imageRefMap: map,
   });
   // 只有区域真的生效（叠加槽存在）时才校验「区域N」；没有框选时这两个字是普通文字。
   const regions = regionNames(slots, promptLanguage(prompt)).length;
@@ -224,7 +225,7 @@ export function buildConfirmItems(board: Board, table: CapabilityTable, taskIds:
         modelName: model?.display_name ?? task.model,
         firstLine: prompt.split("\n").find((line) => line.trim())?.trim() ?? "",
         negativePrompt,
-        sendText: composeSendText({ prompt, negativePrompt, referenceCount: slots.length, regionPhrases, regionNames: names }),
+        sendText: composeSendText({ prompt, negativePrompt, referenceCount: slots.length, regionPhrases, regionNames: names, imageRefMap: imageRefMap(slots) }),
         referenceCount: slots.length,
         issues: [...new Set(issues)],
         warnings,

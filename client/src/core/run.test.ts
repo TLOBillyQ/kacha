@@ -256,6 +256,49 @@ describe("区域指示：提交链路", () => {
     expect(files.get(`/root/${job.relDir}/reference-2.png`)).toEqual(PNG);
   });
 
+  /** 图1（带区域）+ 图2，提示词按用户序号引用图2。 */
+  function twoImageBoard(): Board {
+    const b = regionBoard();
+    b.nodes = b.nodes.map((n) => (n.type === "prompt" ? { ...n, text: "把@图2的少女放入图1" } : n.type === "task" ? { ...n, image_ports: 2 } : n));
+    b.nodes.push({ id: "r2", type: "reference", pos: [0, 400], size: [100, 100], extra: {}, path: "refs/cat.png", sha256: "a".repeat(64), display_name: "girl.png" });
+    b.edges.push({ from: ["r2", "out"], to: ["t", "image:1"], source_layer: null, region: null, system: false, extra: {} });
+    return b;
+  }
+
+  it("用户序号换算：task.json 存用户原文与换算后的发送文本，请求文本与之一致", async () => {
+    const { d, files, requests } = deps(ok);
+    withOverlay(d, PNG);
+    const { job: prepared } = await prepareJob(d, { board: twoImageBoard(), table: BUILTIN_TABLE, tableSha256: "x", outputRoot: "/root", taskNodeId: "t" });
+    expect(prepared.plan.references.map((r) => r.source.kind)).toEqual(["reference", "overlay", "reference"]);
+    const job = await writeJob(d, "/root", prepared);
+    const taskJson = JSON.parse(new TextDecoder().decode(files.get(`/root/${job.relDir}/task.json`)));
+    expect(taskJson.prompt).toBe("把@图2的少女放入图1");
+    expect(taskJson.send_text).toContain("本次提供 3 张参考图，按顺序为图1、图2、图3。\n把图3的少女放入图1\n图2 是图1 的标注版");
+
+    await executeJob(d, { job, outputRoot: "/root", baseUrl: "http://gw", apiKey: "k", newNodeId: "res" });
+    const body = JSON.parse(String(requests[0].init.body));
+    expect(body.input.messages[0].content[3].text).toBe(taskJson.send_text);
+  });
+
+  it("重新生成旧 task.json（按旧口径存的 send_text）：按 references[] 还原用户序号，发送文本与新规则一致", async () => {
+    const { d, files, requests } = deps(ok);
+    withOverlay(d, PNG);
+    const { job: first, board: b1 } = await prepareJob(d, { board: twoImageBoard(), table: BUILTIN_TABLE, tableSha256: "x", outputRoot: "/root", taskNodeId: "t" });
+    const written = await writeJob(d, "/root", first);
+    const path = `/root/${written.relDir}/task.json`;
+    const expected = JSON.parse(new TextDecoder().decode(files.get(path))).send_text;
+    const old = JSON.parse(new TextDecoder().decode(files.get(path)));
+    old.send_text = old.send_text.replace("图3的少女", "图2的少女");
+    files.set(path, new TextEncoder().encode(JSON.stringify(old)));
+
+    d.now = () => new Date("2026-09-17T01:00:00Z");
+    const { job: again } = await prepareRegenerate(d, { board: b1, table: BUILTIN_TABLE, tableSha256: "y", outputRoot: "/root", taskNodeId: "t" });
+    expect(again.plan.sendText).toBe(expected);
+    const job = await writeJob(d, "/root", again);
+    await executeJob(d, { job, outputRoot: "/root", baseUrl: "http://gw", apiKey: "k", newNodeId: "res" });
+    expect(JSON.parse(String(requests[0].init.body)).input.messages[0].content[3].text).toBe(expected);
+  });
+
   it("有区域但没注入叠加合成能力：本地错误", async () => {
     const { d } = deps(ok);
     const err = await prepareJob(d, { board: regionBoard(), table: BUILTIN_TABLE, tableSha256: "x", outputRoot: "/root", taskNodeId: "t" }).catch((e) => e);

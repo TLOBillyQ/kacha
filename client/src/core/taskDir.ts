@@ -78,6 +78,8 @@ export interface SubmissionPlan {
   regionPhrases: string[];
   /** 区域编号的颜色指代（区域N 取第 N 个）；只参与发送文本，不单独落盘。 */
   regionNames?: string[];
+  /** 用户序号 → 发送序号；只参与发送文本，不单独落盘（task.json 的 references[] 足以还原）。 */
+  imageRefMap?: number[];
   sizeSpec: SizeSpec;
   size: { width: number; height: number };
   layerDecomposition: boolean;

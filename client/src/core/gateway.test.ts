@@ -180,6 +180,13 @@ describe("网关适配器：请求载荷对照夹具", () => {
     expect(composeSendText({ prompt: "Make @图1 blue", negativePrompt: "", referenceCount: 1 })).toBe("This request provides 1 reference image.\nMake Image 1 blue");
   });
 
+  it("用户序号换算成发送序号；前缀按实际张数，固定句在换算之后追加、不被二次换算", () => {
+    const phrase = "图2 是图1 的标注版";
+    expect(
+      composeSendText({ prompt: "把@图2的少女放入图1的区域1", negativePrompt: "", referenceCount: 3, regionPhrases: [phrase], regionNames: ["紫色区域"], imageRefMap: [1, 3] }),
+    ).toBe(`本次提供 3 张参考图，按顺序为图1、图2、图3。\n把图3的少女放入图1的紫色区域\n${phrase}`);
+  });
+
   it("request_shape 未实现的模型拒绝构造请求", () => {
     const unknown = { ...qwenPro, request_shape: "unknown_shape" };
     expect(() => buildGenerationRequest(textInput({ model: unknown }))).toThrow(GatewayError);
@@ -237,8 +244,8 @@ describe("网关适配器：Seedream 请求形态对照夹具", () => {
     const fixture = loadFixture(SEEDREAM_DIR, "lite-region-overlay-1.json");
     const overlay = { mediaType: "image/png", bytes: new Uint8Array([9]) };
     const slots: SlotRef[] = [
-      { kind: "image", port: 1, sourcePort: null, regionCount: 0 },
-      { kind: "overlay", port: 2, sourcePort: 1, regionCount: 1 },
+      { kind: "image", port: 1, userPort: 1, sourcePort: null, regionCount: 0 },
+      { kind: "overlay", port: 2, userPort: 1, sourcePort: 1, regionCount: 1 },
     ];
     const { body } = buildGenerationRequest(
       textInput({
@@ -254,6 +261,14 @@ describe("网关适配器：Seedream 请求形态对照夹具", () => {
     expect((body.image as string[])[1]).toBe("data:image/png;base64,CQ==");
     const template = seedreamLite.region_hint_phrasing.highlight_overlay!.zh;
     expect(body.prompt).toBe(`本次提供 2 张参考图，按顺序为图1、图2。\n把紫色区域改成红色\n${template.replaceAll("{overlay}", "2").replaceAll("{source}", "1").replaceAll("{colors}", "紫色")}`);
+  });
+
+  it("区域指示：请求文本按 imageRefMap 换算用户序号", () => {
+    const overlay = { mediaType: "image/png", bytes: new Uint8Array([9]) };
+    const { body } = buildGenerationRequest(
+      textInput({ model: seedreamLite, prompt: "把@图2的少女放进来", size: { width: 3456, height: 1152 }, references: [png, overlay, png], imageRefMap: [1, 3] }),
+    );
+    expect(body.prompt).toBe("本次提供 3 张参考图，按顺序为图1、图2、图3。\n把图3的少女放进来");
   });
 
   it("透明背景：pro 打开开关附带 background:transparent；关闭不带", () => {

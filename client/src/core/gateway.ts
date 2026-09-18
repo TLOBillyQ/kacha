@@ -71,6 +71,8 @@ export interface GenerationInput {
   regionPhrases?: string[];
   /** 区域编号的颜色指代（区域N 取第 N 个），改写提示词里的「区域N」。 */
   regionNames?: string[];
+  /** 用户序号 → 发送序号（区域叠加图插在原图之后）；缺省 = 恒等。 */
+  imageRefMap?: number[];
   /** 透明背景开关；只对能力表支持透明背景的模型生效。 */
   transparentBackground?: boolean;
 }
@@ -95,7 +97,7 @@ function referenceNote(count: number, language: PromptLanguage): string {
 
 /**
  * 完整发送文本：二次确认弹窗展示、任务记录保存的都是它。
- * 提示词里的 @图N 按语言改写（只改发送文本）；文生图即改写后的提示词（负向走独立字段）；
+ * 提示词里的 @图N 按语言改写、用户序号按 imageRefMap 换算成发送序号（只改发送文本）；文生图即改写后的提示词（负向走独立字段）；
  * 图片编辑注入数量顺序前缀，负向并入文本（契约「开放试用」一节）；区域指示固定句追加在末尾。
  */
 export function composeSendText({
@@ -104,6 +106,7 @@ export function composeSendText({
   referenceCount,
   regionPhrases = [],
   regionNames = [],
+  imageRefMap,
 }: {
   prompt: string;
   negativePrompt: string;
@@ -112,9 +115,11 @@ export function composeSendText({
   regionPhrases?: string[];
   /** 区域编号的颜色指代，改写提示词里的「区域N」。 */
   regionNames?: string[];
+  /** 用户序号 → 发送序号；固定句本就按发送序号书写，在换算之后追加。 */
+  imageRefMap?: number[];
 }): string {
   const phrases = regionPhrases.length ? `\n${regionPhrases.join("\n")}` : "";
-  const text = rewriteRegionRefs(rewriteImageRefs(prompt), regionNames);
+  const text = rewriteRegionRefs(rewriteImageRefs(prompt, imageRefMap), regionNames);
   if (referenceCount === 0) return `${text}${phrases}`;
   const language = promptLanguage(prompt);
   const withNote = `${referenceNote(referenceCount, language)}\n${text}`;
@@ -146,7 +151,7 @@ const buildQwenImagesEdits: RequestShape["build"] = (input) => {
     Object.assign(body, { n: 1, size: `${size.width}x${size.height}` }, model.fixed_params);
     return { path: TEXT_TO_IMAGE_PATH, body };
   }
-  const text = composeSendText({ prompt, negativePrompt, referenceCount: references.length, regionPhrases: input.regionPhrases ?? [], regionNames: input.regionNames ?? [] });
+  const text = composeSendText({ prompt, negativePrompt, referenceCount: references.length, regionPhrases: input.regionPhrases ?? [], regionNames: input.regionNames ?? [], imageRefMap: input.imageRefMap });
   const content = [...references.map((r) => ({ image: dataUrl(r) })), { text }];
   return {
     path: IMAGE_EDIT_PATH,
@@ -169,7 +174,7 @@ const buildSeedreamImagesGenerations: RequestShape["build"] = (input) => {
   const { model, prompt, size, references } = input;
   const body: Record<string, unknown> = {
     model: model.model_id,
-    prompt: composeSendText({ prompt, negativePrompt: "", referenceCount: references.length, regionPhrases: input.regionPhrases ?? [], regionNames: input.regionNames ?? [] }),
+    prompt: composeSendText({ prompt, negativePrompt: "", referenceCount: references.length, regionPhrases: input.regionPhrases ?? [], regionNames: input.regionNames ?? [], imageRefMap: input.imageRefMap }),
     size: `${size.width}x${size.height}`,
     response_format: "url",
     ...model.fixed_params,

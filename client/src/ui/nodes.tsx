@@ -47,11 +47,13 @@ export interface ImagePortInfo {
   /** 源图片绝对路径，用于判断透明背景前提（是否带 alpha）。 */
   absPath: string | null;
 }
-/** 端口行按 imagePortSlots 展开口径：带区域的线在 highlight_overlay 下多出紧随的「叠加」锁定行。 */
+/** 端口行按 imagePortSlots 展开口径：带区域的线在 highlight_overlay 下多出紧随的「叠加」锁定行（从属于原图，不占用户序号）。 */
 export interface ImageSlotInfo {
   kind: "image" | "overlay";
-  /** 图N 的 N（1 起，展开后发送序）。 */
+  /** 发送序号（1 起，展开后）。 */
   port: number;
+  /** 用户序号，即「图N」的 N；叠加行为其原图的序号。 */
+  userPort: number;
   label: string;
   absPath: string | null;
   /** 用户图片端口序号（0 起）；叠加行没有连线，为 null。 */
@@ -428,7 +430,7 @@ export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskF
   }, [dragFrom, node.id, moveImagePort]);
 
   // 端口数量、顺序或展开状态变化后，React Flow 需要重新测量 Handle 位置。
-  const portSignature = `${expanded}|${ports.negative}|${ports.imageSlots}|${hasPositive}|${slots.map((s) => `${s.kind}:${s.port}:${s.label}`).join(",")}`;
+  const portSignature = `${expanded}|${ports.negative}|${ports.imageSlots}|${hasPositive}|${slots.map((s) => `${s.kind}:${s.port}:${s.userPort}:${s.label}`).join(",")}`;
   useEffect(() => updateInternals(node.id), [portSignature, node.id, updateInternals]);
 
   const tiers = rule ? sizeTiersOf(rule) : [];
@@ -547,9 +549,9 @@ export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskF
                 kind="image"
                 connectable={false}
                 className="nodrag port-overlay"
-                label={`图${slot.port} · 叠加`}
+                label={`图${slot.userPort} · 叠加`}
               >
-                <HoverSpan className="muted small" info={textHoverInfo("区域叠加图由系统按紧随的原图自动生成，不可重排、不可断开")}>
+                <HoverSpan className="muted small" info={textHoverInfo(`区域叠加图由系统按图${slot.userPort} 自动生成，发送时紧随原图，不占「图N」序号；不可重排、不可断开`)}>
                   锁定
                 </HoverSpan>
               </PortRow>
@@ -562,8 +564,8 @@ export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskF
               id={`${IMAGE_PORT_PREFIX}${i}`}
               kind="image"
               connectable={!locked}
-              className={`nodrag port-filled ${unreferenced.includes(slot.port) ? "port-unreferenced" : ""} ${dragFrom === i ? "port-dragging" : ""} ${dropTo === i ? "port-drop" : ""}`}
-              label={`图${slot.port} · ${slot.label}`}
+              className={`nodrag port-filled ${unreferenced.includes(slot.userPort) ? "port-unreferenced" : ""} ${dragFrom === i ? "port-dragging" : ""} ${dropTo === i ? "port-drop" : ""}`}
+              label={`图${slot.userPort} · ${slot.label}`}
               data-port-index={i}
               onPointerDown={(e) => {
                 if (locked || e.button !== 0 || (e.target as HTMLElement).closest(".react-flow__handle, button")) return;
@@ -603,7 +605,7 @@ export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskF
           );
         })}
         {ports.imageSlots > images.length && (
-          <PortRow id={`${IMAGE_PORT_PREFIX}${images.length}`} kind="image" connectable={!locked} className="nodrag port-empty" label={`图${slots.length + 1}`}>
+          <PortRow id={`${IMAGE_PORT_PREFIX}${images.length}`} kind="image" connectable={!locked} className="nodrag port-empty" label={`图${images.length + 1}`}>
             <span className="port-hint">拖图进来</span>
           </PortRow>
         )}

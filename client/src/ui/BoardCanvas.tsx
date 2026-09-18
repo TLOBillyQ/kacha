@@ -443,10 +443,11 @@ export function BoardCanvas({
           const slots: ImageSlotInfo[] = imagePortSlots(board, table, n.id).map((s) => {
             const src = labelOf(s.edge.from[0]);
             return s.kind === "overlay"
-              ? { kind: "overlay" as const, port: s.port, label: src.label, absPath: null, handleIndex: null, rects: [], firstRegion: 0, edgeRef: null }
+              ? { kind: "overlay" as const, port: s.port, userPort: s.userPort, label: src.label, absPath: null, handleIndex: null, rects: [], firstRegion: 0, edgeRef: null }
               : {
                   kind: "image" as const,
                   port: s.port,
+                  userPort: s.userPort,
                   label: src.label,
                   absPath: src.absPath,
                   handleIndex: imagePortIndex(s.edge.to[1]),

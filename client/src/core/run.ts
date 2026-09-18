@@ -6,7 +6,7 @@ import { composeSendText, ERROR_CATEGORY_LABELS, fetchResultImage, GatewayError,
 import { imagePortSlots, workflowOf } from "./graph";
 import { promptLanguage } from "./imageRefs";
 import { addResultNode } from "./layout";
-import { firstRegionOf, overlayPhrases, regionNames, type SlotRef } from "./region";
+import { firstRegionOf, imageRefMap, overlayPhrases, regionNames, type SlotRef } from "./region";
 import { resolveSize } from "./size";
 import { imageSources, snapshotOf, withSubmitted } from "./submission";
 import { joinPath } from "./paths";
@@ -124,6 +124,7 @@ export async function prepareJob(
   }
   const regionPhrases = overlayPhrases(model, slots, promptLanguage(snapshot.prompt));
   const names = regionNames(slots, promptLanguage(snapshot.prompt));
+  const refMap = imageRefMap(slots);
 
   const submittedAt = deps.now();
   const taskId = newTaskId(submittedAt);
@@ -133,9 +134,10 @@ export async function prepareJob(
     model: model.model_id,
     prompt: snapshot.prompt,
     negativePrompt: snapshot.negative_prompt,
-    sendText: composeSendText({ prompt: snapshot.prompt, negativePrompt: snapshot.negative_prompt, referenceCount: references.length, regionPhrases, regionNames: names }),
+    sendText: composeSendText({ prompt: snapshot.prompt, negativePrompt: snapshot.negative_prompt, referenceCount: references.length, regionPhrases, regionNames: names, imageRefMap: refMap }),
     regionPhrases,
     regionNames: names,
+    imageRefMap: refMap,
     sizeSpec: snapshot.size_spec,
     size,
     layerDecomposition: snapshot.layer_decomposition,
@@ -153,7 +155,7 @@ function jobOf(taskNodeId: string, plan: SubmissionPlan, model: ModelCapability)
     taskId: plan.taskId,
     relDir: taskDirOf(plan.submittedAt, plan.taskId),
     plan,
-    input: { model, prompt: plan.prompt, negativePrompt: plan.negativePrompt, size: plan.size, references: [], regionPhrases: plan.regionPhrases, regionNames: plan.regionNames, transparentBackground: plan.transparentBackground },
+    input: { model, prompt: plan.prompt, negativePrompt: plan.negativePrompt, size: plan.size, references: [], regionPhrases: plan.regionPhrases, regionNames: plan.regionNames, imageRefMap: plan.imageRefMap, transparentBackground: plan.transparentBackground },
     record: {
       model: plan.model,
       prompt: plan.prompt,
@@ -199,13 +201,16 @@ export async function prepareRegenerate(
     }
   }
   // 固定句按当前能力表模板重建：请求文本由请求形态现场组装，不能只用 task.json 里的 send_text。
+  // 用户序号：按顺序给非叠加条目编 1..k；叠加条目紧随原图，沿用原图的用户序号。
+  let userPort = 0;
   const slots: SlotRef[] = previous.references.map((ref, i) =>
-    ref.region
-      ? { kind: "overlay", port: i + 1, sourcePort: ref.region.source_port, regionCount: ref.region.rects.length }
-      : { kind: "image", port: i + 1, sourcePort: null, regionCount: 0 },
+    ref.source.kind === "overlay" && ref.region
+      ? { kind: "overlay", port: i + 1, userPort, sourcePort: ref.region.source_port, regionCount: ref.region.rects.length }
+      : { kind: "image", port: i + 1, userPort: ++userPort, sourcePort: null, regionCount: 0 },
   );
   const regionPhrases = overlayPhrases(model, slots, promptLanguage(previous.prompt));
   const names = regionNames(slots, promptLanguage(previous.prompt));
+  const refMap = imageRefMap(slots);
 
   const submittedAt = deps.now();
   const taskId = newTaskId(submittedAt);
@@ -215,9 +220,11 @@ export async function prepareRegenerate(
     model: previous.model,
     prompt: previous.prompt,
     negativePrompt: previous.negative_prompt,
-    sendText: previous.send_text,
+    // 按当前规则重算：旧任务的 send_text 可能按「叠加图占用户序号」的旧口径存（#113）。
+    sendText: composeSendText({ prompt: previous.prompt, negativePrompt: previous.negative_prompt, referenceCount: references.length, regionPhrases, regionNames: names, imageRefMap: refMap }),
     regionPhrases,
     regionNames: names,
+    imageRefMap: refMap,
     sizeSpec: previous.size_spec,
     size: previous.size,
     layerDecomposition: previous.layer_decomposition,

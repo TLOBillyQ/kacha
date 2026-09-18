@@ -925,6 +925,8 @@ button.primary[aria-disabled="true"] {
 .port-overlay {
   color: #656d76;
   background: #f6f8fa;
+  /* 从属于上一行原图：缩进，不像独立的用户端口。 */
+  padding-left: 24px;
 }
 .badge-warn {
   padding: 0 4px;

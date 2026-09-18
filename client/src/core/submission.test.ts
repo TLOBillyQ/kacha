@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Board, BoardEdge, BoardNode, TaskNode } from "./board";
 import { BUILTIN_TABLE } from "./capabilities";
-import { buildConfirmItems, imageSources, isDirty, isInterrupted, runScope, snapshotOf, withSubmitted } from "./submission";
+import { buildConfirmItems, imageRefProblems, imageSources, isDirty, isInterrupted, runScope, snapshotOf, withSubmitted } from "./submission";
 
 function prompt(id: string, text: string): BoardNode {
   return { id, type: "prompt", pos: [0, 0], size: [100, 100], extra: {}, text };
@@ -283,9 +283,45 @@ describe("区域指示：图N 校验与发送文本", () => {
     expect(item.sendText).toContain("把区域2 的草地加深");
   });
 
-  it("引用越界按展开后序号", () => {
-    const [item] = buildConfirmItems(regionBoard("把@图3 的颜色用到@图1 上"), BUILTIN_TABLE, ["t"], ctx);
+  const twoImages = (text: string, region: typeof REGION | null) =>
+    board(
+      [prompt("p", text), reference("r1"), reference("r2"), task("t")],
+      [edge("p", "t", "positive"), { ...edge("r1", "t", "image:0"), region }, edge("r2", "t", "image:1")],
+    );
+
+  it("区域端口不占用户序号：在图1 上框选后，提示词里的图2 仍指第二张用户图，发送时换算为图3", () => {
+    const [item] = buildConfirmItems(twoImages("把@图2的少女放入图1的区域1", REGION), BUILTIN_TABLE, ["t"], ctx);
+    expect(item.issues).toEqual([]);
+    expect(item.warnings).toEqual([]);
+    expect(item.referenceCount).toBe(3);
+    expect(item.sendText).toBe(
+      "本次提供 3 张参考图，按顺序为图1、图2、图3。\n把图3的少女放入图1的紫色区域\n图2 是图1 的标注版，紫色半透明高亮标出的是要修改的区域。只修改图1 中高亮区域内的内容，高亮区域之外的所有内容保持完全不变，输出图里不要出现任何高亮颜色。",
+    );
+
+    // 删除区域：恢复原发送顺序，用户序号不变。
+    const [plain] = buildConfirmItems(twoImages("把@图2的少女放入图1", null), BUILTIN_TABLE, ["t"], ctx);
+    expect(plain.sendText).toBe("本次提供 2 张参考图，按顺序为图1、图2。\n把图2的少女放入图1");
+  });
+
+  it("多张图各带区域（共 3 个区域）：@图N、不带 @ 的图N、Image N 都按用户序号换算，地图2 不动", () => {
+    const two = { rects: [REGION.rects[0], [0.6, 0.6, 0.9, 0.9] as [number, number, number, number]], render: "highlight_overlay" as const };
+    const b = board(
+      [prompt("p", "把@图2 放进图1，照着地图2 摆，图3 当背景；Image 3"), reference("r1"), reference("r2"), reference("r3"), task("t", { model: "doubao-seedream-5-0-pro-260628" })],
+      [edge("p", "t", "positive"), { ...edge("r1", "t", "image:0"), region: two }, edge("r2", "t", "image:1"), { ...edge("r3", "t", "image:2"), region: REGION }],
+    );
+    const [item] = buildConfirmItems(b, BUILTIN_TABLE, ["t"], ctx);
+    expect(item.referenceCount).toBe(5);
+    expect(item.issues).toEqual([]);
+    expect(item.sendText).toContain("本次提供 5 张参考图，按顺序为图1、图2、图3、图4、图5。\n把图3 放进图1，照着地图2 摆，图4 当背景；Image 4\n");
+    expect(item.sendText).toContain("图2 是图1 的标注版，紫色、黄色半透明高亮");
+    expect(item.sendText).toContain("图5 是图4 的标注版，洋红色半透明高亮");
+  });
+
+  it("引用越界按用户连线数：两张用户图其中一张带区域时 @图3 标红；未引用的用户图标黄，叠加图从不标黄", () => {
+    const [item] = buildConfirmItems(twoImages("把@图3 的颜色用到@图1 上", REGION), BUILTIN_TABLE, ["t"], ctx);
     expect(item.issues).toEqual(["提示词引用了图3，但只接了 2 张参考图"]);
+    expect(item.warnings).toEqual(["图2 已接线但提示词未引用"]);
+    expect(imageRefProblems(twoImages("改", REGION), BUILTIN_TABLE, "t").unreferenced).toEqual([2]);
   });
 
   it("区域变更让任务变脏", () => {

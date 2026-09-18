@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Board, BoardEdge, BoardNode, TaskNode } from "./board";
 import { BUILTIN_TABLE, findModel } from "./capabilities";
-import { effectiveRegionRender, expandImageEdges, overlayPhrases, setEdgeRegion } from "./region";
+import { effectiveRegionRender, expandImageEdges, imageRefMap, overlayPhrases, setEdgeRegion } from "./region";
 
 function task(id: string, patch: Partial<TaskNode> = {}): TaskNode {
   return {
@@ -64,6 +64,26 @@ describe("端口槽展开", () => {
       [3, "image", null],
     ]);
     expect(slots[1].edge).toBe(edges[0]);
+  });
+
+  it("用户序号只数用户连线：叠加槽记原图的用户序号，后面的用户图序号不后移", () => {
+    const edges = [edge("r1", "t", "image:0", { region: REGION }), edge("r2", "t", "image:1")];
+    const slots = expandImageEdges(edges, "highlight_overlay");
+    expect(slots.map((s) => [s.kind, s.port, s.userPort])).toEqual([
+      ["image", 1, 1],
+      ["overlay", 2, 1],
+      ["image", 3, 2],
+    ]);
+    expect(imageRefMap(slots)).toEqual([1, 3]);
+  });
+
+  it("多张图各带区域（共 3 个区域）：用户序号 → 发送序号", () => {
+    const two = { ...REGION, rects: [REGION.rects[0], REGION.rects[0]] };
+    const edges = [edge("r1", "t", "image:0", { region: two }), edge("r2", "t", "image:1"), edge("r3", "t", "image:2", { region: REGION })];
+    expect(imageRefMap(expandImageEdges(edges, "highlight_overlay"))).toEqual([1, 3, 4]);
+    // 删除区域 / 渲染方式不是 highlight_overlay：恒等。
+    expect(imageRefMap(expandImageEdges(edges.map((e) => ({ ...e, region: null })), "highlight_overlay"))).toEqual([1, 2, 3]);
+    expect(imageRefMap(expandImageEdges(edges, "bbox_tag"))).toEqual([1, 2, 3]);
   });
 
   it("无区域的线不占叠加名额", () => {

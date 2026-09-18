@@ -1,5 +1,6 @@
 // 区域指示（规格第 6 节）：连线上的矩形区域如何渲染、如何展开成参考图序号、固定句如何生成。
-// 区域端口是派生的，不写进画板连线：换模型自动长出 / 消失、序号顺延 / 回缩，区域数据原样保留。
+// 区域端口是派生的，不写进画板连线：换模型自动长出 / 消失，区域数据原样保留。
+// 两套序号：用户序号（「图N」，只数用户图片连线，不受区域影响）与发送序号（叠加图紧随原图的实际发送顺序）。
 import type { Board, BoardEdge, PortRef, Region, RegionRender } from "./board";
 import { isSupported, type ModelCapability } from "./capabilities";
 import type { PromptLanguage } from "./imageRefs";
@@ -17,15 +18,17 @@ export function effectiveRegionRender(model: ModelCapability | undefined): Regio
 /** 展开后槽位的最小形状（重新生成时从 task.json 重建，没有连线对象）。 */
 export interface SlotRef {
   kind: "image" | "overlay";
-  /** 图N 的 N（1 起），即发送序参考图序号。 */
+  /** 发送序号（1 起）：叠加图紧随原图的实际发送顺序。 */
   port: number;
-  /** 叠加槽：原图序号；原图槽：null。 */
+  /** 用户序号（1 起），即用户写的「图N」的 N；叠加槽没有自己的用户序号，记原图的。 */
+  userPort: number;
+  /** 叠加槽：原图的发送序号；原图槽：null。 */
   sourcePort: number | null;
   /** 叠加槽：该图框出的区域数；原图槽：0。 */
   regionCount: number;
 }
 
-/** 展开后的端口槽：highlight_overlay 下有区域的用户线贡献「原图 + 紧随的叠加图」两个序号。 */
+/** 展开后的端口槽：highlight_overlay 下有区域的用户线贡献「原图 + 紧随的叠加图」两个发送序号、一个用户序号。 */
 export interface PortSlot extends SlotRef {
   /** 来源用户连线。 */
   edge: BoardEdge;
@@ -37,14 +40,19 @@ export interface PortSlot extends SlotRef {
  */
 export function expandImageEdges(edges: BoardEdge[], render: RegionRender | null): PortSlot[] {
   const slots: PortSlot[] = [];
-  for (const edge of edges) {
-    slots.push({ port: slots.length + 1, kind: "image", edge, sourcePort: null, regionCount: 0 });
+  for (const [i, edge] of edges.entries()) {
+    slots.push({ port: slots.length + 1, userPort: i + 1, kind: "image", edge, sourcePort: null, regionCount: 0 });
     const regionCount = edge.region?.rects.length ?? 0;
     if (render === "highlight_overlay" && regionCount > 0) {
-      slots.push({ port: slots.length + 1, kind: "overlay", edge, sourcePort: slots[slots.length - 1].port, regionCount });
+      slots.push({ port: slots.length + 1, userPort: i + 1, kind: "overlay", edge, sourcePort: slots[slots.length - 1].port, regionCount });
     }
   }
   return slots;
+}
+
+/** 用户序号 → 发送序号：第 N-1 项为用户图N 的发送序号。没有叠加槽时为恒等。 */
+export function imageRefMap(slots: SlotRef[]): number[] {
+  return slots.filter((s) => s.kind === "image").map((s) => s.port);
 }
 
 /** 各叠加槽第一个区域的区域编号（0 起）：按槽顺序、再按框选先后连续编号。 */
