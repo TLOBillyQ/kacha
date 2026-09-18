@@ -27,7 +27,7 @@ interface Options {
   selection: Selection;
   /** 弹窗开着时画布键位不响应。 */
   dialogOpen: MutableRefObject<boolean>;
-  /** 画板写入（见 core/edit）：建议选中由调用方照选。 */
+  /** 画板写入（见 core/edit），由调用方照建议选中切换选区。 */
   apply: (change: BoardChange) => EditResult | null;
 }
 
@@ -79,13 +79,9 @@ export function useCanvasInteraction({ wrapper, boardRef, selection, dialogOpen,
       const pending = altDrag.current;
       altDrag.current = null;
       if (!pending) return;
-      const r = apply({ kind: "settleDrag", drag: { id: dragId, copies: pending.pairs.length }, pairs: pending.pairs, starts: pending.starts });
-      if (r?.selection) {
-        selection.setNodes(new Set(r.selection));
-        selection.setEdges(new Set());
-      }
+      apply({ kind: "settleDrag", drag: { id: dragId, copies: pending.pairs.length }, pairs: pending.pairs, starts: pending.starts });
     },
-    [apply, selection],
+    [apply],
   );
 
   // 触控板双指 = 平移（React Flow 默认滚轮一律缩放）。
@@ -105,11 +101,7 @@ export function useCanvasInteraction({ wrapper, boardRef, selection, dialogOpen,
 
   useEffect(() => {
     const duplicateSelection = () => {
-      const r = apply({ kind: "duplicate", ids: [...selection.nodes.current], drag: null });
-      if (r?.selection) {
-        selection.setNodes(new Set(r.selection));
-        selection.setEdges(new Set());
-      }
+      apply({ kind: "duplicate", ids: [...selection.nodes.current], drag: null });
     };
     const onKey = (e: KeyboardEvent) => {
       // 上下文菜单开着时它在捕获阶段吞掉 Esc（只关菜单），这里收不到。

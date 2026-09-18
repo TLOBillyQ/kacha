@@ -289,6 +289,16 @@ describe("自动宽高比在同一次变更里算好", () => {
     expect(r.step).toEqual({ label: "连线" });
   });
 
+  it("视图变更：视口、上次模型只改对应字段，不构成撤销步", () => {
+    const b = board([], []);
+    const vp = editBoard(b, { kind: "viewport", viewport: { x: 10, y: 20, zoom: 2 } }, env());
+    expect(vp.board).toEqual({ ...b, viewport: { x: 10, y: 20, zoom: 2 } });
+    expect(vp.step).toBeNull();
+    const lm = editBoard(b, { kind: "lastModel", model: QWEN }, env());
+    expect(lm.board).toEqual({ ...b, last_model: QWEN });
+    expect(lm.step).toBeNull();
+  });
+
   it("视图变更不跑管线", () => {
     const auto = autoSizeSpec(ruleOf(PRO), "2K", null, null);
     const b = board([reference("tall"), task("t", { size_spec: auto, image_ports: 1 })], [edge("tall", "t", "image:0")]);
@@ -321,7 +331,13 @@ describe("运行期锁定：后置不变量", () => {
     expect(r).toEqual({ board: withResult, step: null, hint: LOCKED_HINT });
   });
 
-  it("文件拖到锁定任务上：参考图照样加上，只是不接线", () => {
+  it("粘贴只带剪贴板内部连线，接不到锁定任务上：照常粘贴", () => {
+    const r = editBoard(b, { kind: "paste", clip: copySelection(b, ["b"]) }, locked("t"));
+    expect(r.step).toEqual({ label: "粘贴 1 个节点" });
+    expect(r.board.edges).toEqual(b.edges);
+  });
+
+  it("文件拖到锁定任务上（粘贴接入的实际入口）：参考图照样加上，只是不接线", () => {
     const images = [{ path: "wide.png", sha256: "1".repeat(64), display_name: "wide.png", width: 1920, height: 1080 }];
     const r = editBoard(b, { kind: "addReferences", images, at: [0, 0], attach: { taskId: "t", place: "left" } }, locked("t"));
     expect(r.board.nodes).toHaveLength(b.nodes.length + 1);

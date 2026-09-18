@@ -100,7 +100,7 @@ export function useBoardSessions(outputRoot: string | null, envSource: EnvSource
   envSourceRef.current = envSource;
   const outputRootRef = useRef(outputRoot);
   outputRootRef.current = outputRoot;
-  /** 按画板组装编辑环境：图片宽高只取已读到的。 */
+  /** 组装编辑环境：图片宽高只取已读到的；锁定集暂为全局（任务状态不分画板，见 ADR 0014）。 */
   const envOf = useCallback(
     (): EditEnv => ({
       ...envSourceRef.current(),

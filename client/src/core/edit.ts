@@ -29,9 +29,6 @@ export interface EditEnv {
   newId: () => string;
 }
 
-/** 运行期锁定的谓词：核心的锁定不变量与界面控件置灰共用。 */
-export const isLocked = (env: Pick<EditEnv, "locked">, taskId: string) => env.locked.has(taskId);
-
 /** 一条连线的端点（不带区域等可变字段）。 */
 export interface EdgeRef {
   from: PortRef;

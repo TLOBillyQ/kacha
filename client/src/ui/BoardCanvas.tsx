@@ -212,10 +212,11 @@ export function BoardCanvas({
   const imageNodes = useMemo(() => board.nodes.filter((n) => n.type === "reference" || n.type === "result"), [board.nodes]);
   const imageAbsPaths = useMemo(() => imageNodes.map((n) => resolveFromRoot(outputRoot, n.path)), [imageNodes, outputRoot]);
   const imageInfos = useImageInfos(imageAbsPaths);
-  // 图片宽高晚于画板变更读到（刚打开画板、刚重新定位）、或任务结束解除锁定（statuses 变化）时补算自动宽高比：系统变更，不构成撤销步。
+  // 图片宽高晚于画板变更读到（刚打开画板、刚重新定位）、任务结束解除锁定、能力表或输出根目录变化时补算自动宽高比：
+  // 系统变更，不构成撤销步；环境经 apply 取最新，这里的依赖只决定何时补算。
   useEffect(() => {
     applyChange({ kind: "syncAutoRatios" });
-  }, [board, imageInfos, locked, applyChange]);
+  }, [board, imageInfos, locked, table, outputRoot, applyChange]);
   const alphaByNode = useMemo(() => {
     const map = new Map<string, boolean>();
     imageNodes.forEach((n, i) => {
@@ -623,8 +624,6 @@ export function BoardCanvas({
       const cancelled = cancelledRef.current;
       cancelledRef.current = [];
       apply({ kind: "delete", nodes: ns.map((n) => n.id), edges: edgeRefsOf(es), cancelled });
-      setSelectedNodes(new Set());
-      setSelectedEdges(new Set());
     },
     [apply, edgeRefsOf],
   );
@@ -687,10 +686,6 @@ export function BoardCanvas({
     await importReferences(Array.isArray(picked) ? picked : [picked], at ?? centerPosition(), attachTo ? { taskId: attachTo, place: "asIs" } : undefined);
   };
 
-  // 撤销 / 重做（供工具栏与上下文菜单）：锁定任务按当前状态保留。
-  const undo = onUndo;
-  const redo = onRedo;
-
   // 通用复制粘贴：Ctrl/⌘+C 复制选中节点，Ctrl/⌘+V 粘贴（新节点整体偏移、从未提交过）。
   // Ctrl/⌘+Z 撤销，Ctrl/⌘+Shift+Z、Ctrl/⌘+Y 重做；文本框聚焦时交给原生撤销。
   useEffect(() => {
@@ -700,8 +695,8 @@ export function BoardCanvas({
       if (key === "z" || (key === "y" && !e.shiftKey)) {
         e.preventDefault();
         if (dialogOpenRef.current) return;
-        if (key === "z" && !e.shiftKey) undo();
-        else redo();
+        if (key === "z" && !e.shiftKey) onUndo();
+        else onRedo();
         return;
       }
       if (e.shiftKey || dialogOpenRef.current) return;
@@ -717,7 +712,7 @@ export function BoardCanvas({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [apply, undo, redo]);
+  }, [apply, onUndo, onRedo]);
 
   const openMenu = (e: ReactMouseEvent | MouseEvent, target: MenuTarget) => {
     e.preventDefault();
@@ -745,8 +740,8 @@ export function BoardCanvas({
     if (action === "newPrompt") addPrompt(at);
     else if (action === "newTask") addTask(at);
     else if (action === "addReferences") void pickReferences(at);
-    else if (action === "undo") undo();
-    else if (action === "redo") redo();
+    else if (action === "undo") onUndo();
+    else if (action === "redo") onRedo();
     else if (target.kind === "node") {
       const id = target.nodeId;
       if (action === "preview") actions.previewNode(id);
@@ -855,8 +850,8 @@ export function BoardCanvas({
               onNewPrompt={() => addPrompt()}
               onAddReferences={() => void pickReferences()}
               onNewTask={() => addTask()}
-              onUndo={undo}
-              onRedo={redo}
+              onUndo={onUndo}
+              onRedo={onRedo}
               undoLabel={undoLabel}
               redoLabel={redoLabel}
               selectedCount={selectedNodes.size}
