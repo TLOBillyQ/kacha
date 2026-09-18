@@ -32,9 +32,6 @@ export interface PackageEntry {
   contains_prompt: boolean;
 }
 
-/** 与 src-tauri/src/board_pack.rs 的 CANCELLED 一致：取消时命令以此 reject。 */
-export const PACK_CANCELLED = "已取消";
-
 export const ipc = {
   appPaths: () => invoke<AppPaths>("app_paths"),
   startupArgs: () => invoke<string[]>("startup_args"),

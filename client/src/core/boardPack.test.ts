@@ -1,16 +1,20 @@
 import { describe, expect, it } from "vitest";
 import { newBoard, parseBoard, serializeBoard, uniqueBoardFileName, type Board, type ReferenceNode, type ResultNode } from "./board";
 import {
+  PACK_CANCELLED,
   PACK_FORMAT_VERSION,
   PACK_MANIFEST,
   buildExportSpec,
   buildManifest,
   checkPack,
+  importPack,
   importSummary,
   inspectPack,
   planExport,
+  runCancellable,
   type MergeUnit,
   type PackFs,
+  type PackIo,
 } from "./boardPack";
 import { resolveFromRoot } from "./paths";
 
@@ -224,5 +228,174 @@ describe("导入结果", () => {
 
   it("无冲突时不附冲突数", () => {
     expect(importSummary(units.slice(0, 1), [{ path: "2026-09-16/a", outcome: "moved" }]).message).toBe("导入 1 个任务，跳过 0 个");
+  });
+});
+
+describe("可取消的画板包命令", () => {
+  it("先复位取消标记，复位之后才进入进度阶段，再跑命令", async () => {
+    const steps: string[] = [];
+    const io = { cancel: async (cancelled: boolean) => void steps.push(`cancel(${cancelled})`) };
+    const outcome = await runCancellable(io, (stage) => steps.push(stage), async () => {
+      steps.push("run");
+      return 7;
+    });
+    expect(outcome).toEqual({ ok: true, value: 7 });
+    expect(steps).toEqual(["cancel(false)", "progress", "run"]);
+  });
+
+  it("命令以取消标记 reject 归为 cancelled，其他错误归为 failed", async () => {
+    const io = { cancel: async () => undefined };
+    expect(await runCancellable(io, () => undefined, () => Promise.reject(PACK_CANCELLED))).toEqual({ ok: false, result: "cancelled", error: PACK_CANCELLED });
+    expect(await runCancellable(io, () => undefined, () => Promise.reject(new Error("磁盘已满")))).toEqual({ ok: false, result: "failed", error: "磁盘已满" });
+  });
+});
+
+describe("导入画板包", () => {
+  const PACK = "D:\\下载\\千问测试.ugcpack";
+  const TASK = "2026-09-16/20260916T010000Z-0000000a";
+  const SECRET = "机密提示词：橘猫";
+  const boardA = "画板/甲.ugcboard.json";
+  const boardB = "画板/乙.ugcboard.json";
+  const withPrompt = (name: string): Board => ({
+    ...newBoard(name),
+    nodes: [{ ...base, id: "p", type: "prompt", text: SECRET }],
+  });
+  const goodPack: Record<string, string> = {
+    [PACK_MANIFEST]: buildManifest("0.2.0", [boardA, boardB]),
+    [boardA]: serializeBoard(withPrompt("甲")),
+    [boardB]: serializeBoard(withPrompt("乙")),
+    [`${TASK}/task.json`]: "{}",
+    [`${TASK}/result.png`]: "",
+  };
+
+  /** 内存包命令：记录移入的合并单元；failAfterMove 让导入移完第一个单元后以该错误 reject。 */
+  function memoryPackIo(pack: Record<string, string>, opts: { failAfterMove?: unknown } = {}) {
+    const moved: string[] = [];
+    const steps: string[] = [];
+    const io: PackIo = {
+      cancel: async (cancelled) => void steps.push(`cancel(${cancelled})`),
+      entries: async () => Object.keys(pack),
+      readTexts: async (_pack, names) => Object.fromEntries(names.filter((n) => n in pack).map((n) => [n, pack[n]])),
+      importUnits: async (_pack, _root, units) => {
+        steps.push("import");
+        for (const unit of units) {
+          moved.push(unit.path);
+          if (opts.failAfterMove !== undefined) throw opts.failAfterMove;
+        }
+        return { outcomes: units.map((u) => ({ path: u.path, outcome: "moved" as const })), bytes: 1234 };
+      },
+    };
+    return { io, moved, steps };
+  }
+
+  function run(io: PackIo, addBoard: (board: Board) => Promise<string> = async (b) => `${ROOT}\\画板\\${b.title}.ugcboard.json`) {
+    const logs: Record<string, unknown>[] = [];
+    const added: string[] = [];
+    const stages: string[] = [];
+    const outcome = importPack(io, {
+      packPath: PACK,
+      outputRoot: ROOT,
+      addBoard: async (board) => {
+        added.push(board.title);
+        return addBoard(board);
+      },
+      onStage: (stage) => stages.push(stage),
+      log: (kind, fields) => void logs.push({ kind, ...fields }),
+    });
+    return { outcome, logs, added, stages };
+  }
+
+  it("包版本更高：不写任何文件，不进入进度，日志记 newer", async () => {
+    const newer = { ...goodPack, [PACK_MANIFEST]: JSON.stringify({ pack_format_version: PACK_FORMAT_VERSION + 1, app_version: "9", boards: [] }) };
+    const { io, moved, steps } = memoryPackIo(newer);
+    const r = run(io);
+    expect(await r.outcome).toMatchObject({ kind: "newer" });
+    expect(moved).toEqual([]);
+    expect(steps).toEqual([]);
+    expect(r.added).toEqual([]);
+    expect(r.stages).toEqual([]);
+    expect(r.logs).toEqual([{ kind: "board_pack", action: "import", pack_file: "千问测试.ugcpack", result: "newer" }]);
+  });
+
+  it("包损坏（布局不合法或读不了条目）：不写任何文件，日志记 corrupt", async () => {
+    const { io, moved } = memoryPackIo({ ...goodPack, "素材/猫.png": "" });
+    const r = run(io);
+    expect(await r.outcome).toMatchObject({ kind: "corrupt", reason: expect.stringContaining("素材/猫.png") });
+    expect(moved).toEqual([]);
+    expect(r.added).toEqual([]);
+
+    const broken = memoryPackIo(goodPack);
+    broken.io.entries = async () => {
+      throw new Error("不是 zip");
+    };
+    const r2 = run(broken.io);
+    expect(await r2.outcome).toEqual({ kind: "corrupt", reason: "不是 zip" });
+    expect(r2.logs).toEqual([{ kind: "board_pack", action: "import", pack_file: "千问测试.ugcpack", result: "corrupt" }]);
+  });
+
+  it("导入中取消：返回 cancelled，已移入的任务目录保留，不写画板", async () => {
+    const { io, moved } = memoryPackIo(goodPack, { failAfterMove: PACK_CANCELLED });
+    const r = run(io);
+    expect(await r.outcome).toEqual({ kind: "cancelled" });
+    expect(moved).toEqual([TASK]);
+    expect(r.added).toEqual([]);
+    expect(r.logs).toEqual([{ kind: "board_pack", action: "import", pack_file: "千问测试.ugcpack", board_file: "甲.ugcboard.json, 乙.ugcboard.json", result: "cancelled" }]);
+  });
+
+  it("导入命令失败：返回 failed 与报错原文，日志只记类别", async () => {
+    const { io } = memoryPackIo(goodPack, { failAfterMove: new Error(`磁盘已满 ${SECRET}`) });
+    const r = run(io);
+    expect(await r.outcome).toEqual({ kind: "failed", error: `磁盘已满 ${SECRET}` });
+    expect(r.logs).toEqual([{ kind: "board_pack", action: "import", pack_file: "千问测试.ugcpack", board_file: "甲.ugcboard.json, 乙.ugcboard.json", result: "failed" }]);
+  });
+
+  it("成功：先复位取消再进入进度再导入，逐个写画板，日志记计数与实际写入的文件名", async () => {
+    const { io, steps } = memoryPackIo(goodPack);
+    const r = run(io, async (b) => `${ROOT}\\画板\\${b.title} (2).ugcboard.json`);
+    const outcome = await r.outcome;
+    expect(steps).toEqual(["cancel(false)", "import"]);
+    expect(r.stages).toEqual(["progress"]);
+    expect(r.added).toEqual(["甲", "乙"]);
+    expect(outcome).toEqual({
+      kind: "done",
+      summary: { imported: 1, skipped: 0, conflicts: [], message: "导入 1 个任务，跳过 0 个" },
+      written: ["甲 (2).ugcboard.json", "乙 (2).ugcboard.json"],
+      writeError: null,
+    });
+    expect(r.logs).toEqual([
+      { kind: "board_pack", action: "import", pack_file: "千问测试.ugcpack", task_dirs: 1, skipped: 0, conflicts: 0, bytes: 1234, board_file: "甲 (2).ugcboard.json, 乙 (2).ugcboard.json", result: "ok" },
+    ]);
+  });
+
+  it("第 2 个画板写失败：第 1 个保留、第一个失败即停、writeError 有值、日志记 board_write_failed", async () => {
+    const { io } = memoryPackIo(goodPack);
+    const r = run(io, async (b) => {
+      if (b.title === "乙") throw new Error(`画板目录只读 ${SECRET}`);
+      return `${ROOT}\\画板\\${b.title}.ugcboard.json`;
+    });
+    expect(await r.outcome).toMatchObject({ kind: "done", written: ["甲.ugcboard.json"], writeError: `画板目录只读 ${SECRET}` });
+    expect(r.logs).toEqual([
+      { kind: "board_pack", action: "import", pack_file: "千问测试.ugcpack", task_dirs: 1, skipped: 0, conflicts: 0, bytes: 1234, board_file: "甲.ugcboard.json, 乙.ugcboard.json", result: "board_write_failed" },
+    ]);
+  });
+
+  it("日志不含提示词与报错原文：只有类别、文件名与计数", async () => {
+    const cases = [memoryPackIo(goodPack).io, memoryPackIo(goodPack, { failAfterMove: new Error(SECRET) }).io];
+    const logs: Record<string, unknown>[] = [];
+    for (const io of cases) {
+      const r = run(io, async () => {
+        throw new Error(SECRET);
+      });
+      await r.outcome;
+      logs.push(...r.logs);
+    }
+    expect(logs.length).toBeGreaterThan(0);
+    for (const entry of logs) {
+      expect(JSON.stringify(entry)).not.toContain("橘猫");
+      for (const [key, value] of Object.entries(entry)) {
+        expect(["kind", "action", "pack_file", "board_file", "result", "task_dirs", "skipped", "conflicts", "bytes"]).toContain(key);
+        expect(typeof value === "number" || typeof value === "string").toBe(true);
+      }
+    }
   });
 });

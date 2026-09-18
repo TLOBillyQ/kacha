@@ -209,3 +209,99 @@ export function importSummary(units: MergeUnit[], outcomes: { path: string; outc
   const conflictText = conflicts.length ? `，${conflicts.length} 项冲突未覆盖` : "";
   return { imported, skipped, conflicts, message: `导入 ${imported} 个任务，跳过 ${skipped} 个${conflictText}` };
 }
+
+// ---- 可取消的包命令 ----
+
+/** 与 src-tauri/src/board_pack.rs 的 CANCELLED 一致：取消时命令以此 reject。 */
+export const PACK_CANCELLED = "已取消";
+
+/** 画板包命令的端口（壳层 ipc 实现，见 shell/adapters.ts）。 */
+export interface PackIo {
+  /** 置取消标记；开始导出 / 导入前先以 false 复位。 */
+  cancel(cancelled: boolean): Promise<void>;
+  /** 包内条目名（正斜杠）。 */
+  entries(pack: string): Promise<string[]>;
+  /** 读指定条目的文本；不存在的条目不出现在结果里。 */
+  readTexts(pack: string, names: string[]): Promise<Record<string, string>>;
+  /** 按合并单元解压合并进输出根目录；取消时以 PACK_CANCELLED reject，已移入的单元保留。 */
+  importUnits(pack: string, outputRoot: string, units: MergeUnit[]): Promise<{ outcomes: { path: string; outcome: MergeOutcome }[]; bytes: number }>;
+}
+
+export type Outcome<T> = { ok: true; value: T } | { ok: false; result: "cancelled" | "failed"; error: string };
+
+const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+/** 先复位取消标记，复位之后才进入进度阶段（调用方在此弹进度），再跑命令：进度弹出后立刻点的取消才不会丢。 */
+export async function runCancellable<T>(io: Pick<PackIo, "cancel">, onStage: (stage: "progress") => void, run: () => Promise<T>): Promise<Outcome<T>> {
+  await io.cancel(false);
+  onStage("progress");
+  try {
+    return { ok: true, value: await run() };
+  } catch (e) {
+    const error = errorText(e);
+    return { ok: false, result: error === PACK_CANCELLED ? "cancelled" : "failed", error };
+  }
+}
+
+// ---- 导入 ----
+
+export type ImportResult =
+  | { kind: "newer"; message: string }
+  | { kind: "corrupt"; reason: string }
+  | { kind: "cancelled" }
+  | { kind: "failed"; error: string }
+  /** 任务目录已合并；written = 实际写入的画板文件名，writeError = 写画板第一个失败的报错（其后的不再写）。 */
+  | { kind: "done"; summary: ImportSummary; written: string[]; writeError: string | null };
+
+export interface ImportOptions {
+  packPath: string;
+  outputRoot: string;
+  /** 按同名改名规则写入画板目录（并打开），返回实际写入的路径；会话状态归调用方。 */
+  addBoard(board: Board): Promise<string>;
+  /** 复位取消标记之后进入进度阶段。 */
+  onStage(stage: "progress"): void;
+  /** 脱敏日志：只记类别、文件名与计数，不记提示词与报错原文。 */
+  log(kind: "board_pack", fields: Record<string, unknown>): void;
+}
+
+/**
+ * 导入画板包（#128）：判版本与布局（不合格不写任何文件）→ 可取消地解压合并任务目录 → 逐个写画板。
+ * 从「已拿到用户选的包路径」开始；选包、进度、结果弹窗与文案都留在 ui（弹窗不是端口，见 #128），这里只返回结局。
+ * 取消或失败时已移入的任务目录保留；写画板第一个失败即停，已写的保留。
+ */
+export async function importPack(io: PackIo, opts: ImportOptions): Promise<ImportResult> {
+  const { packPath, outputRoot } = opts;
+  const fields = { action: "import", pack_file: basename(packPath) };
+  const check = await io
+    .entries(packPath)
+    .then((entries) => inspectPack(entries, (names) => io.readTexts(packPath, names)))
+    .catch((e): Rejected => ({ kind: "corrupt", reason: errorText(e) }));
+  if (check.kind !== "ok") {
+    opts.log("board_pack", { ...fields, result: check.kind });
+    return check;
+  }
+  const packBoards = check.boards.map((b) => basename(b.entry)).join(", ");
+  const outcome = await runCancellable(io, opts.onStage, () => io.importUnits(packPath, outputRoot, check.units));
+  if (!outcome.ok) {
+    opts.log("board_pack", { ...fields, board_file: packBoards, result: outcome.result });
+    return outcome.result === "cancelled" ? { kind: "cancelled" } : { kind: "failed", error: outcome.error };
+  }
+  const summary = importSummary(check.units, outcome.value.outcomes);
+  const written: string[] = [];
+  let writeError: string | null = null;
+  try {
+    for (const { board } of check.boards) written.push(basename(await opts.addBoard(board)));
+  } catch (e) {
+    writeError = errorText(e);
+  }
+  opts.log("board_pack", {
+    ...fields,
+    task_dirs: summary.imported,
+    skipped: summary.skipped,
+    conflicts: summary.conflicts.length,
+    bytes: outcome.value.bytes,
+    board_file: writeError ? packBoards : written.join(", "),
+    result: writeError ? "board_write_failed" : "ok",
+  });
+  return { kind: "done", summary, written, writeError };
+}
