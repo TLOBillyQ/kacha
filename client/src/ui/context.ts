@@ -5,8 +5,8 @@ import type { BoardAction, MenuTarget } from "../core/contextMenu";
 import type { BoardChange } from "../core/edit";
 import { resolveFromRoot } from "../core/paths";
 import type { TaskStatus } from "../core/run";
-import { isInterrupted } from "../core/submission";
-import { readOutcome, type TaskOutcome } from "../core/taskDir";
+import { interruptedCandidates, storedStatuses } from "../core/submission";
+import type { TaskFs } from "../core/taskDir";
 import { taskFs } from "../shell/adapters";
 import { ipc, type ImageInfo } from "../shell/ipc";
 import { logEvent } from "../shell/log";
@@ -126,48 +126,42 @@ export function useMissingImages(board: Board, outputRoot: string): ReadonlySet<
   return missing;
 }
 
-// 任务目录的结局记录只写一次，读过就缓存；null = 没有记录。
-const outcomeCache = new Map<string, Promise<TaskOutcome | null>>();
+// 任务目录的结局记录只写一次，读过就缓存（含读不到）。
+const outcomeReads = new Map<string, Promise<Uint8Array>>();
+const cachedOutcomeFs: Pick<TaskFs, "readFile"> = {
+  readFile: (path) => {
+    let pending = outcomeReads.get(path);
+    if (!pending) {
+      pending = taskFs.readFile(path);
+      outcomeReads.set(path, pending);
+    }
+    return pending;
+  },
+};
 
-function cachedOutcome(outputRoot: string, taskId: string): Promise<TaskOutcome | null> {
-  const key = JSON.stringify([outputRoot, taskId]);
-  let pending = outcomeCache.get(key);
-  if (!pending) {
-    pending = readOutcome(taskFs, outputRoot, taskId);
-    outcomeCache.set(key, pending);
-  }
-  return pending;
-}
-
-/**
- * 本次运行没经手过、提交过却没有结果的任务：按任务目录的 outcome.json 推导失败 / 已取消，没有记录 = 已中断。
- * 读完之前不显示徽标。
- */
 /** 已中断只在本次运行里首次发现时记一次日志。 */
 const loggedInterrupted = new Set<string>();
 
+/**
+ * 本次运行没经手过、提交过却没有结果的任务的状态（规则在 core/submission.ts 的 storedStatuses）。读完之前不显示徽标。
+ */
 export function useStoredStatuses(board: Board, boardFile: string, outputRoot: string, handled: ReadonlySet<string>): ReadonlyMap<string, TaskStatus> {
   const [statuses, setStatuses] = useState<ReadonlyMap<string, TaskStatus>>(new Map());
-  const candidates = board.nodes.flatMap((n) =>
-    n.type === "task" && typeof n.last_submitted?.task_id === "string" && isInterrupted(board, n.id, handled) ? [[n.id, n.last_submitted.task_id] as const] : [],
-  );
-  const signature = JSON.stringify([outputRoot, candidates]);
+  const signature = JSON.stringify([outputRoot, boardFile, interruptedCandidates(board, handled)]);
   useEffect(() => {
     let alive = true;
-    void Promise.all(
-      candidates.map(async ([nodeId, taskId]) => {
-        const outcome = await cachedOutcome(outputRoot, taskId);
-        if (!outcome && !loggedInterrupted.has(taskId)) {
-          loggedInterrupted.add(taskId);
-          logEvent("task", { task_id: taskId, board_file: boardFile, task_node_id: nodeId, from_status: "running", to_status: "interrupted" });
-        }
-        return [nodeId, outcome ?? { kind: "interrupted" }] as const;
-      }),
-    ).then((entries) => alive && setStatuses(new Map(entries)));
+    void storedStatuses(cachedOutcomeFs, board, handled, outputRoot, boardFile).then(({ statuses, newlyInterrupted }) => {
+      for (const event of newlyInterrupted) {
+        if (loggedInterrupted.has(event.task_id)) continue;
+        loggedInterrupted.add(event.task_id);
+        logEvent("task", { ...event });
+      }
+      if (alive) setStatuses(statuses);
+    });
     return () => {
       alive = false;
     };
-    // candidates 由 signature 概括。
+    // board / handled 里与结果相关的部分由 signature 概括。
   }, [signature]);
   return statuses;
 }

@@ -7,7 +7,7 @@ import { resolveFromRoot } from "./paths";
 import { planSend, promptLanguage, referenceProblemsOf, type ReferenceProblems, type SendPlan } from "./sendPlan";
 import { modelAvailabilityIssue, type Discovery } from "./settings";
 import type { SizeSpec } from "./size";
-import { layerFileName } from "./taskDir";
+import { layerFileName, readOutcome, type TaskFs, type TaskOutcome } from "./taskDir";
 
 export type SnapshotImage =
   | { kind: "reference"; path: string; sha256: string; region: Region | null }
@@ -108,6 +108,47 @@ export function isInterrupted(board: Board, taskId: string, handled: ReadonlySet
   const task = findTask(board, taskId);
   const submitted = task?.last_submitted?.task_id;
   return !!task && typeof submitted === "string" && !handled.has(submitted) && !hasExecuted(board, task);
+}
+
+/** 画板上已中断的候选：[任务节点 id, 提交的 task_id]。 */
+export function interruptedCandidates(board: Board, handled: ReadonlySet<string>): [nodeId: string, taskId: string][] {
+  return board.nodes.flatMap((n) =>
+    n.type === "task" && typeof n.last_submitted?.task_id === "string" && isInterrupted(board, n.id, handled) ? [[n.id, n.last_submitted.task_id] as [string, string]] : [],
+  );
+}
+
+/** 重开后推导出的任务状态：有结局记录按记录，没有 = 已中断。 */
+export type StoredStatus = TaskOutcome | { kind: "interrupted" };
+
+/** 推导出已中断时要记的日志事件（task 类别）；「每个 task_id 只记一次」的去重归调用方。 */
+export interface InterruptedEvent {
+  task_id: string;
+  board_file: string;
+  task_node_id: string;
+  from_status: "running";
+  to_status: "interrupted";
+}
+
+/**
+ * 已存状态（#128）：对已中断的候选读任务目录的结局记录——失败 / 已取消按记录，没有记录 = 已中断，
+ * 并为每个已中断产出一条 running → interrupted 的日志事件。读结局的缓存归调用方（经 fs 注入）。
+ */
+export async function storedStatuses(
+  fs: Pick<TaskFs, "readFile">,
+  board: Board,
+  handled: ReadonlySet<string>,
+  outputRoot: string,
+  boardFile: string,
+): Promise<{ statuses: Map<string, StoredStatus>; newlyInterrupted: InterruptedEvent[] }> {
+  const newlyInterrupted: InterruptedEvent[] = [];
+  const entries = await Promise.all(
+    interruptedCandidates(board, handled).map(async ([nodeId, taskId]) => {
+      const outcome = await readOutcome(fs, outputRoot, taskId);
+      if (!outcome) newlyInterrupted.push({ task_id: taskId, board_file: boardFile, task_node_id: nodeId, from_status: "running", to_status: "interrupted" });
+      return [nodeId, outcome ?? { kind: "interrupted" as const }] as const;
+    }),
+  );
+  return { statuses: new Map(entries), newlyInterrupted };
 }
 
 /** 有选中时只跑选中子图（选中的任务 + 选中节点直接下游的任务），否则整个画板；跳过不脏的已执行任务与正在排队 / 执行的。 */

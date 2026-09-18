@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { Board, BoardEdge, BoardNode, TaskNode } from "./board";
 import { BUILTIN_TABLE } from "./capabilities";
-import { buildConfirmItems, collectRunFacts, imageRefProblems, imageSources, isDirty, isInterrupted, runDispatch, runScope, snapshotOf, withSubmitted, type ConfirmItem } from "./submission";
+import { buildConfirmItems, collectRunFacts, imageRefProblems, imageSources, isDirty, isInterrupted, runDispatch, runScope, snapshotOf, storedStatuses, withSubmitted, type ConfirmItem } from "./submission";
+import { taskDirOfTaskId, writeOutcome } from "./taskDir";
+import { memoryTaskFs } from "./testing/memoryTaskFs";
 
 function prompt(id: string, text: string): BoardNode {
   return { id, type: "prompt", pos: [0, 0], size: [100, 100], extra: {}, text };
@@ -282,6 +284,42 @@ describe("图片来源", () => {
       { nodeId: "r1", label: "r1.png", absPath: "/root/refs/r1.png" },
       { nodeId: "x", label: "result.png", absPath: "/root/2026-09-16/task-x/result.png" },
     ]);
+  });
+});
+
+describe("已存状态", () => {
+  const FAILED = "20260916T091500Z-0000000f";
+  const CANCELLED = "20260916T091500Z-0000000c";
+  const NO_RECORD = "20260916T091500Z-0000000e";
+  const submittedTasks = () => {
+    const b = board([prompt("p", "猫"), task("t1"), task("t2"), task("t3"), task("t4")], ["t1", "t2", "t3", "t4"].map((t) => edge("p", t, "positive")));
+    return withSubmitted(withSubmitted(withSubmitted(b, "t1", FAILED), "t2", CANCELLED), "t3", NO_RECORD);
+  };
+  async function outcomesFs() {
+    const fs = memoryTaskFs();
+    await writeOutcome(fs, "/root", taskDirOfTaskId(FAILED)!, { kind: "failed", label: "鉴权失败" });
+    await writeOutcome(fs, "/root", taskDirOfTaskId(CANCELLED)!, { kind: "cancelled", gatewayMayContinue: true });
+    return fs;
+  }
+
+  it("没经手过、提交过却没结果的任务：有结局记录按记录（失败 / 已取消），没有记录 = 已中断", async () => {
+    const { statuses } = await storedStatuses(await outcomesFs(), submittedTasks(), new Set(), "/root", "猫.ugcboard.json");
+    expect(statuses).toEqual(
+      new Map([
+        ["t1", { kind: "failed", label: "鉴权失败" }],
+        ["t2", { kind: "cancelled", gatewayMayContinue: true }],
+        ["t3", { kind: "interrupted" }],
+      ]),
+    );
+  });
+
+  it("已中断产出一条 running → interrupted 的日志事件；本次运行经手过的不算候选", async () => {
+    const fs = await outcomesFs();
+    const { newlyInterrupted } = await storedStatuses(fs, submittedTasks(), new Set(), "/root", "猫.ugcboard.json");
+    expect(newlyInterrupted).toEqual([{ task_id: NO_RECORD, board_file: "猫.ugcboard.json", task_node_id: "t3", from_status: "running", to_status: "interrupted" }]);
+    const handled = await storedStatuses(fs, submittedTasks(), new Set([NO_RECORD]), "/root", "猫.ugcboard.json");
+    expect(handled.statuses.has("t3")).toBe(false);
+    expect(handled.newlyInterrupted).toEqual([]);
   });
 });
 
