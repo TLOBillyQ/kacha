@@ -25,7 +25,8 @@ import type { MenuItem } from "../core/contextMenu";
 import type { PortKind } from "../core/ports";
 import { actionHoverInfo, CANCELLED_HINT, referenceHoverInfo, resultHoverInfo, taskHoverInfo, textHoverInfo } from "../core/hoverInfo";
 import type { TaskStatus } from "../core/run";
-import { IMAGE_PORT_PREFIX, imageRuleViolations, type TaskPorts } from "../core/graph";
+import { inputImageAdviceAll } from "../core/fitImage";
+import { IMAGE_PORT_PREFIX, type TaskPorts } from "../core/graph";
 import { imageMinSize } from "../core/nodeSize";
 import { regionCss } from "../core/overlay";
 import { resolveFromRoot } from "../core/paths";
@@ -41,7 +42,8 @@ import type { Rect01 } from "./rects";
 export type PromptFlowNode = Node<{ node: PromptModel; recorded: boolean; autoFocus: boolean; portKind: PortKind }, "prompt">;
 /** missing：图片文件读不到，显示占位与「重新定位」。 */
 export type ReferenceFlowNode = Node<{ node: ReferenceModel; rules: InputImageRule[]; missing: boolean }, "reference">;
-export type ResultFlowNode = Node<{ node: ResultModel; missing: boolean }, "result">;
+/** rules = 下游任务模型的输入规则；没接任务时为空。 */
+export type ResultFlowNode = Node<{ node: ResultModel; rules: InputImageRule[]; missing: boolean }, "result">;
 export interface ImagePortInfo {
   label: string;
   /** 源图片绝对路径，用于判断透明背景前提（是否带 alpha）。 */
@@ -240,8 +242,8 @@ export const ReferenceNodeView = memo(function ReferenceNodeView({ data, selecte
   const { node, rules, missing } = data;
   const abs = resolveFromRoot(outputRoot, node.path);
   const info = useImageInfo(abs);
-  const warnings = info ? [...new Set(rules.flatMap((rule) => imageRuleViolations(info, rule)))] : [];
-  const hover = useHover(referenceHoverInfo({ node, image: info, missing, warnings }));
+  const { warnings, notes } = inputImageAdviceAll(info, rules);
+  const hover = useHover(referenceHoverInfo({ node, image: info, missing, warnings, notes }));
   return (
     <ImageNode
       id={node.id}
@@ -262,14 +264,26 @@ export const ReferenceNodeView = memo(function ReferenceNodeView({ data, selecte
 
 export const ResultNodeView = memo(function ResultNodeView({ data, selected, width, height }: NodeProps<ResultFlowNode>) {
   const { outputRoot, table } = useBoardActions();
-  const { node, missing } = data;
+  const { node, rules, missing } = data;
   const abs = resolveFromRoot(outputRoot, node.path);
   const info = useImageInfo(abs);
   const modelName = findModel(table, node.record.model)?.display_name ?? node.record.model;
-  const hover = useHover(resultHoverInfo({ node, modelName, image: info, missing }));
+  const { warnings, notes } = inputImageAdviceAll(info, rules);
+  const hover = useHover(resultHoverInfo({ node, modelName, image: info, missing, warnings, notes }));
   const badges = [...(info?.has_alpha ? ["透明"] : []), ...(node.layer_count > 0 ? [`${node.layer_count} 图层`] : [])];
   return (
-    <ImageNode id={node.id} absPath={abs} name={node.file} missing={missing} selected={selected} width={width} height={height} badges={badges} hover={hover}>
+    <ImageNode
+      id={node.id}
+      absPath={abs}
+      name={node.file}
+      missing={missing}
+      selected={selected}
+      width={width}
+      height={height}
+      className={warnings.length ? "node-warn" : ""}
+      badges={badges}
+      hover={hover}
+    >
       <Port kind="image" type="target" position={Position.Left} id="in" isConnectable={false} />
       <Port kind="image" type="source" position={Position.Right} id="out" />
     </ImageNode>

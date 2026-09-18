@@ -49,6 +49,14 @@ describe("结果节点悬浮信息", () => {
     expect(first).toEqual({ label: null, text: "图片缺失：2026-09-17/20260917-0001/result.png，可重新定位或选文件", tone: "error" });
   });
 
+  it("作为任务输入：发送时的自动处理说明在前，不可修复的警告标黄在后", () => {
+    const info = resultHoverInfo({ node: result(), modelName: "m", image: undefined, missing: false, notes: ["发送时将自动缩小到 2048×2048"], warnings: ["最短边 300 px 小于 384 px"], formatTime: time });
+    expect(info.slice(-2)).toEqual([
+      { label: null, text: "发送时将自动缩小到 2048×2048" },
+      { label: null, text: "最短边 300 px 小于 384 px", tone: "warn" },
+    ]);
+  });
+
   it("提交时间读不出时原样显示", () => {
     const node = result({ record: { ...result().record, submitted_at: "昨天" } });
     expect(resultHoverInfo({ node, modelName: "m", image: undefined, missing: false, formatTime: time })).toContainEqual({ label: "时间", text: "昨天" });
@@ -64,6 +72,10 @@ describe("参考图节点悬浮信息", () => {
       { label: "透明", text: "带透明通道" },
       { label: null, text: "短边小于 512px", tone: "warn" },
     ]);
+  });
+
+  it("发送时的自动处理说明不标黄", () => {
+    expect(referenceHoverInfo({ node: reference, image: undefined, missing: false, warnings: [], notes: ["发送时将转为 JPEG"] })).toContainEqual({ label: null, text: "发送时将转为 JPEG" });
   });
 
   it("图片信息未读到时不列像素与透明；缺图给原因", () => {

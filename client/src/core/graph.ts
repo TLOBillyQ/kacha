@@ -296,7 +296,7 @@ export interface ImageFacts {
   height: number;
 }
 
-const mb = (bytes: number) => `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+export const mb = (bytes: number) => `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 
 /** 按模型 input_image_rule 预校验参考图，逐项给出说明；违反时参考图节点标黄。 */
 export function imageRuleViolations(image: ImageFacts, rule: InputImageRule): string[] {

@@ -409,6 +409,11 @@ export function BoardCanvas({
       if (src?.type === "result") return { label: src.file, absPath: resolveFromRoot(outputRoot, src.path) };
       return { label: "?", absPath: null };
     };
+    const downstreamModels = (id: string) => {
+      const tasks = board.edges.filter((e) => e.from[0] === id).map((e) => board.nodes.find((t) => t.id === e.to[0]));
+      return [...new Set(tasks.flatMap((t) => (t?.type === "task" ? [t.model] : [])))];
+    };
+    const rulesOf = (modelIds: string[]): InputImageRule[] => modelIds.flatMap((id) => findModel(table, id)?.input_image_rule ?? []);
     return board.nodes.flatMap((n): Node[] => {
       if (n.type === "unknown") return [];
       const base = {
@@ -427,15 +432,11 @@ export function BoardCanvas({
         case "prompt":
           return [{ ...base, type: "prompt", data: { node: n, recorded: hasDownstreamRecords(board, n.id), autoFocus: focusPrompt === n.id, portKind: promptPortKind(board, n.id) } }];
         case "result":
-          return [{ ...base, ...imageBox(n.path), type: "result", data: { node: n, missing: missing.has(n.id) } }];
+          // 结果回灌到任务上才按下游模型规则提示；没接任务不提示。
+          return [{ ...base, ...imageBox(n.path), type: "result", data: { node: n, rules: rulesOf(downstreamModels(n.id)), missing: missing.has(n.id) } }];
         case "reference": {
-          const downstream = board.edges.filter((e) => e.from[0] === n.id).map((e) => board.nodes.find((t) => t.id === e.to[0]));
-          const modelIds = downstream.flatMap((t) => (t?.type === "task" ? [t.model] : []));
-          const ids = modelIds.length ? [...new Set(modelIds)] : fallback ? [fallback] : [];
-          const rules: InputImageRule[] = ids.flatMap((id) => {
-            const rule = findModel(table, id)?.input_image_rule;
-            return rule ? [rule] : [];
-          });
+          const modelIds = downstreamModels(n.id);
+          const rules = rulesOf(modelIds.length ? modelIds : fallback ? [fallback] : []);
           return [{ ...base, ...imageBox(n.path), type: "reference", data: { node: n, rules, missing: missing.has(n.id) } }];
         }
         case "task": {

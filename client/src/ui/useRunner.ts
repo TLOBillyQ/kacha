@@ -10,6 +10,7 @@ import { CancelledError, executeJob, failureLabel, prepareJob, prepareRegenerate
 import { tableDigest, writeOutcome, type TaskOutcome } from "../core/taskDir";
 import { httpFetch, ipc } from "../shell/ipc";
 import { logEvent } from "../shell/log";
+import { imageCodec } from "../shell/imageCodec";
 import { composeOverlay } from "../shell/overlay";
 
 const deps: RunDeps = {
@@ -18,6 +19,7 @@ const deps: RunDeps = {
   fetch: httpFetch,
   now: () => new Date(),
   composeOverlay,
+  imageCodec,
 };
 
 export interface RunTarget {

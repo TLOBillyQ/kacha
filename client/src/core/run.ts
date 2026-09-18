@@ -1,7 +1,8 @@
 // 单个任务从提交到出结果：读参考图（提交）→ 写任务目录（派发，不可变）→ 调网关 → 存结果图 → 画板加结果节点。
 // 副作用全部由调用方注入，状态与队列在界面层。
 import type { Board, ResultRecord } from "./board";
-import { findModel, type CapabilityTable, type ModelCapability } from "./capabilities";
+import { findModel, type CapabilityTable, type InputImageRule, type ModelCapability } from "./capabilities";
+import { fitImage, type FittedBytes, type FittedRecord, type ImageCodec } from "./fitImage";
 import { composeSendText, ERROR_CATEGORY_LABELS, fetchResultImage, GatewayError, generate, inlinesNegativePrompt, type FetchLike, type GenerationInput } from "./gateway";
 import { imagePortSlots, workflowOf } from "./graph";
 import { promptLanguage } from "./imageRefs";
@@ -23,7 +24,8 @@ interface TaskJson {
   size: { width: number; height: number };
   layer_decomposition: boolean;
   transparent_background: boolean;
-  references: { file: string; source: ReferenceSource; region?: ReferenceRegion }[];
+  /** fitted：发送前按模型规则处理过（#116）；旧任务目录没有。 */
+  references: { file: string; source: ReferenceSource; region?: ReferenceRegion; fitted?: FittedRecord }[];
 }
 
 export type TaskStatus =
@@ -43,6 +45,8 @@ export interface RunDeps extends TaskFs {
   now(): Date;
   /** 把区域矩形以高亮叠加画到源图上，返回编码后的图片（壳层 canvas 实现）；有区域任务时必须注入。 */
   composeOverlay?(image: Uint8Array, rects: [number, number, number, number][], firstRegion: number): Promise<Uint8Array>;
+  /** 按模型输入规则缩放 / 转码参考图快照用的解码 / 编码（壳层 canvas 实现）；未注入时原样发送。 */
+  imageCodec?: ImageCodec;
 }
 
 export interface PreparedJob {
@@ -71,6 +75,11 @@ export function failureLabel(error: unknown): string {
   return "本地文件错误";
 }
 
+/** 发给模型的那份按规则处理；画板上的原文件不动。 */
+function fitForModel(deps: RunDeps, bytes: Uint8Array, rule: InputImageRule): Promise<FittedBytes> {
+  return deps.imageCodec ? fitImage(bytes, rule, deps.imageCodec) : Promise.resolve({ bytes });
+}
+
 function readError(label: string, e: unknown): LocalError {
   return new LocalError(`读取${label}失败：${e instanceof Error ? e.message : String(e)}`);
 }
@@ -94,13 +103,16 @@ export async function prepareJob(
   const sources = imageSources(board, taskNodeId, outputRoot);
   const slots = imagePortSlots(board, table, taskNodeId);
   // 先按用户连线读全部源图，再按展开槽组装：叠加槽由其原图合成。
-  const sourceBytes: Uint8Array[] = [];
+  // 读到即按该任务模型的输入规则处理成参考图快照；叠加图从处理后的快照合成，两者尺寸一致。
+  const sourceBytes: FittedBytes[] = [];
   for (const [i, src] of sources.entries()) {
+    let bytes: Uint8Array;
     try {
-      sourceBytes.push(await deps.readBytes(src.absPath));
+      bytes = await deps.readBytes(src.absPath);
     } catch (e) {
       throw readError(`图${i + 1}（${src.label}）`, e);
     }
+    sourceBytes.push(await fitForModel(deps, bytes, model.input_image_rule));
   }
   const references: SubmissionPlan["references"] = [];
   const firstRegion = firstRegionOf(slots);
@@ -113,13 +125,14 @@ export async function prepareJob(
         image.kind === "reference"
           ? { kind: "reference", path: image.path, sha256: image.sha256 }
           : { kind: "result", task_id: image.task_id, file: image.file, ...(image.source_layer !== null ? { source_layer: image.source_layer } : {}) };
-      references.push({ bytes: sourceBytes[i], source });
+      references.push({ ...sourceBytes[i], source });
     } else {
       if (!deps.composeOverlay) throw new LocalError("框选修改区域需要叠加合成能力，当前环境不支持");
       const sourcePort = slot.sourcePort!;
       const region = slot.edge.region!;
-      const bytes = await deps.composeOverlay(sourceBytes[sourcePort - 1], region.rects, firstRegion.get(slot.port)!);
-      references.push({ bytes, source: { kind: "overlay", of: sourcePort }, region: { rects: region.rects, render: "highlight_overlay", source_port: sourcePort } });
+      const composed = await deps.composeOverlay(sourceBytes[sourcePort - 1].bytes, region.rects, firstRegion.get(slot.port)!);
+      const overlay = await fitForModel(deps, composed, model.input_image_rule);
+      references.push({ ...overlay, source: { kind: "overlay", of: sourcePort }, region: { rects: region.rects, render: "highlight_overlay", source_port: sourcePort } });
     }
   }
   const regionPhrases = overlayPhrases(model, slots, promptLanguage(snapshot.prompt));
@@ -195,6 +208,7 @@ export async function prepareRegenerate(
   const references: SubmissionPlan["references"] = [];
   for (const [i, ref] of previous.references.entries()) {
     try {
+      // 快照已按规则处理过，原样重发，不再处理；本次没处理，新 task.json 不带 fitted。
       references.push({ bytes: await deps.readBytes(path(ref.file)), source: ref.source, ...(ref.region ? { region: ref.region } : {}) });
     } catch (e) {
       throw readError(`上次任务的图${i + 1}`, e);

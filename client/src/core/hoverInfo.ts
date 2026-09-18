@@ -1,5 +1,6 @@
 // 悬浮信息的内容：只读摘要，按行给出；弹出、摆放与样式在 ui/hoverInfo。
 // 结果 = 模型、提示词全文（限 6 行）、尺寸、时间、任务号、透明 / 图层数、缺图原因；参考图 = 文件名与路径、像素尺寸、透明、警告原因；
+// 参考图与作为任务输入的结果另带发送时的自动处理说明与不可修复的警告（按下游模型的输入规则）；
 // 任务 = 模型、尺寸、不可运行原因、状态详情；连线 = 区域数、来源图层；置灰动作 = 不可用原因。提示词节点无。
 import type { BoardEdge, ReferenceNode, ResultNode } from "./board";
 import type { MenuItem } from "./contextMenu";
@@ -29,6 +30,8 @@ type ImageFacts = { width: number; height: number; has_alpha?: boolean } | null 
 const line = (label: string | null, text: string, extra: Partial<HoverLine> = {}): HoverLine => ({ label, text, ...extra });
 const missingLine = (path: string) => line(null, `图片缺失：${path}，可重新定位或选文件`, { tone: "error" });
 const alphaLines = (image: ImageFacts) => (image?.has_alpha ? [line("透明", "带透明通道")] : []);
+/** 发送时的自动处理说明（不标黄）在前，不可修复的警告在后。 */
+const adviceLines = (notes: string[], warnings: string[]) => [...notes.map((n) => line(null, n)), ...warnings.map((w) => line(null, w, { tone: "warn" as const }))];
 
 export function sizeSpecText(spec: SizeSpec): string {
   return spec.tier !== null ? `${spec.tier} · ${spec.ratio ?? "?"}` : `${spec.width ?? "?"}×${spec.height ?? "?"}`;
@@ -39,12 +42,16 @@ export function resultHoverInfo({
   modelName,
   image,
   missing,
+  notes = [],
+  warnings = [],
   formatTime = (d) => d.toLocaleString(),
 }: {
   node: ResultNode;
   modelName: string;
   image: ImageFacts;
   missing: boolean;
+  notes?: string[];
+  warnings?: string[];
   formatTime?: (d: Date) => string;
 }): HoverInfo {
   const { record } = node;
@@ -58,17 +65,30 @@ export function resultHoverInfo({
     line("任务", node.task_id, { mono: true }),
     ...alphaLines(image),
     ...(node.layer_count > 0 ? [line("图层", `${node.layer_count} 个图层`)] : []),
+    ...adviceLines(notes, warnings),
   ];
 }
 
-export function referenceHoverInfo({ node, image, missing, warnings }: { node: ReferenceNode; image: ImageFacts; missing: boolean; warnings: string[] }): HoverInfo {
+export function referenceHoverInfo({
+  node,
+  image,
+  missing,
+  warnings,
+  notes = [],
+}: {
+  node: ReferenceNode;
+  image: ImageFacts;
+  missing: boolean;
+  warnings: string[];
+  notes?: string[];
+}): HoverInfo {
   return [
     ...(missing ? [missingLine(node.path)] : []),
     line("文件", node.display_name),
     line("路径", node.path, { mono: true }),
     ...(image ? [line("像素", `${image.width}×${image.height}`)] : []),
     ...alphaLines(image),
-    ...warnings.map((w) => line(null, w, { tone: "warn" })),
+    ...adviceLines(notes, warnings),
   ];
 }
 

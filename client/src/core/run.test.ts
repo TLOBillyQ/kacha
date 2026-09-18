@@ -360,3 +360,97 @@ describe("图层拆分：执行", () => {
     expect([...files.keys()].some((k) => k.includes("layers/"))).toBe(false);
   });
 });
+
+describe("参考图快照按模型规则缩放 / 转码（#116）", () => {
+  /** 缩放后的快照：PNG 签名 + 标记字节。 */
+  const FITTED = Uint8Array.from([...PNG.slice(0, 8), 0xf1]);
+  /** 假解码：源图 PNG 视作 4096×4096，其他（缩放后的快照、叠加图）视作 2048×2048。 */
+  function withCodec(d: RunDeps, opts: { failDecode?: boolean } = {}) {
+    const encoded: { width: number; height: number; format: string }[] = [];
+    const decoded: Uint8Array[] = [];
+    d.imageCodec = {
+      decode: async (bytes) => {
+        decoded.push(bytes);
+        if (opts.failDecode) throw new Error("decode failed");
+        const side = bytes.length === PNG.length ? 4096 : 2048;
+        return {
+          width: side,
+          height: side,
+          hasAlpha: () => false,
+          encode: async (width, height, format) => {
+            encoded.push({ width, height, format });
+            return FITTED;
+          },
+          close: () => undefined,
+        };
+      },
+    };
+    return { encoded, decoded };
+  }
+
+  const readTaskJson = (files: Map<string, Uint8Array>, relDir: string) => JSON.parse(new TextDecoder().decode(files.get(`/root/${relDir}/task.json`)));
+
+  it("qwen（4MP 上限）：快照缩到上限内，task.json 记 fitted；来源仍指向原文件", async () => {
+    const { d, files, requests } = deps(ok);
+    const { encoded } = withCodec(d);
+    const { job: prepared } = await prepareJob(d, { board: board(true), table: BUILTIN_TABLE, tableSha256: "x", outputRoot: "/root", taskNodeId: "t" });
+    expect(encoded).toEqual([{ width: 2048, height: 2048, format: "png" }]);
+    const job = await writeJob(d, "/root", prepared);
+    expect(files.get(`/root/${job.relDir}/reference-1.png`)).toEqual(FITTED);
+    const ref = readTaskJson(files, job.relDir).references[0];
+    expect(ref.source).toEqual({ kind: "reference", path: "refs/cat.png", sha256: "a".repeat(64) });
+    expect(ref.fitted).toEqual({ from: { width: 4096, height: 4096, format: "png", bytes: PNG.length }, to: { width: 2048, height: 2048, format: "png", bytes: FITTED.length } });
+    await executeJob(d, { job, outputRoot: "/root", baseUrl: "http://gw", apiKey: "k", newNodeId: "res" });
+    expect(JSON.parse(String(requests[0].init.body)).input.messages[0].content[0].image).toContain(btoa(String.fromCharCode(...FITTED)));
+  });
+
+  it("同一张图接 seedream（36MP 上限）：不缩放、不重新编码，没有 fitted", async () => {
+    const { d, files } = deps(ok);
+    const { encoded } = withCodec(d);
+    const b = board(true);
+    b.nodes = b.nodes.map((n) => (n.type === "task" ? { ...n, model: "doubao-seedream-5-0-pro-260628" } : n));
+    const job = await writeJob(d, "/root", (await prepareJob(d, { board: b, table: BUILTIN_TABLE, tableSha256: "x", outputRoot: "/root", taskNodeId: "t" })).job);
+    expect(encoded).toEqual([]);
+    expect(files.get(`/root/${job.relDir}/reference-1.png`)).toEqual(PNG);
+    expect(readTaskJson(files, job.relDir).references[0]).not.toHaveProperty("fitted");
+  });
+
+  it("带区域：叠加图由缩放后的参考图快照合成，两者尺寸一致", async () => {
+    const { d } = deps(ok);
+    withCodec(d);
+    const calls: Uint8Array[] = [];
+    d.composeOverlay = async (image) => {
+      calls.push(image);
+      return Uint8Array.from([...PNG.slice(0, 8), 0xaa]);
+    };
+    const b = board(true);
+    b.edges = b.edges.map((e) => (e.to[1] === "image:0" ? { ...e, region: { rects: [[0.1, 0.1, 0.5, 0.5]], render: "highlight_overlay" } } : e));
+    const { job } = await prepareJob(d, { board: b, table: BUILTIN_TABLE, tableSha256: "x", outputRoot: "/root", taskNodeId: "t" });
+    expect(calls).toEqual([FITTED]);
+    expect(job.plan.references[0].fitted?.to).toMatchObject({ width: 2048, height: 2048 });
+    // 叠加图本身已合规（2048×2048、PNG、体积小），不再处理。
+    expect(job.plan.references[1]).not.toHaveProperty("fitted");
+  });
+
+  it("解码失败：退回原图原样发送，提交不报错", async () => {
+    const { d } = deps(ok);
+    withCodec(d, { failDecode: true });
+    const { job } = await prepareJob(d, { board: board(true), table: BUILTIN_TABLE, tableSha256: "x", outputRoot: "/root", taskNodeId: "t" });
+    expect(job.plan.references[0].bytes).toEqual(PNG);
+    expect(job.plan.references[0]).not.toHaveProperty("fitted");
+  });
+
+  it("重新生成：直接用已处理的快照，不再解码；本次没处理，不带 fitted", async () => {
+    const { d, files } = deps(ok);
+    const { decoded } = withCodec(d);
+    const { job: first, board: b1 } = await prepareJob(d, { board: board(true), table: BUILTIN_TABLE, tableSha256: "x", outputRoot: "/root", taskNodeId: "t" });
+    await writeJob(d, "/root", first);
+    decoded.length = 0;
+    d.now = () => new Date("2026-09-17T01:00:00Z");
+    const job = await writeJob(d, "/root", (await prepareRegenerate(d, { board: b1, table: BUILTIN_TABLE, tableSha256: "y", outputRoot: "/root", taskNodeId: "t" })).job);
+    expect(decoded).toEqual([]);
+    expect(files.get(`/root/${job.relDir}/reference-1.png`)).toEqual(FITTED);
+    expect(readTaskJson(files, first.relDir).references[0]).toHaveProperty("fitted");
+    expect(readTaskJson(files, job.relDir).references[0]).not.toHaveProperty("fitted");
+  });
+});

@@ -1,6 +1,7 @@
 // 任务目录：输出根目录/<UTC 日期>/<task_id>/（ADR 0010，任务目录是真源）。
 // 派发时一次写入参考图快照与 task.json，之后不可变；成功后再写结果图，失败 / 取消时写结局记录。文件系统由调用方注入。
 import type { CapabilityTable } from "./capabilities";
+import type { FittedRecord } from "./fitImage";
 import type { LayerRecord, RegionRender } from "./board";
 
 export type { LayerRecord };
@@ -86,8 +87,8 @@ export interface SubmissionPlan {
   transparentBackground: boolean;
   capabilityFormatVersion: number;
   capabilityTableSha256: string;
-  /** 按参考图序号排列；叠加图紧随其原图。 */
-  references: { bytes: Uint8Array; source: ReferenceSource; region?: ReferenceRegion }[];
+  /** 按参考图序号排列；叠加图紧随其原图。bytes 是发给模型的快照；fitted = 按模型规则处理过。 */
+  references: { bytes: Uint8Array; source: ReferenceSource; region?: ReferenceRegion; fitted?: FittedRecord }[];
 }
 
 function taskPath(outputRoot: string, relDir: string, file: string): string {
@@ -106,7 +107,7 @@ export async function writeSubmission(fs: TaskFs, outputRoot: string, plan: Subm
   for (const [i, ref] of plan.references.entries()) {
     const file = `reference-${i + 1}.${kinds[i].ext}`;
     await fs.writeNewFile(taskPath(outputRoot, dir, file), ref.bytes);
-    references.push({ file, media_type: kinds[i].mediaType, sha256: await sha256Hex(ref.bytes), source: ref.source, ...(ref.region ? { region: ref.region } : {}) });
+    references.push({ file, media_type: kinds[i].mediaType, sha256: await sha256Hex(ref.bytes), source: ref.source, ...(ref.region ? { region: ref.region } : {}), ...(ref.fitted ? { fitted: ref.fitted } : {}) });
   }
   const record = {
     task_id: plan.taskId,
