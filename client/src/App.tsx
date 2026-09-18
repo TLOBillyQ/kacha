@@ -151,19 +151,20 @@ export function App() {
   const openRunConfirm = useCallback(
     async (selectedIds: string[]) => {
       if (!activeKey || !outputRoot) return;
-      if (!settings.apiKey) {
-        toast("请先在高级设置中填写 API 密钥");
-        setSettingsOpen(true);
-        return;
-      }
       await boards.flushAll();
       const board = boards.getBoard(activeKey);
       if (!board) return;
       const busy = new Set([...runner.statuses].filter(([, st]) => isActive(st)).map(([id]) => id));
       const items = await confirmItemsOf(board, runScope(board, selectedIds, busy), outputRoot);
       const dispatch = runDispatch(items);
-      if (dispatch.kind === "toast") toast(dispatch.message);
-      else if (dispatch.kind === "submit") void startRun(activeKey, board, [dispatch.taskId]);
+      // 没有可提交的任务时先说明原因；真要提交或弹确认窗才需要密钥。
+      if (dispatch.kind === "toast") return toast(dispatch.message);
+      if (!settings.apiKey) {
+        toast("请先在高级设置中填写 API 密钥");
+        setSettingsOpen(true);
+        return;
+      }
+      if (dispatch.kind === "submit") void startRun(activeKey, board, [dispatch.taskId]);
       else setConfirm({ boardKey: activeKey, board, items, scope: selectedIds.length ? "selection" : "board" });
     },
     [activeKey, outputRoot, settings.apiKey, boards, runner.statuses, confirmItemsOf, startRun, toast],

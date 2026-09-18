@@ -242,7 +242,7 @@ export function runDispatch(items: ConfirmItem[]): RunDispatch {
   if (items.length > 1) return { kind: "confirm" };
   const [item] = items;
   if (item.issues.length > 0) {
-    const more = item.issues.length > 1 ? ` 等 ${item.issues.length} 项` : "";
+    const more = item.issues.length > 1 ? ` 等另外 ${item.issues.length - 1} 项` : "";
     return { kind: "toast", message: `无法运行：${item.issues[0]}${more}` };
   }
   return item.warnings.length > 0 ? { kind: "confirm" } : { kind: "submit", taskId: item.taskId };

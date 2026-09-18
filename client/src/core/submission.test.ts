@@ -219,9 +219,9 @@ describe("运行分派", () => {
     expect(runDispatch([confirmItem("t", { issues: ["正向提示词未连接"] })])).toEqual({ kind: "toast", message: "无法运行：正向提示词未连接" });
   });
 
-  it("恰好一个标红任务、多条原因：追加「等 N 项」", () => {
+  it("恰好一个标红任务、多条原因：追加「等另外 N 项」（N 不含第一条）", () => {
     const item = confirmItem("t", { issues: ["正向提示词未连接", "图1 图片缺失：r1.png"], warnings: ["该模型英文序号未验证"] });
-    expect(runDispatch([item])).toEqual({ kind: "toast", message: "无法运行：正向提示词未连接 等 2 项" });
+    expect(runDispatch([item])).toEqual({ kind: "toast", message: "无法运行：正向提示词未连接 等另外 1 项" });
   });
 
   it("恰好一个任务仅有黄色警告：弹确认窗", () => {
