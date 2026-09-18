@@ -7,6 +7,8 @@ import type { Discovery } from "./settings";
 
 const NONE: Discovery = { source: "none" };
 const SPEC_2K = { tier: "2K", ratio: "16:9", width: null, height: null };
+/** 继续编辑的新任务：分辨率档继承，宽高比不继承、统一走自动（由 syncAutoRatios 按参考图算）。 */
+const AUTO_2K = { tier: "2K", ratio: "1:1", width: null, height: null, auto_ratio: { ratio: "1:1", image: null, source: null } };
 
 function reference(id: string, pos: [number, number] = [0, 0]): BoardNode {
   return { id, type: "reference", pos, size: [200, 220], extra: {}, path: `${id}.png`, sha256: "0".repeat(64), display_name: `${id}.png` };
@@ -75,7 +77,7 @@ describe("以此继续编辑", () => {
 
   it("新建任务：结果接图1，空提示词接正向，负向扇出复用源任务的；模型 / 尺寸继承，开关不继承", () => {
     const b = ok(continueEditing(lineage(), BUILTIN_TABLE, NONE, ["res"], "res", ids));
-    expect(find<TaskNode>(b, "new-task")).toMatchObject({ model: "qwen-image-3.0", size_spec: SPEC_2K, layer_decomposition: false, image_ports: 1, last_submitted: null });
+    expect(find<TaskNode>(b, "new-task")).toMatchObject({ model: "qwen-image-3.0", size_spec: AUTO_2K, layer_decomposition: false, image_ports: 1, last_submitted: null });
     expect(find<PromptNode>(b, "new-prompt").text).toBe("");
     const into = b.edges.filter((e) => e.to[0] === "new-task").map((e) => [e.from[0], e.to[1]]);
     expect(into).toEqual(expect.arrayContaining([["res", "image:0"], ["new-prompt", "positive"], ["neg", "negative"]]));
@@ -131,7 +133,7 @@ describe("以此继续编辑", () => {
     const t = structuredClone(BUILTIN_TABLE);
     t.models.find((m) => m.model_id === src.model)!.workflows.image_edit.max_references = 0;
     const b = ok(continueEditing(b0, t, NONE, ["res"], "res", ids));
-    expect(find<TaskNode>(b, "new-task")).toMatchObject({ model: "qwen-image-3.0-pro", size_spec: SPEC_2K });
+    expect(find<TaskNode>(b, "new-task")).toMatchObject({ model: "qwen-image-3.0-pro", size_spec: AUTO_2K });
 
     src.size_spec = { tier: "8K", ratio: "1:1", width: null, height: null };
     const c = ok(continueEditing(b0, t, NONE, ["res"], "res", ids));
@@ -140,7 +142,7 @@ describe("以此继续编辑", () => {
 
   it("产出任务已删除：按结果记录的模型与尺寸继承", () => {
     const b = ok(continueEditing(board([result("res", [0, 0], "qwen-image-3.0")]), BUILTIN_TABLE, NONE, ["res"], "res", ids));
-    expect(find<TaskNode>(b, "new-task")).toMatchObject({ model: "qwen-image-3.0", size_spec: SPEC_2K });
+    expect(find<TaskNode>(b, "new-task")).toMatchObject({ model: "qwen-image-3.0", size_spec: AUTO_2K });
   });
 
   it("选中的图片超过模型参考图上限：拒绝，画板不变", () => {

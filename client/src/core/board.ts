@@ -1,6 +1,6 @@
 // 画板文件：输出根目录/画板/<标题>.ugcboard.json。
 // 任务目录是真源、画板只是视图；本模块只负责文件格式的读写、版本与未知字段保留、文件名派生。
-import type { SizeSpec } from "./size";
+import type { AutoRatio, SizeSpec } from "./size";
 
 export const BOARD_FORMAT_VERSION = 1;
 export const BOARD_EXTENSION = ".ugcboard.json";
@@ -150,7 +150,18 @@ function sizeSpec(o: Json, k: string): SizeSpec {
   const nullableStr = (key: string) => need<string | null>(s[key] === null || typeof s[key] === "string", s[key], `${k}.${key} 无效`);
   const nullableNum = (key: string) => need<number | null>(s[key] === null || typeof s[key] === "number", s[key], `${k}.${key} 无效`);
   // 保留 size_spec 内未知字段：直接沿用原对象。
-  return { ...s, tier: nullableStr("tier"), ratio: nullableStr("ratio"), width: nullableNum("width"), height: nullableNum("height") };
+  const spec: SizeSpec = { ...s, tier: nullableStr("tier"), ratio: nullableStr("ratio"), width: nullableNum("width"), height: nullableNum("height") };
+  // 自动宽高比标记：没有（0.2.0 及更早的画板）或格式不对 = 手动。
+  if ("auto_ratio" in s) spec.auto_ratio = autoRatio(s.auto_ratio);
+  return spec;
+}
+
+function autoRatio(raw: unknown): AutoRatio | null {
+  if (!isObject(raw) || typeof raw.ratio !== "string") return null;
+  const image = typeof raw.image === "number" && Number.isInteger(raw.image) && raw.image > 0 ? raw.image : null;
+  const src = raw.source;
+  const source = Array.isArray(src) && src.length === 2 && src.every((n) => typeof n === "number" && n > 0) ? (src as [number, number]) : null;
+  return { ratio: raw.ratio, image, source };
 }
 
 const NODE_KEYS = {

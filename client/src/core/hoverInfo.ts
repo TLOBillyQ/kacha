@@ -112,12 +112,15 @@ function statusLine(status: TaskStatus): HoverLine {
 export function taskHoverInfo({
   modelName,
   sizeSpec,
+  ratioNote = null,
   issues,
   warnings,
   status,
 }: {
   modelName: string;
   sizeSpec: SizeSpec;
+  /** 宽高比的显示文本（自动状态为「自动（16:9 · 图1）」）；缺省按 size_spec 原样。 */
+  ratioNote?: string | null;
   /** 不可运行原因。 */
   issues: string[];
   warnings: string[];
@@ -125,7 +128,7 @@ export function taskHoverInfo({
 }): HoverInfo {
   return [
     line("模型", modelName),
-    line("尺寸", sizeSpecText(sizeSpec)),
+    line("尺寸", ratioNote !== null && sizeSpec.tier !== null ? `${sizeSpec.tier} · ${ratioNote}` : sizeSpecText(sizeSpec)),
     ...(status ? [statusLine(status)] : []),
     ...issues.map((i) => line(null, i, { tone: "error" })),
     ...warnings.map((w) => line(null, w, { tone: "warn" })),

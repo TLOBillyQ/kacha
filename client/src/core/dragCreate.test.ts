@@ -125,6 +125,12 @@ describe("新建生成任务", () => {
     expect(r.board.edges).toEqual([]);
   });
 
+  it("新任务用第一个分辨率档，宽高比为自动（没有参考图 = 1:1）", () => {
+    const r = newTask({ ...board([]), last_model: "qwen-image-3.0" }, BUILTIN_TABLE, NONE, "new", [0, 0]);
+    if (!r.ok) throw new Error(r.reason);
+    expect(r.board.nodes.find((n) => n.id === "new")).toMatchObject({ size_spec: { tier: "1K", ratio: "1:1", width: null, height: null, auto_ratio: { ratio: "1:1", image: null, source: null } } });
+  });
+
   it("从提示词拖出：提示词接新任务的正向端口", () => {
     const r = newTask(board([prompt("p")]), BUILTIN_TABLE, NONE, "new", [0, 0], "p");
     if (!r.ok) throw new Error(r.reason);

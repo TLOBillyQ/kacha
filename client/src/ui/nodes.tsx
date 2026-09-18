@@ -30,7 +30,7 @@ import { IMAGE_PORT_PREFIX, type TaskPorts } from "../core/graph";
 import { imageMinSize } from "../core/nodeSize";
 import { regionCss } from "../core/overlay";
 import { resolveFromRoot } from "../core/paths";
-import { ratiosForSizeTier, sizeTiersOf } from "../core/size";
+import { autoRatioLabel, autoSizeSpec, isAutoRatio, manualSizeSpec, ratiosForSizeTier, ratioText, sizeTiersOf } from "../core/size";
 import { fileUrl } from "../shell/ipc";
 import { useBoardActions, useImageInfo } from "./context";
 import { HoverButton, HoverSpan, useHover } from "./hoverInfo";
@@ -92,6 +92,9 @@ export type TaskFlowNode = Node<
   },
   "task"
 >;
+
+/** 宽高比下拉里「自动」项的 value。 */
+const AUTO_RATIO = "auto";
 
 function Shell({ kind, title, className = "", children }: { kind: string; title: ReactNode; className?: string; children: ReactNode }) {
   return (
@@ -450,7 +453,10 @@ export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskF
   const tiers = rule ? sizeTiersOf(rule) : [];
   const tier = node.size_spec.tier;
   const ratios = rule && tier ? ratiosForSizeTier(rule, tier) : [];
+  const isAuto = isAutoRatio(node.size_spec);
   const setTier = (next: string) => {
+    // 自动宽高比：只换分辨率档，宽高比随画板变更当场按新档重算。
+    if (isAuto) return updateNode(node.id, { size_spec: { ...node.size_spec, tier: next } });
     const available = rule ? ratiosForSizeTier(rule, next) : [];
     const ratio = node.size_spec.ratio && available.includes(node.size_spec.ratio) ? node.size_spec.ratio : (available[0] ?? null);
     updateNode(node.id, { size_spec: { ...node.size_spec, tier: next, ratio, width: null, height: null } });
@@ -461,7 +467,13 @@ export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskF
   const transparentReady = images.length === 1 && !!singleInfo?.has_alpha;
   const transparentHint = images.length !== 1 ? "需要恰好一条图片线" : singleInfo?.has_alpha ? "" : "该图不带透明通道";
   const blocking = issues.filter((i) => i !== "正向提示词未连接");
-  const hover = useHover(taskHoverInfo({ modelName: modelLabel, sizeSpec: node.size_spec, issues, warnings, status }));
+  /** 宽高比下拉：选「自动」转为跟随参考图（当场重算），选具体值转为手动；两者都是一个撤销步。 */
+  const setRatio = (next: string) => {
+    if (next !== AUTO_RATIO) return updateNode(node.id, { size_spec: manualSizeSpec(node.size_spec, next) });
+    if (rule) updateNode(node.id, { size_spec: autoSizeSpec(rule, tier, null, null, node.size_spec) });
+  };
+  const ratioNote = rule && node.size_spec.ratio !== null ? (isAuto ? autoRatioLabel(rule, node.size_spec) : ratioText(rule, node.size_spec.ratio)) : null;
+  const hover = useHover(taskHoverInfo({ modelName: modelLabel, sizeSpec: node.size_spec, ratioNote, issues, warnings, status }));
   const target = { kind: "node", nodeId: node.id } as const;
 
   return (
@@ -506,12 +518,13 @@ export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskF
               ))}
             </select>
             <select
-              value={node.size_spec.ratio ?? ""}
-              onChange={(e) => updateNode(node.id, { size_spec: { ...node.size_spec, ratio: e.target.value } })}
+              value={isAuto ? AUTO_RATIO : (node.size_spec.ratio ?? "")}
+              onChange={(e) => setRatio(e.target.value)}
               aria-label="比例"
               disabled={locked || tier === null}
             >
-              {node.size_spec.ratio !== null && !ratios.includes(node.size_spec.ratio) && (
+              {rule && <option value={AUTO_RATIO}>{isAuto ? autoRatioLabel(rule, node.size_spec) : "自动"}</option>}
+              {!isAuto && node.size_spec.ratio !== null && !ratios.includes(node.size_spec.ratio) && (
                 <option value={node.size_spec.ratio}>{node.size_spec.ratio}（不支持）</option>
               )}
               {ratios.map((r) => (

@@ -65,6 +65,15 @@ export function useImageInfo(absPath: string | null): ImageInfo | null | undefin
 
 export function primeImageInfo(absPath: string, info: ImageInfo): void {
   imageInfoCache.set(absPath, Promise.resolve(info));
+  resolvedImageInfo.set(absPath, info);
+}
+
+// 已读到的图片信息的同步视图：画板变更当场重算自动宽高比时用，等不了 Promise。
+const resolvedImageInfo = new Map<string, ImageInfo>();
+
+/** 已经读到过的图片信息；还没读到或读取失败为 undefined。 */
+export function knownImageInfo(absPath: string): ImageInfo | undefined {
+  return resolvedImageInfo.get(absPath);
 }
 
 /** 批量读取图片信息（画布级：透明通道接线等）；path → 信息，读取失败为 null。 */
@@ -87,10 +96,17 @@ export function useImageInfos(absPaths: string[]): ReadonlyMap<string, ImageInfo
 function cachedImageInfo(absPath: string): Promise<ImageInfo | null> {
   let pending = imageInfoCache.get(absPath);
   if (!pending) {
-    pending = ipc.inspectImage(absPath).catch(() => {
-      imageInfoCache.delete(absPath);
-      return null;
-    });
+    pending = ipc.inspectImage(absPath).then(
+      (info) => {
+        resolvedImageInfo.set(absPath, info);
+        return info;
+      },
+      () => {
+        imageInfoCache.delete(absPath);
+        resolvedImageInfo.delete(absPath);
+        return null;
+      },
+    );
     imageInfoCache.set(absPath, pending);
   }
   return pending;

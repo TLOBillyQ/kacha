@@ -8,7 +8,7 @@ import { imagePortSlots, workflowOf } from "./graph";
 import { promptLanguage } from "./imageRefs";
 import { addResultNode } from "./layout";
 import { firstRegionOf, imageRefMap, overlayPhrases, regionNames, type SlotRef } from "./region";
-import { resolveSize } from "./size";
+import { isAutoRatio, resolveSize } from "./size";
 import { imageSources, snapshotOf, withSubmitted } from "./submission";
 import { joinPath } from "./paths";
 import type { SizeSpec } from "./size";
@@ -181,7 +181,8 @@ function jobOf(taskNodeId: string, plan: SubmissionPlan, model: ModelCapability)
 
 /**
  * 重新生成：按任务节点上次提交的任务目录（task.json 与参考图快照）同参数再提交一次，
- * 不看画板当前内容。新任务、新结果节点；不写盘，同 prepareJob。
+ * 不看画板当前内容；例外是自动宽高比——任务记录里不存「自动」，节点当前是自动时生成尺寸取节点当前算出的值。
+ * 新任务、新结果节点；不写盘，同 prepareJob。
  * 生成变体：fromTaskId = 该结果的任务编号，按那次提交的任务目录重跑，新结果仍进本任务节点的结果列；
  * 不改 last_submitted，之后的「重新生成」仍重跑节点最近一次提交。
  */
@@ -226,6 +227,14 @@ export async function prepareRegenerate(
   const names = regionNames(slots, promptLanguage(previous.prompt));
   const refMap = imageRefMap(slots);
 
+  // 自动宽高比（仅重新生成，生成变体始终按那次提交）：按节点当前的分辨率档与算出的宽高比；换算不出时仍按上次提交。
+  const current = args.fromTaskId === undefined && task?.type === "task" && isAutoRatio(task.size_spec) ? task.size_spec : null;
+  const currentSize = current && resolveSize(model.workflows[previous.references.length ? "image_edit" : "text_to_image"].size_rule, current);
+  const sized: Pick<SubmissionPlan, "sizeSpec" | "size"> =
+    current && currentSize
+      ? { sizeSpec: { tier: current.tier, ratio: current.ratio, width: current.width, height: current.height }, size: currentSize }
+      : { sizeSpec: previous.size_spec, size: previous.size };
+
   const submittedAt = deps.now();
   const taskId = newTaskId(submittedAt);
   const plan: SubmissionPlan = {
@@ -239,8 +248,7 @@ export async function prepareRegenerate(
     regionPhrases,
     regionNames: names,
     imageRefMap: refMap,
-    sizeSpec: previous.size_spec,
-    size: previous.size,
+    ...sized,
     layerDecomposition: previous.layer_decomposition,
     transparentBackground: previous.transparent_background,
     capabilityFormatVersion: args.table.format_version,
@@ -250,7 +258,7 @@ export async function prepareRegenerate(
   if (args.fromTaskId !== undefined) return { job: jobOf(taskNodeId, plan, model), board };
   const nextBoard: Board = {
     ...board,
-    nodes: board.nodes.map((n) => (n.id === taskNodeId && n.type === "task" ? { ...n, last_submitted: { ...last, task_id: taskId } } : n)),
+    nodes: board.nodes.map((n) => (n.id === taskNodeId && n.type === "task" ? { ...n, last_submitted: { ...last, task_id: taskId, size_spec: sized.sizeSpec } } : n)),
   };
   return { job: jobOf(taskNodeId, plan, model), board: nextBoard };
 }

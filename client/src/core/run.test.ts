@@ -70,6 +70,22 @@ describe("单任务端到端", () => {
     expect(b2.edges.at(-1)).toMatchObject({ from: ["t", "result"], to: ["res", "in"], system: true });
   });
 
+  it("自动宽高比：任务记录与结果记录存算出的具体宽高比和像素，不存「自动」；请求按换算像素发", async () => {
+    const { d, files, requests } = deps(ok);
+    const b0 = board(true);
+    const t = b0.nodes.find((n) => n.id === "t") as TaskNode;
+    t.size_spec = { tier: "1K", ratio: "10:7", width: null, height: null, auto_ratio: { ratio: "10:7", image: 1, source: [1000, 700] } };
+    const { job: prepared, board: b1 } = await prepareJob(d, { board: b0, table: BUILTIN_TABLE, tableSha256: "f".repeat(64), outputRoot: "/root", taskNodeId: "t" });
+    const job = await writeJob(d, "/root", prepared);
+    const taskJson = JSON.parse(new TextDecoder().decode(files.get(`/root/${job.relDir}/task.json`)));
+    expect(taskJson.size_spec).toEqual({ tier: "1K", ratio: "10:7", width: null, height: null });
+    expect(taskJson.size.width % 16).toBe(0);
+    expect(taskJson.size.height % 16).toBe(0);
+    const apply = await executeJob(d, { job, outputRoot: "/root", baseUrl: "http://gw", apiKey: "sk-test", newNodeId: "res" });
+    expect(JSON.parse(String(requests[0].init?.body)).parameters.size).toBe(`${taskJson.size.width}*${taskJson.size.height}`);
+    expect((apply(b1).nodes.find((n) => n.id === "res") as ResultNode).record.size_spec).toEqual({ tier: "1K", ratio: "10:7", width: null, height: null });
+  });
+
   it("结果图下载成功 / 失败都回调下载事件，失败带网关错误", async () => {
     const byUrl = (url: string) =>
       url.startsWith("https://oss") ? { status: 403, body: "denied" } : { status: 200, body: JSON.stringify({ metadata: { output: { choices: [{ message: { content: [{ image: "https://oss/x.png?sig=1" }] } }] } } }) };
@@ -114,6 +130,27 @@ describe("单任务端到端", () => {
     expect(files.get(`/root/${job.relDir}/reference-1.png`)).toEqual(PNG);
     await executeJob(d, { job, outputRoot: "/root", baseUrl: "http://gw", apiKey: "k", newNodeId: "res" });
     expect(requests.map((r) => r.url)).toEqual(["http://gw/v1/images/edits"]);
+  });
+
+  it("重新生成：任务节点当前是自动宽高比时按节点当前算出的值，手动时仍按上次提交；生成变体始终按那次提交", async () => {
+    const { d, files } = deps(ok);
+    const { job: first, board: b1 } = await prepareJob(d, { board: board(true), table: BUILTIN_TABLE, tableSha256: "x", outputRoot: "/root", taskNodeId: "t" });
+    await writeJob(d, "/root", first);
+    const withSpec = (size_spec: TaskNode["size_spec"]) => ({ ...b1, nodes: b1.nodes.map((n) => (n.type === "task" ? { ...n, size_spec } : n)) });
+    const sizeOf = async (b: Board, fromTaskId?: string) => {
+      const at = new Date(d.now().getTime() + 1000);
+      d.now = () => at;
+      const { job, board: next } = await prepareRegenerate(d, { board: b, table: BUILTIN_TABLE, tableSha256: "y", outputRoot: "/root", taskNodeId: "t", fromTaskId });
+      const written = await writeJob(d, "/root", job);
+      const json = JSON.parse(new TextDecoder().decode(files.get(`/root/${written.relDir}/task.json`)));
+      return { size_spec: json.size_spec, size: json.size, submitted: (next.nodes.find((n) => n.id === "t") as TaskNode).last_submitted?.size_spec };
+    };
+
+    const auto = withSpec({ tier: "2K", ratio: "16:9", width: null, height: null, auto_ratio: { ratio: "16:9", image: 1, source: [1920, 1080] } });
+    const concrete = { tier: "2K", ratio: "16:9", width: null, height: null };
+    expect(await sizeOf(auto)).toEqual({ size_spec: concrete, size: { width: 1920, height: 1080 }, submitted: concrete });
+    expect(await sizeOf(auto, first.taskId)).toMatchObject({ size_spec: { tier: "1K", ratio: "1:1" }, size: { width: 1024, height: 1024 } });
+    expect(await sizeOf(withSpec(concrete))).toMatchObject({ size_spec: { tier: "1K", ratio: "1:1" }, size: { width: 1024, height: 1024 } });
   });
 
   it("生成变体：按该结果的任务目录重跑，即使父任务之后又提交过别的参数；新结果进父任务结果列", async () => {

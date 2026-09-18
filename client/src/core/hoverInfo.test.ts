@@ -90,6 +90,10 @@ describe("参考图节点悬浮信息", () => {
 describe("任务节点悬浮信息", () => {
   const base = { modelName: "通义万相", sizeSpec: { tier: "2K", ratio: "1:1", width: null, height: null }, issues: [], warnings: [], status: null };
 
+  it("给了宽高比显示文本（自动状态）时尺寸行用它", () => {
+    expect(taskHoverInfo({ ...base, ratioNote: "自动（16:9 · 图1）" })[1]).toMatchObject({ label: "尺寸", text: "2K · 自动（16:9 · 图1）" });
+  });
+
   it("模型、尺寸；不可运行原因标红，提示标黄", () => {
     expect(taskHoverInfo({ ...base, issues: ["正向提示词未连接"], warnings: ["图2 已接线但提示词未引用"] })).toEqual([
       { label: "模型", text: "通义万相" },

@@ -19,6 +19,7 @@ import {
   type Viewport,
 } from "@xyflow/react";
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { syncAutoRatios } from "../core/autoRatio";
 import { BOARD_EXTENSION, type Board, type BoardEdge, type KnownNode, type ReferenceNode } from "../core/board";
 import { findModel, modelsByTier, type CapabilityTable, type InputImageRule } from "../core/capabilities";
 import type { TaskStatus } from "../core/run";
@@ -61,7 +62,7 @@ import { logEvent } from "../shell/log";
 import { saveCopyAs } from "../shell/saveFile";
 import { ActionBar } from "./ActionBar";
 import { ContextMenu } from "./ContextMenu";
-import { BoardContext, primeImageInfo, useImageInfos, useMissingImages, useStoredStatuses, type BoardActions } from "./context";
+import { BoardContext, knownImageInfo, primeImageInfo, useImageInfos, useMissingImages, useStoredStatuses, type BoardActions } from "./context";
 import { edgeTypes } from "./edges";
 import { HoverProvider, useHoverLayer } from "./hoverInfo";
 import { ModelOptions, nodeTypes, type ImagePortInfo, type ImageSlotInfo } from "./nodes";
@@ -124,7 +125,7 @@ export function BoardCanvas({
   boardFile,
   table,
   outputRoot,
-  update,
+  update: rawUpdate,
   onUndo,
   onRedo,
   undoLabel,
@@ -147,6 +148,24 @@ export function BoardCanvas({
   const [selectedEdges, setSelectedEdges] = useState<ReadonlySet<string>>(new Set());
   const [measured, setMeasured] = useState<Record<string, { width?: number; height?: number }>>({});
 
+  // 排队 / 执行中的任务节点（由 statuses 算出，见下）：参数锁定，自动宽高比也不重算。
+  const lockedRef = useRef<ReadonlySet<string>>(new Set());
+  /** 自动宽高比随画板变更当场重算，和触发它的用户操作落在同一个撤销步里（ADR 0012）；图片宽高只取已读到的。 */
+  const withAutoRatios = useCallback(
+    (b: Board) =>
+      syncAutoRatios(
+        b,
+        table,
+        (nodeId) => {
+          const node = b.nodes.find((n) => n.id === nodeId);
+          const info = node?.type === "reference" || node?.type === "result" ? knownImageInfo(resolveFromRoot(outputRoot, node.path)) : undefined;
+          return info && [info.width, info.height];
+        },
+        lockedRef.current,
+      ),
+    [table, outputRoot],
+  );
+  const update = useCallback((fn: (b: Board) => Board, change: Change) => rawUpdate((b) => (change === "view" ? fn(b) : withAutoRatios(fn(b))), change), [rawUpdate, withAutoRatios]);
   const updateBoard = useCallback((fn: (b: Board) => Board, change: UserChange) => update((b) => syncImagePorts(fn(b)), change), [update]);
 
   /** 应用一次可能被拒的画板变更；被拒时提示原因。返回是否已应用（会话不可编辑时也为 false）。 */
@@ -211,6 +230,10 @@ export function BoardCanvas({
   const imageNodes = useMemo(() => board.nodes.filter((n) => n.type === "reference" || n.type === "result"), [board.nodes]);
   const imageAbsPaths = useMemo(() => imageNodes.map((n) => resolveFromRoot(outputRoot, n.path)), [imageNodes, outputRoot]);
   const imageInfos = useImageInfos(imageAbsPaths);
+  // 图片宽高晚于画板变更读到（刚打开画板、刚重新定位）、或任务结束解除锁定（statuses 变化）时补算自动宽高比：系统变更，不构成撤销步。
+  useEffect(() => {
+    rawUpdate(withAutoRatios, "system");
+  }, [board, imageInfos, statuses, rawUpdate, withAutoRatios]);
   const alphaByNode = useMemo(() => {
     const map = new Map<string, boolean>();
     imageNodes.forEach((n, i) => {
@@ -264,7 +287,6 @@ export function BoardCanvas({
   const statusOf = useCallback((taskId: string): TaskStatus | null => statuses.get(taskId) ?? stored.get(taskId) ?? null, [statuses, stored]);
   // 排队 / 执行中的任务节点：参数与连线锁定，上游提示词仍可编辑（经三选）。
   const locked = useMemo(() => new Set([...statuses].filter(([, st]) => isActive(st)).map(([id]) => id)), [statuses]);
-  const lockedRef = useRef(locked);
   lockedRef.current = locked;
 
   // perform 依赖每次渲染重建的新建类函数，经 ref 取最新一版，actions 保持稳定。
