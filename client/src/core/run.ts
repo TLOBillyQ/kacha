@@ -2,7 +2,7 @@
 // 副作用全部由调用方注入，状态与队列在界面层。
 import type { Board, ResultRecord } from "./board";
 import { findModel, type CapabilityTable, type ModelCapability } from "./capabilities";
-import { composeSendText, ERROR_CATEGORY_LABELS, fetchResultImage, GatewayError, generate, type FetchLike, type GenerationInput } from "./gateway";
+import { composeSendText, ERROR_CATEGORY_LABELS, fetchResultImage, GatewayError, generate, inlinesNegativePrompt, type FetchLike, type GenerationInput } from "./gateway";
 import { imagePortSlots, workflowOf } from "./graph";
 import { promptLanguage } from "./imageRefs";
 import { addResultNode } from "./layout";
@@ -134,7 +134,7 @@ export async function prepareJob(
     model: model.model_id,
     prompt: snapshot.prompt,
     negativePrompt: snapshot.negative_prompt,
-    sendText: composeSendText({ prompt: snapshot.prompt, negativePrompt: snapshot.negative_prompt, referenceCount: references.length, regionPhrases, regionNames: names, imageRefMap: refMap }),
+    sendText: composeSendText({ prompt: snapshot.prompt, negativePrompt: snapshot.negative_prompt, referenceCount: references.length, inlineNegative: inlinesNegativePrompt(model, references.length), regionPhrases, regionNames: names, imageRefMap: refMap }),
     regionPhrases,
     regionNames: names,
     imageRefMap: refMap,
@@ -221,7 +221,7 @@ export async function prepareRegenerate(
     prompt: previous.prompt,
     negativePrompt: previous.negative_prompt,
     // 按当前规则重算：旧任务的 send_text 可能按「叠加图占用户序号」的旧口径存（#113）。
-    sendText: composeSendText({ prompt: previous.prompt, negativePrompt: previous.negative_prompt, referenceCount: references.length, regionPhrases, regionNames: names, imageRefMap: refMap }),
+    sendText: composeSendText({ prompt: previous.prompt, negativePrompt: previous.negative_prompt, referenceCount: references.length, inlineNegative: inlinesNegativePrompt(model, references.length), regionPhrases, regionNames: names, imageRefMap: refMap }),
     regionPhrases,
     regionNames: names,
     imageRefMap: refMap,

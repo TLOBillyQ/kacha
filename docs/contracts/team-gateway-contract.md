@@ -12,7 +12,7 @@
 - **错误映射**：401 → 鉴权失败；429 → 网关限流（可操作提示，不依赖 `Retry-After`）；4xx → 网关拒绝；5xx → 网关服务错误；连接失败 → 网络不可达（任务状态为结果未知）。
 - **重试**：模型列表等只读请求由发现层有限重试；生成请求不自动重发，契约未确认幂等键，不使用稳定任务 ID 重试。
 - **保持关闭（未实测）**：生成请求的幂等键、运行中取消、任务查询和 `Retry-After`。这些能力在真实交互验证前不向网关发出。
-- **开放试用**：图片编辑的负向提示词并入主提示词文本发送；原生 `input.negative_prompt` 已于 2026-08-31 实测被网关接受（HTTP 200 正常出图，见 `contracts/fixtures/2026-08-31-team-gateway-edit-boundaries/`），但对出图效果的约束强度未经视觉验证，故客户端暂不切换。
+- **负向提示词**：按能力表 `supports_negative_prompt` 分流。qwen 系列走原生字段：文生图顶层 `negative_prompt`，图片编辑 `input.negative_prompt`（2026-08-31 实测网关接受、HTTP 200 正常出图，见 `contracts/fixtures/2026-08-31-team-gateway-edit-boundaries/`；约束强度未经视觉验证），不并入文本。Seedream 系列无原生字段，负向以「避免出现：」/「Avoid: 」拼在提示词之后、区域固定句之前。
 
 ## 当前结论
 

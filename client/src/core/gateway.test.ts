@@ -7,6 +7,7 @@ import {
   fetchResultImage,
   generate,
   GatewayError,
+  inlinesNegativePrompt,
   listModels,
   parseGeneratedImages,
   type FetchLike,
@@ -163,18 +164,33 @@ describe("网关适配器：请求载荷对照夹具", () => {
     expect(content[3].text).toBe("本次提供 3 张参考图，按顺序为图1、图2、图3。\n把图3的帽子戴到图1头上");
   });
 
-  it("图片编辑的负向提示词并入发送文本（契约：暂不切原生字段）", () => {
-    expect(composeSendText({ prompt: "换成蓝色", negativePrompt: "文字", referenceCount: 2 })).toBe(
+  it("qwen 图片编辑的负向走原生 input.negative_prompt，不并入发送文本（8-31 夹具已验证网关接受）", () => {
+    const fixture = loadFixture("2026-08-31-team-gateway-edit-boundaries", "edit-json-native-negative.json");
+    const { body } = buildGenerationRequest(textInput({ negativePrompt: "文字", references: [png] }));
+    expect(Object.keys((fixture.request.body as { input: object }).input).sort()).toEqual(["messages", "negative_prompt"]);
+    const b = body as { prompt: string; input: { negative_prompt?: string } };
+    expect(b.input.negative_prompt).toBe("文字");
+    expect(b.prompt).not.toContain("文字");
+    expect((buildGenerationRequest(textInput({ references: [png] })).body as { input: object }).input).not.toHaveProperty("negative_prompt");
+  });
+
+  it("composeSendText：inlineNegative 决定负向是否拼进文本，与张数无关", () => {
+    expect(composeSendText({ prompt: "换成蓝色", negativePrompt: "文字", referenceCount: 2 })).toBe("本次提供 2 张参考图，按顺序为图1、图2。\n换成蓝色");
+    expect(composeSendText({ prompt: "换成蓝色", negativePrompt: "文字", referenceCount: 2, inlineNegative: true })).toBe(
       "本次提供 2 张参考图，按顺序为图1、图2。\n换成蓝色\n避免出现：文字",
     );
-    expect(composeSendText({ prompt: "蓝天", negativePrompt: "文字", referenceCount: 0 })).toBe("蓝天");
+    expect(composeSendText({ prompt: "蓝天", negativePrompt: "文字", referenceCount: 0, inlineNegative: true })).toBe("蓝天\n避免出现：文字");
+    expect(composeSendText({ prompt: "蓝天", negativePrompt: "", referenceCount: 0, inlineNegative: true })).toBe("蓝天");
+    expect(inlinesNegativePrompt(qwenPro, 0)).toBe(false);
+    expect(inlinesNegativePrompt(seedreamPro, 0)).toBe(true);
+    expect(inlinesNegativePrompt(seedreamLite, 2)).toBe(true);
   });
 
   it("发送文本里 @图N 按提示词语言改写；英文提示词用英文数量顺序前缀", () => {
     expect(composeSendText({ prompt: "把@图2的帽子戴到@图1头上", negativePrompt: "", referenceCount: 2 })).toBe(
       "本次提供 2 张参考图，按顺序为图1、图2。\n把图2的帽子戴到图1头上",
     );
-    expect(composeSendText({ prompt: "Put the hat from @图2 on @图1", negativePrompt: "text", referenceCount: 2 })).toBe(
+    expect(composeSendText({ prompt: "Put the hat from @图2 on @图1", negativePrompt: "text", referenceCount: 2, inlineNegative: true })).toBe(
       "This request provides 2 reference images, in order: Image 1, Image 2.\nPut the hat from Image 2 on Image 1\nAvoid: text",
     );
     expect(composeSendText({ prompt: "Make @图1 blue", negativePrompt: "", referenceCount: 1 })).toBe("This request provides 1 reference image.\nMake Image 1 blue");
@@ -282,10 +298,13 @@ describe("网关适配器：Seedream 请求形态对照夹具", () => {
     expectSeedreamBody(off, ctl, 1);
   });
 
-  it("负向提示词不支持：不并入发送文本", () => {
-    const { body } = buildGenerationRequest(textInput({ model: seedreamPro, negativePrompt: "模糊", references: [png] }));
-    expect(body.prompt).not.toContain("模糊");
-    expect(body).not.toHaveProperty("negative_prompt");
+  it("无原生负向字段：负向拼进 prompt 末尾，不发 negative_prompt", () => {
+    const edit = buildGenerationRequest(textInput({ model: seedreamPro, negativePrompt: "模糊", references: [png] })).body;
+    expect(edit.prompt).toBe("本次提供 1 张参考图。\n一只橘猫\n避免出现：模糊");
+    expect(edit).not.toHaveProperty("negative_prompt");
+    const text = buildGenerationRequest(textInput({ model: seedreamLite, negativePrompt: "模糊" })).body;
+    expect(text.prompt).toBe("一只橘猫\n避免出现：模糊");
+    expect(text).not.toHaveProperty("negative_prompt");
   });
 
   it("透明背景：能力表不支持的模型（lite、qwen）即使开关打开也不发 background", () => {

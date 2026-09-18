@@ -1,7 +1,7 @@
 // 提交前的纯函数：脏判据快照、运行范围、二次确认清单。
 import type { Board, Region, TaskNode } from "./board";
 import { findModel, type CapabilityTable } from "./capabilities";
-import { composeSendText, isRequestShapeImplemented } from "./gateway";
+import { composeSendText, inlinesNegativePrompt, isRequestShapeImplemented } from "./gateway";
 import { imageEdges, imagePortSlots, taskIssues, transparentAlphaIssue } from "./graph";
 import { checkImageRefs, promptLanguage } from "./imageRefs";
 import { resolveFromRoot } from "./paths";
@@ -150,7 +150,9 @@ export interface ConfirmItem {
   modelName: string;
   firstLine: string;
   negativePrompt: string;
-  /** 完整发送文本：图片编辑含数量顺序前缀与并入的负向。 */
+  /** 负向已拼进 sendText（模型无原生负向字段，如 Seedream）；否则走原生字段，弹窗另列。 */
+  negativeInlined: boolean;
+  /** 完整发送文本：有参考图时含数量顺序前缀；negativeInlined 时含「避免出现：」一行。 */
   sendText: string;
   referenceCount: number;
   /** 非空 = 标红，不可勾选。 */
@@ -219,13 +221,15 @@ export function buildConfirmItems(board: Board, table: CapabilityTable, taskIds:
     const slots = imagePortSlots(board, table, taskId);
     const regionPhrases = model ? overlayPhrases(model, slots, promptLanguage(prompt)) : [];
     const names = regionNames(slots, promptLanguage(prompt));
+    const negativeInlined = model ? inlinesNegativePrompt(model, slots.length) : false;
     return [
       {
         taskId,
         modelName: model?.display_name ?? task.model,
         firstLine: prompt.split("\n").find((line) => line.trim())?.trim() ?? "",
         negativePrompt,
-        sendText: composeSendText({ prompt, negativePrompt, referenceCount: slots.length, regionPhrases, regionNames: names, imageRefMap: imageRefMap(slots) }),
+        negativeInlined,
+        sendText: composeSendText({ prompt, negativePrompt, referenceCount: slots.length, inlineNegative: negativeInlined, regionPhrases, regionNames: names, imageRefMap: imageRefMap(slots) }),
         referenceCount: slots.length,
         issues: [...new Set(issues)],
         warnings,

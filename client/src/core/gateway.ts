@@ -95,15 +95,21 @@ function referenceNote(count: number, language: PromptLanguage): string {
   return `本次提供 ${count} 张参考图，按顺序为${ordered}。`;
 }
 
+/** 模型在该张数对应的工作流下不支持原生负向提示词时，负向拼进发送文本末尾；支持则走原生字段、不拼。 */
+export function inlinesNegativePrompt(model: ModelCapability, referenceCount: number): boolean {
+  return !isSupported(model.workflows[referenceCount > 0 ? "image_edit" : "text_to_image"].supports_negative_prompt);
+}
+
 /**
  * 完整发送文本：二次确认弹窗展示、任务记录保存的都是它。
- * 提示词里的 @图N 按语言改写、用户序号按 imageRefMap 换算成发送序号（只改发送文本）；文生图即改写后的提示词（负向走独立字段）；
- * 图片编辑注入数量顺序前缀，负向并入文本（契约「开放试用」一节）；区域指示固定句追加在末尾。
+ * 提示词里的 @图N 按语言改写、用户序号按 imageRefMap 换算成发送序号（只改发送文本）；有参考图时注入数量顺序前缀；
+ * inlineNegative 为真时负向以「避免出现：」拼在提示词之后（见 inlinesNegativePrompt）；区域指示固定句追加在末尾。
  */
 export function composeSendText({
   prompt,
   negativePrompt,
   referenceCount,
+  inlineNegative = false,
   regionPhrases = [],
   regionNames = [],
   imageRefMap,
@@ -111,6 +117,8 @@ export function composeSendText({
   prompt: string;
   negativePrompt: string;
   referenceCount: number;
+  /** 负向是否拼进文本；不拼时由请求形态走原生字段。 */
+  inlineNegative?: boolean;
   /** 区域指示固定句（每个叠加参考图一句），逐句追加在末尾。 */
   regionPhrases?: string[];
   /** 区域编号的颜色指代，改写提示词里的「区域N」。 */
@@ -119,12 +127,11 @@ export function composeSendText({
   imageRefMap?: number[];
 }): string {
   const phrases = regionPhrases.length ? `\n${regionPhrases.join("\n")}` : "";
-  const text = rewriteRegionRefs(rewriteImageRefs(prompt, imageRefMap), regionNames);
-  if (referenceCount === 0) return `${text}${phrases}`;
   const language = promptLanguage(prompt);
-  const withNote = `${referenceNote(referenceCount, language)}\n${text}`;
-  if (!negativePrompt) return `${withNote}${phrases}`;
-  return `${withNote}\n${language === "en" ? "Avoid: " : "避免出现："}${negativePrompt}${phrases}`;
+  const text = rewriteRegionRefs(rewriteImageRefs(prompt, imageRefMap), regionNames);
+  const withNote = referenceCount === 0 ? text : `${referenceNote(referenceCount, language)}\n${text}`;
+  const negative = inlineNegative && negativePrompt ? `\n${language === "en" ? "Avoid: " : "避免出现："}${negativePrompt}` : "";
+  return `${withNote}${negative}${phrases}`;
 }
 
 function toBase64(bytes: Uint8Array): string {
@@ -142,16 +149,17 @@ interface RequestShape {
 
 const dataUrl = (r: ReferenceImage) => `data:${r.mediaType};base64,${toBase64(r.bytes)}`;
 
-/** qwen 系列：文生图顶层字段；图片编辑 JSON 透传（ADR 0006）。 */
+/** qwen 系列：文生图顶层字段；图片编辑 JSON 透传（ADR 0006）。负向走原生字段：文生图顶层 negative_prompt，图片编辑 input.negative_prompt。 */
 const buildQwenImagesEdits: RequestShape["build"] = (input) => {
   const { model, prompt, negativePrompt, size, references } = input;
+  const inlineNegative = inlinesNegativePrompt(model, references.length);
+  const native = negativePrompt && !inlineNegative ? { negative_prompt: negativePrompt } : {};
   if (references.length === 0) {
-    const body: Record<string, unknown> = { model: model.model_id, prompt: composeSendText({ prompt, negativePrompt, referenceCount: 0 }) };
-    if (negativePrompt) body.negative_prompt = negativePrompt;
+    const body: Record<string, unknown> = { model: model.model_id, prompt: composeSendText({ prompt, negativePrompt, referenceCount: 0, inlineNegative }), ...native };
     Object.assign(body, { n: 1, size: `${size.width}x${size.height}` }, model.fixed_params);
     return { path: TEXT_TO_IMAGE_PATH, body };
   }
-  const text = composeSendText({ prompt, negativePrompt, referenceCount: references.length, regionPhrases: input.regionPhrases ?? [], regionNames: input.regionNames ?? [], imageRefMap: input.imageRefMap });
+  const text = composeSendText({ prompt, negativePrompt, referenceCount: references.length, inlineNegative, regionPhrases: input.regionPhrases ?? [], regionNames: input.regionNames ?? [], imageRefMap: input.imageRefMap });
   const content = [...references.map((r) => ({ image: dataUrl(r) })), { text }];
   return {
     path: IMAGE_EDIT_PATH,
@@ -161,20 +169,20 @@ const buildQwenImagesEdits: RequestShape["build"] = (input) => {
       prompt: text,
       // 透传路径不做 x→* 转换，尺寸必须是「宽*高」。
       parameters: { size: `${size.width}*${size.height}`, n: 1, ...model.fixed_params },
-      input: { messages: [{ role: "user", content }] },
+      input: { messages: [{ role: "user", content }], ...native },
     },
   };
 };
 
 /**
  * Seedream 系列（#83 实测）：文生图与图片编辑都走 /v1/images/generations 顶层字段，
- * 参考图为顶层 image 的 data-URL 数组（按序即图N）；负向提示词不支持，不发。
+ * 参考图为顶层 image 的 data-URL 数组（按序即图N）；无原生负向字段，负向拼进提示词末尾。
  */
 const buildSeedreamImagesGenerations: RequestShape["build"] = (input) => {
-  const { model, prompt, size, references } = input;
+  const { model, prompt, negativePrompt, size, references } = input;
   const body: Record<string, unknown> = {
     model: model.model_id,
-    prompt: composeSendText({ prompt, negativePrompt: "", referenceCount: references.length, regionPhrases: input.regionPhrases ?? [], regionNames: input.regionNames ?? [], imageRefMap: input.imageRefMap }),
+    prompt: composeSendText({ prompt, negativePrompt, referenceCount: references.length, inlineNegative: inlinesNegativePrompt(model, references.length), regionPhrases: input.regionPhrases ?? [], regionNames: input.regionNames ?? [], imageRefMap: input.imageRefMap }),
     size: `${size.width}x${size.height}`,
     response_format: "url",
     ...model.fixed_params,

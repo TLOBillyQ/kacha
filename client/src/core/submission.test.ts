@@ -161,14 +161,24 @@ describe("二次确认清单", () => {
       firstLine: "把图2的帽子戴到图1头上",
       issues: [],
     });
-    expect(item.sendText).toBe("本次提供 2 张参考图，按顺序为图1、图2。\n把图2的帽子戴到图1头上\n第二行\n避免出现：模糊");
+    expect(item.sendText).toBe("本次提供 2 张参考图，按顺序为图1、图2。\n把图2的帽子戴到图1头上\n第二行");
+    expect(item.negativeInlined).toBe(false);
+    expect(item.negativePrompt).toBe("模糊");
   });
 
-  it("文生图的发送文本即提示词，负向另列", () => {
+  it("qwen 支持原生负向：发送文本即提示词，负向另列", () => {
     const b = board([prompt("p", "一只橘猫"), prompt("n", "模糊"), task("t")], [edge("p", "t", "positive"), edge("n", "t", "negative")]);
     const [item] = buildConfirmItems(b, BUILTIN_TABLE, ["t"], ctx);
     expect(item.sendText).toBe("一只橘猫");
     expect(item.negativePrompt).toBe("模糊");
+    expect(item.negativeInlined).toBe(false);
+  });
+
+  it("Seedream 无原生负向：负向拼进发送文本末尾", () => {
+    const b = board([prompt("p", "一只橘猫"), prompt("n", "模糊"), task("t", { model: "doubao-seedream-5-0-lite-260128" })], [edge("p", "t", "positive"), edge("n", "t", "negative")]);
+    const [item] = buildConfirmItems(b, BUILTIN_TABLE, ["t"], ctx);
+    expect(item.sendText).toBe("一只橘猫\n避免出现：模糊");
+    expect(item.negativeInlined).toBe(true);
   });
 
   it("标红任务列出原因：未连正向、提示词为空、请求形态未接入、网关未发现、缺图", () => {
@@ -200,6 +210,7 @@ describe("运行分派", () => {
     modelName: "m",
     firstLine: "",
     negativePrompt: "",
+    negativeInlined: false,
     sendText: "",
     referenceCount: 0,
     issues: [],

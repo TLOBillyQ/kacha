@@ -51,12 +51,12 @@ export function ItemProblems({ item }: { item: ConfirmItem }) {
   );
 }
 
-/** 完整发送文本；文生图的负向另起一段（图片编辑的负向已并入发送文本）。 */
+/** 完整发送文本；负向走原生字段的模型另起一段（拼进文本的已在 sendText 里）。 */
 export function SendTextBody({ item }: { item: ConfirmItem }) {
   return (
     <>
       <pre className="send-text">{item.sendText || <span className="muted">（无提示词）</span>}</pre>
-      {item.referenceCount === 0 && item.negativePrompt && <pre className="send-text">负向：{item.negativePrompt}</pre>}
+      {!item.negativeInlined && item.negativePrompt && <pre className="send-text">负向：{item.negativePrompt}</pre>}
     </>
   );
 }
