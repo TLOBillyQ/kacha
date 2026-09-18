@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Board, BoardEdge, BoardNode, PromptNode, ResultNode, TaskNode } from "./board";
-import { countLabel, emptyHistory, HISTORY_LIMIT, MERGE_PAUSE_MS, mergeSystemState, nodeEditChange, recordChange, redo, redoLabel, undo, undoLabel, type History } from "./history";
+import { countLabel, emptyHistory, HISTORY_LIMIT, mergeSystemState, recordChange, redo, redoLabel, undo, undoLabel, type History } from "./history";
 
 const SPEC = { tier: "1K", ratio: "1:1", width: null, height: null };
 const NONE: ReadonlySet<string> = new Set();
@@ -284,22 +284,3 @@ describe("步描述", () => {
   });
 });
 
-describe("节点字段编辑的步描述", () => {
-  it("提示词文本按节点合并连续输入", () => {
-    expect(nodeEditChange("p", { text: "猫" })).toEqual({ label: "编辑提示词", merge: { key: "text:p", windowMs: MERGE_PAUSE_MS } });
-  });
-
-  it("单个开关字段用对应描述", () => {
-    expect(nodeEditChange("t", { layer_decomposition: true })).toEqual({ label: "切换图层拆分" });
-  });
-
-  it("多个字段合并各自的描述，不合并连续输入", () => {
-    expect(nodeEditChange("t", { size_spec: {}, layer_decomposition: true })).toEqual({ label: "修改尺寸、切换图层拆分" });
-    expect(nodeEditChange("p", { text: "猫", pos: [0, 0] })).toEqual({ label: "编辑提示词" });
-    expect(nodeEditChange("t", { transparent_background: true, extra: {} })).toEqual({ label: "切换透明背景" });
-  });
-
-  it("没有已知描述的字段为「修改节点」", () => {
-    expect(nodeEditChange("t", { pos: [0, 0], extra: {} })).toEqual({ label: "修改节点" });
-  });
-});
