@@ -4,9 +4,9 @@
 import { SelectionMode, useReactFlow, useStoreApi, type Node, type ReactFlowProps } from "@xyflow/react";
 import { useCallback, useEffect, useRef, type Dispatch, type MutableRefObject, type RefObject, type SetStateAction } from "react";
 import type { Board } from "../core/board";
-import { countLabel, MERGE_PAUSE_MS, type UserChange } from "../core/history";
-import { PASTE_OFFSET } from "../core/iterate";
-import { applySelection, duplicateNodes, isTrackpadPan, nudgeDelta, nudgeNodes, settleAltDrag, type SelectChange } from "../core/selection";
+import type { BoardChange, EditResult } from "../core/edit";
+import { copySelection } from "../core/iterate";
+import { applySelection, isTrackpadPan, nudgeDelta, type SelectChange } from "../core/selection";
 
 export const isTyping = (target: EventTarget | null) =>
   target instanceof HTMLElement && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName));
@@ -27,22 +27,14 @@ interface Options {
   selection: Selection;
   /** 弹窗开着时画布键位不响应。 */
   dialogOpen: MutableRefObject<boolean>;
-  updateBoard: (fn: (b: Board) => Board, change: UserChange) => void;
+  /** 画板写入（见 core/edit）：建议选中由调用方照选。 */
+  apply: (change: BoardChange) => EditResult | null;
 }
 
 const ZOOM_DURATION = 200;
 const NONE: { nodes: Ids; edges: Ids } = { nodes: new Set(), edges: new Set() };
 
-/** 预先定好的新 id 序列：更新函数可能延后或重复执行，副本 id 要与立即切换的选区一致。 */
-function idSequence(count: number): () => () => string {
-  const fresh = Array.from({ length: count }, () => crypto.randomUUID());
-  return () => {
-    let i = 0;
-    return () => fresh[i++];
-  };
-}
-
-export function useCanvasInteraction({ wrapper, boardRef, selection, dialogOpen, updateBoard }: Options) {
+export function useCanvasInteraction({ wrapper, boardRef, selection, dialogOpen, apply }: Options) {
   const flow = useReactFlow();
   const store = useStoreApi();
 
@@ -62,36 +54,39 @@ export function useCanvasInteraction({ wrapper, boardRef, selection, dialogOpen,
   const selectEdges = useCallback((changes: SelectChange[]) => selection.setEdges((s) => applySelection(s, changes, keep.current.edges)), [selection]);
 
   // Alt + 拖：开始时在原处叠一份副本，松手时与原节点对调位置（被拖走的是副本）；复制、拖动、对调合为一步。
-  const altDrag = useRef<{ pairs: [string, string][]; starts: Map<string, [number, number]>; change: UserChange } | null>(null);
-  /** 拖动开始；返回这次拖动的步描述（非 Alt 复制为 null）。 */
+  const altDrag = useRef<{ pairs: [string, string][]; starts: [string, [number, number]][] } | null>(null);
+  /** 拖动开始；dragId = 这次拖动的编号（归并键）。返回 Alt + 拖复制出的节点数（非 Alt 复制为 0）。 */
   const startDrag = useCallback(
-    (event: { altKey: boolean }, dragged: Node[], mergeKey: string): string | null => {
+    (event: { altKey: boolean }, dragged: Node[], dragId: number): number => {
       altDrag.current = null;
-      if (!event.altKey || !dragged.length) return null;
+      if (!event.altKey || !dragged.length) return 0;
+      const before = boardRef.current;
       const ids = dragged.map((n) => n.id);
-      const sequence = idSequence(ids.length);
-      const { pairs } = duplicateNodes(boardRef.current, ids, sequence(), 0);
-      if (!pairs.length) return null;
-      const starts = new Map<string, [number, number]>();
-      for (const [orig] of pairs) {
-        const n = boardRef.current.nodes.find((x) => x.id === orig);
-        if (n && n.type !== "unknown") starts.set(orig, n.pos);
-      }
-      const change: UserChange = { label: countLabel("复制", pairs.length), merge: { key: mergeKey } };
-      altDrag.current = { pairs, starts, change };
-      updateBoard((b) => duplicateNodes(b, ids, sequence(), 0).board, change);
-      return change.label;
+      // 副本按复制顺序追加在节点末尾，与 copySelection 选出的原节点一一对应。
+      const originals = copySelection(before, ids).nodes;
+      if (!originals.length) return 0;
+      const r = apply({ kind: "duplicate", ids, drag: { id: dragId, copies: originals.length } });
+      if (!r?.step) return 0;
+      const had = new Set(before.nodes.map((n) => n.id));
+      const copies = r.board.nodes.filter((n) => !had.has(n.id)).map((n) => n.id);
+      altDrag.current = { pairs: originals.map((n, i) => [n.id, copies[i]]), starts: originals.map((n) => [n.id, n.pos]) };
+      return originals.length;
     },
-    [boardRef, updateBoard],
+    [boardRef, apply],
   );
-  const stopDrag = useCallback(() => {
-    const pending = altDrag.current;
-    altDrag.current = null;
-    if (!pending) return;
-    updateBoard((b) => settleAltDrag(b, pending.pairs, pending.starts), pending.change);
-    selection.setNodes(new Set(pending.pairs.map(([, copy]) => copy)));
-    selection.setEdges(new Set());
-  }, [updateBoard, selection]);
+  const stopDrag = useCallback(
+    (dragId: number) => {
+      const pending = altDrag.current;
+      altDrag.current = null;
+      if (!pending) return;
+      const r = apply({ kind: "settleDrag", drag: { id: dragId, copies: pending.pairs.length }, pairs: pending.pairs, starts: pending.starts });
+      if (r?.selection) {
+        selection.setNodes(new Set(r.selection));
+        selection.setEdges(new Set());
+      }
+    },
+    [apply, selection],
+  );
 
   // 触控板双指 = 平移（React Flow 默认滚轮一律缩放）。
   useEffect(() => {
@@ -110,14 +105,11 @@ export function useCanvasInteraction({ wrapper, boardRef, selection, dialogOpen,
 
   useEffect(() => {
     const duplicateSelection = () => {
-      const ids = [...selection.nodes.current];
-      if (!ids.length) return;
-      const sequence = idSequence(ids.length);
-      const probe = duplicateNodes(boardRef.current, ids, sequence(), PASTE_OFFSET);
-      if (!probe.ids.length) return;
-      updateBoard((b) => duplicateNodes(b, ids, sequence(), PASTE_OFFSET).board, { label: countLabel("复制", probe.ids.length) });
-      selection.setNodes(new Set(probe.ids));
-      selection.setEdges(new Set());
+      const r = apply({ kind: "duplicate", ids: [...selection.nodes.current], drag: null });
+      if (r?.selection) {
+        selection.setNodes(new Set(r.selection));
+        selection.setEdges(new Set());
+      }
     };
     const onKey = (e: KeyboardEvent) => {
       // 上下文菜单开着时它在捕获阶段吞掉 Esc（只关菜单），这里收不到。
@@ -142,14 +134,14 @@ export function useCanvasInteraction({ wrapper, boardRef, selection, dialogOpen,
         return;
       }
       const delta = nudgeDelta(e.key, e.shiftKey);
-      const ids = [...selection.nodes.current].sort();
+      const ids = [...selection.nodes.current];
       if (!delta || !ids.length) return;
       e.preventDefault();
-      updateBoard((b) => nudgeNodes(b, ids, delta), { label: countLabel("微移", ids.length), merge: { key: `nudge:${ids.join(",")}`, windowMs: MERGE_PAUSE_MS } });
+      apply({ kind: "nudge", ids, delta });
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [wrapper, flow, store, boardRef, selection, dialogOpen, updateBoard]);
+  }, [wrapper, flow, store, selection, dialogOpen, apply]);
 
   const flowProps: Partial<ReactFlowProps> = {
     selectionOnDrag: true,

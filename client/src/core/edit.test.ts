@@ -116,6 +116,7 @@ describe("用户变更：结果画板、撤销步、建议选中", () => {
     const alt = editBoard(b, { kind: "duplicate", ids: ["a"], drag: { id: 7, copies: 1 } }, env());
     expect(node<ReferenceNode>(alt.board, "n1").pos).toEqual([0, 0]);
     expect(alt.step).toEqual({ label: "复制 1 个节点", merge: { key: "drag:7" } });
+    expect(alt.selection).toBeUndefined();
   });
 
   it("Alt + 拖松手：原节点回起点，副本落在松手处并被选中", () => {

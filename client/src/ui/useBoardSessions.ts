@@ -10,10 +10,12 @@ import {
   uniqueBoardFileName,
   type Board,
 } from "../core/board";
-import { emptyHistory, recordChange, redo, undo, type Change, type History } from "../core/history";
-import { basename, boardsDir, dirname, joinPath } from "../core/paths";
+import { editBoard, type BoardChange, type EditEnv, type EditResult } from "../core/edit";
+import { emptyHistory, recordChange, redo, undo, type History } from "../core/history";
+import { basename, boardsDir, dirname, joinPath, resolveFromRoot } from "../core/paths";
 import { ipc } from "../shell/ipc";
 import { logEvent } from "../shell/log";
+import { knownImageInfo } from "./context";
 
 export const AUTOSAVE_DEBOUNCE_MS = 1000;
 
@@ -33,7 +35,10 @@ interface Saver {
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const samePath = (a: string, b: string) => a.replace(/\\/g, "/").toLowerCase() === b.replace(/\\/g, "/").toLowerCase();
 
-export function useBoardSessions(outputRoot: string | null) {
+/** 编辑环境里随应用状态变化的部分：能力表、网关发现、锁定集（排队 / 执行中的任务节点）。 */
+export type EnvSource = () => Pick<EditEnv, "table" | "discovery" | "locked">;
+
+export function useBoardSessions(outputRoot: string | null, envSource: EnvSource) {
   const [sessions, setSessionsState] = useState<Session[]>([]);
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const sessionsRef = useRef<Session[]>([]);
@@ -91,33 +96,61 @@ export function useBoardSessions(outputRoot: string | null) {
     [flush],
   );
 
-  /** 所有图变更的唯一入口：更新内存、记撤销步（系统写入与视口不记）并排程去抖保存。 */
-  const updateBoard = useCallback(
-    (key: string, fn: (board: Board) => Board, change: Change) => {
-      const s = sessionsRef.current.find((x) => x.key === key);
-      if (!s || s.status !== "ok") return;
-      const board = fn(s.board);
-      if (board === s.board) return;
-      patch(key, (x) => ({ ...x, board, history: recordChange(x.history, s.board, change, Date.now()) }));
-      scheduleSave(key);
-    },
-    [patch, scheduleSave],
+  const envSourceRef = useRef(envSource);
+  envSourceRef.current = envSource;
+  const outputRootRef = useRef(outputRoot);
+  outputRootRef.current = outputRoot;
+  /** 按画板组装编辑环境：图片宽高只取已读到的。 */
+  const envOf = useCallback(
+    (): EditEnv => ({
+      ...envSourceRef.current(),
+      imageSize: (path) => {
+        const root = outputRootRef.current;
+        const info = root ? knownImageInfo(resolveFromRoot(root, path)) : undefined;
+        return info ? [info.width, info.height] : undefined;
+      },
+      newId: () => crypto.randomUUID(),
+    }),
+    [],
   );
 
-  /** 撤销 / 重做一步；locked = 排队 / 执行中的任务节点 id，其参数与输入连线按当前状态保留。 */
+  /** 按当前画板试算一次变更，不写入（删除前的确认判断用）；会话不可编辑时为 null。 */
+  const check = useCallback(
+    (key: string, change: BoardChange): EditResult | null => {
+      const s = sessionsRef.current.find((x) => x.key === key);
+      return s?.status === "ok" ? editBoard(s.board, change, envOf()) : null;
+    },
+    [envOf],
+  );
+
+  /** 画板写入的唯一入口（ADR 0014）：经画板编辑算出新画板，落撤销步（只有用户变更有），排程去抖保存。会话不可编辑时为 null。 */
+  const apply = useCallback(
+    (key: string, change: BoardChange): EditResult | null => {
+      const s = sessionsRef.current.find((x) => x.key === key);
+      if (!s || s.status !== "ok") return null;
+      const r = editBoard(s.board, change, envOf());
+      if (r.board === s.board) return r;
+      patch(key, (x) => ({ ...x, board: r.board, history: r.step ? recordChange(x.history, s.board, r.step, Date.now()) : x.history }));
+      scheduleSave(key);
+      return r;
+    },
+    [envOf, patch, scheduleSave],
+  );
+
+  /** 撤销 / 重做一步；锁定任务的参数与输入连线按当前状态保留。 */
   const travel = useCallback(
-    (key: string, direction: typeof undo, locked: ReadonlySet<string>) => {
+    (key: string, direction: typeof undo) => {
       const s = sessionsRef.current.find((x) => x.key === key);
       if (!s || s.status !== "ok") return;
-      const r = direction(s.history, s.board, locked);
+      const r = direction(s.history, s.board, envSourceRef.current().locked);
       if (!r) return;
       patch(key, (x) => ({ ...x, board: r.board, history: r.history }));
       scheduleSave(key);
     },
     [patch, scheduleSave],
   );
-  const undoBoard = useCallback((key: string, locked: ReadonlySet<string>) => travel(key, undo, locked), [travel]);
-  const redoBoard = useCallback((key: string, locked: ReadonlySet<string>) => travel(key, redo, locked), [travel]);
+  const undoBoard = useCallback((key: string) => travel(key, undo), [travel]);
+  const redoBoard = useCallback((key: string) => travel(key, redo), [travel]);
 
   /** 最新的画板内容（不等 React 重渲染）；会话不存在或不可编辑时为 null。 */
   const getBoard = useCallback((key: string): Board | null => {
@@ -240,10 +273,11 @@ export function useBoardSessions(outputRoot: string | null) {
         patch(key, (x) => ({ ...x, notice: `重命名失败：${errorText(e)}` }));
         return;
       }
-      patch(key, (x) => ({ ...x, path: nextPath, board: { ...x.board, title } }));
+      patch(key, (x) => ({ ...x, path: nextPath }));
+      apply(key, { kind: "title", title });
       await flush(key);
     },
-    [flush, patch],
+    [flush, patch, apply],
   );
 
   const saveAs = useCallback(
@@ -279,7 +313,8 @@ export function useBoardSessions(outputRoot: string | null) {
     closeBoard,
     renameBoard,
     saveAs,
-    updateBoard,
+    apply,
+    check,
     undoBoard,
     redoBoard,
     getBoard,

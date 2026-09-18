@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Board, BoardEdge, BoardNode, ResultNode, TaskNode } from "./board";
 import { BUILTIN_TABLE } from "./capabilities";
 import type { FetchLike } from "./gateway";
+import { addResultNode } from "./layout";
 import { CancelledError, executeJob, failureLabel, prepareJob, prepareRegenerate, writeJob, type RunDeps } from "./run";
 
 const PNG = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="), (c) => c.charCodeAt(0));
@@ -62,10 +63,10 @@ describe("单任务端到端", () => {
     expect(taskJson).toMatchObject({ task_id: job.taskId, model: "qwen-image-3.0-pro", capability_table_sha256: "f".repeat(64), send_text: "本次提供 1 张参考图。\n一只橘猫" });
     expect(requests).toHaveLength(0);
 
-    const apply = await executeJob(d, { job, outputRoot: "/root", baseUrl: "http://gw", apiKey: "sk-test", newNodeId: "res" });
+    const result = await executeJob(d, { job, outputRoot: "/root", baseUrl: "http://gw", apiKey: "sk-test" });
     expect(requests.map((r) => r.url)).toEqual(["http://gw/v1/images/edits"]);
     expect(files.get(`${dir}/result.png`)).toEqual(PNG);
-    const b2 = apply(b1);
+    const b2 = addResultNode(b1, { ...result, id: "res" });
     expect(b2.nodes.find((n) => n.id === "res")).toMatchObject({ type: "result", task_id: job.taskId, path: `${job.relDir}/result.png` } satisfies Partial<ResultNode>);
     expect(b2.edges.at(-1)).toMatchObject({ from: ["t", "result"], to: ["res", "in"], system: true });
   });
@@ -81,9 +82,9 @@ describe("单任务端到端", () => {
     expect(taskJson.size_spec).toEqual({ tier: "1K", ratio: "10:7", width: null, height: null });
     expect(taskJson.size.width % 16).toBe(0);
     expect(taskJson.size.height % 16).toBe(0);
-    const apply = await executeJob(d, { job, outputRoot: "/root", baseUrl: "http://gw", apiKey: "sk-test", newNodeId: "res" });
+    const result = await executeJob(d, { job, outputRoot: "/root", baseUrl: "http://gw", apiKey: "sk-test" });
     expect(JSON.parse(String(requests[0].init?.body)).parameters.size).toBe(`${taskJson.size.width}*${taskJson.size.height}`);
-    expect((apply(b1).nodes.find((n) => n.id === "res") as ResultNode).record.size_spec).toEqual({ tier: "1K", ratio: "10:7", width: null, height: null });
+    expect((addResultNode(b1, { ...result, id: "res" }).nodes.find((n) => n.id === "res") as ResultNode).record.size_spec).toEqual({ tier: "1K", ratio: "10:7", width: null, height: null });
   });
 
   it("结果图下载成功 / 失败都回调下载事件，失败带网关错误", async () => {
@@ -94,7 +95,7 @@ describe("单任务端到端", () => {
       const { job: prepared } = await prepareJob(d, { board: board(false), table: BUILTIN_TABLE, tableSha256: "x", outputRoot: "/root", taskNodeId: "t" });
       const job = await writeJob(d, "/root", prepared);
       const events: { ok: boolean; error?: unknown }[] = [];
-      await executeJob(d, { job, outputRoot: "/root", baseUrl: "http://gw", apiKey: "k", newNodeId: "res", onDownload: (e) => events.push(e) }).catch(() => undefined);
+      await executeJob(d, { job, outputRoot: "/root", baseUrl: "http://gw", apiKey: "k", onDownload: (e) => events.push(e) }).catch(() => undefined);
       expect(events).toEqual([expect.objectContaining(expected)]);
       if (!expected.ok) expect(events[0].error).toMatchObject({ status: 403 });
     }
@@ -105,7 +106,7 @@ describe("单任务端到端", () => {
     const controller = new AbortController();
     const { job: prepared } = await prepareJob(d, { board: board(false), table: BUILTIN_TABLE, tableSha256: "x", outputRoot: "/root", taskNodeId: "t" });
     const job = await writeJob(d, "/root", prepared);
-    const pending = executeJob(d, { job, outputRoot: "/root", baseUrl: "http://gw", apiKey: "k", newNodeId: "res", signal: controller.signal });
+    const pending = executeJob(d, { job, outputRoot: "/root", baseUrl: "http://gw", apiKey: "k", signal: controller.signal });
     controller.abort();
     expect(await pending.catch((e) => e)).toBeInstanceOf(CancelledError);
     expect([...files.keys()].some((k) => k.includes("result"))).toBe(false);
@@ -128,7 +129,7 @@ describe("单任务端到端", () => {
     const taskJson = JSON.parse(new TextDecoder().decode(files.get(`/root/${job.relDir}/task.json`)));
     expect(taskJson).toMatchObject({ prompt: "一只橘猫", send_text: "本次提供 1 张参考图。\n一只橘猫", capability_table_sha256: "y" });
     expect(files.get(`/root/${job.relDir}/reference-1.png`)).toEqual(PNG);
-    await executeJob(d, { job, outputRoot: "/root", baseUrl: "http://gw", apiKey: "k", newNodeId: "res" });
+    await executeJob(d, { job, outputRoot: "/root", baseUrl: "http://gw", apiKey: "k" });
     expect(requests.map((r) => r.url)).toEqual(["http://gw/v1/images/edits"]);
   });
 
@@ -174,7 +175,7 @@ describe("单任务端到端", () => {
   it("文生图走 generations", async () => {
     const { d, requests } = deps(ok);
     const { job } = await prepareJob(d, { board: board(false), table: BUILTIN_TABLE, tableSha256: "x", outputRoot: "/root", taskNodeId: "t" });
-    await executeJob(d, { job: await writeJob(d, "/root", job), outputRoot: "/root", baseUrl: "http://gw", apiKey: "k", newNodeId: "res" });
+    await executeJob(d, { job: await writeJob(d, "/root", job), outputRoot: "/root", baseUrl: "http://gw", apiKey: "k" });
     expect(requests[0].url).toBe("http://gw/v1/images/generations");
   });
 
@@ -190,7 +191,7 @@ describe("单任务端到端", () => {
   it("401 → 鉴权失败，错误信息不含密钥；不存结果、不重发", async () => {
     const { d, files, requests } = deps(() => ({ status: 401, body: '{"error":{"message":"bad key sk-secret"}}' }));
     const { job } = await prepareJob(d, { board: board(false), table: BUILTIN_TABLE, tableSha256: "x", outputRoot: "/root", taskNodeId: "t" });
-    const err = await executeJob(d, { job: await writeJob(d, "/root", job), outputRoot: "/root", baseUrl: "http://gw", apiKey: "sk-secret", newNodeId: "res" }).catch((e) => e);
+    const err = await executeJob(d, { job: await writeJob(d, "/root", job), outputRoot: "/root", baseUrl: "http://gw", apiKey: "sk-secret" }).catch((e) => e);
     expect(failureLabel(err)).toBe("鉴权失败");
     expect(String(err.message)).not.toContain("sk-secret");
     expect(requests).toHaveLength(1);
@@ -200,7 +201,7 @@ describe("单任务端到端", () => {
   it("429 计失败为网关限流", async () => {
     const { d } = deps(() => ({ status: 429, body: "{}" }));
     const { job } = await prepareJob(d, { board: board(false), table: BUILTIN_TABLE, tableSha256: "x", outputRoot: "/root", taskNodeId: "t" });
-    const err = await executeJob(d, { job: await writeJob(d, "/root", job), outputRoot: "/root", baseUrl: "http://gw", apiKey: "k", newNodeId: "res" }).catch((e) => e);
+    const err = await executeJob(d, { job: await writeJob(d, "/root", job), outputRoot: "/root", baseUrl: "http://gw", apiKey: "k" }).catch((e) => e);
     expect(failureLabel(err)).toBe("网关限流");
   });
 });
@@ -224,7 +225,7 @@ describe("Seedream：执行", () => {
     })(d.fetch);
     const { job: prepared, board: b1 } = await prepareJob(d, { board: seedreamBoard(), table: BUILTIN_TABLE, tableSha256: "x", outputRoot: "/root", taskNodeId: "t" });
     const job = await writeJob(d, "/root", prepared);
-    await executeJob(d, { job, outputRoot: "/root", baseUrl: "http://gw", apiKey: "k", newNodeId: "res" });
+    await executeJob(d, { job, outputRoot: "/root", baseUrl: "http://gw", apiKey: "k" });
     expect(requests.map((r) => r.url)).toEqual(["http://gw/v1/images/generations", "https://oss/r.png"]);
     const body = JSON.parse(requests[0].init.body!);
     expect(body).toMatchObject({ model: "doubao-seedream-5-0-pro-260628", size: "2048x2048", response_format: "url", background: "transparent", image: [`data:image/png;base64,${PNG_B64}`] });
@@ -273,7 +274,7 @@ describe("区域指示：提交链路", () => {
     expect(taskJson.send_text).toContain("本次提供 2 张参考图，按顺序为图1、图2。");
     expect(taskJson.send_text).toContain("紫色半透明高亮标出的是要修改的区域");
 
-    await executeJob(d, { job, outputRoot: "/root", baseUrl: "http://gw", apiKey: "k", newNodeId: "res" });
+    await executeJob(d, { job, outputRoot: "/root", baseUrl: "http://gw", apiKey: "k" });
     const body = JSON.parse(String(requests[0].init.body));
     expect(body.input.messages[0].content).toHaveLength(3);
     expect(body.input.messages[0].content[2].text).toContain("图2 是图1 的标注版");
@@ -312,7 +313,7 @@ describe("区域指示：提交链路", () => {
     expect(taskJson.prompt).toBe("把@图2的少女放入图1");
     expect(taskJson.send_text).toContain("本次提供 3 张参考图，按顺序为图1、图2、图3。\n把图3的少女放入图1\n图2 是图1 的标注版");
 
-    await executeJob(d, { job, outputRoot: "/root", baseUrl: "http://gw", apiKey: "k", newNodeId: "res" });
+    await executeJob(d, { job, outputRoot: "/root", baseUrl: "http://gw", apiKey: "k" });
     const body = JSON.parse(String(requests[0].init.body));
     expect(body.input.messages[0].content[3].text).toBe(taskJson.send_text);
   });
@@ -332,7 +333,7 @@ describe("区域指示：提交链路", () => {
     const { job: again } = await prepareRegenerate(d, { board: b1, table: BUILTIN_TABLE, tableSha256: "y", outputRoot: "/root", taskNodeId: "t" });
     expect(again.plan.sendText).toBe(expected);
     const job = await writeJob(d, "/root", again);
-    await executeJob(d, { job, outputRoot: "/root", baseUrl: "http://gw", apiKey: "k", newNodeId: "res" });
+    await executeJob(d, { job, outputRoot: "/root", baseUrl: "http://gw", apiKey: "k" });
     expect(JSON.parse(String(requests[0].init.body)).input.messages[0].content[3].text).toBe(expected);
   });
 
@@ -371,12 +372,12 @@ describe("图层拆分：执行", () => {
     (b.nodes[1] as TaskNode).layer_decomposition = true;
     const { job: prepared, board: b1 } = await prepareJob(d, { board: b, table: BUILTIN_TABLE, tableSha256: "x", outputRoot: "/root", taskNodeId: "t" });
     const job = await writeJob(d, "/root", prepared);
-    const apply = await executeJob(d, { job, outputRoot: "/root", baseUrl: "http://gw", apiKey: "k", newNodeId: "res" });
+    const result = await executeJob(d, { job, outputRoot: "/root", baseUrl: "http://gw", apiKey: "k" });
     const dir = `/root/${job.relDir}`;
     expect(files.get(`${dir}/result.png`)).toEqual(PNG);
     expect(files.get(`${dir}/layers/01.png`)).toEqual(PNG);
     expect(files.get(`${dir}/layers/02.png`)).toEqual(PNG);
-    const b2 = apply(b1);
+    const b2 = addResultNode(b1, { ...result, id: "res" });
     const res = b2.nodes.find((n) => n.id === "res") as ResultNode;
     expect(res.layer_count).toBe(2);
     expect(res.record.layers).toEqual([
@@ -391,8 +392,8 @@ describe("图层拆分：执行", () => {
     (b.nodes[1] as TaskNode).layer_decomposition = true;
     const { job: prepared, board: b1 } = await prepareJob(d, { board: b, table: BUILTIN_TABLE, tableSha256: "x", outputRoot: "/root", taskNodeId: "t" });
     const job = await writeJob(d, "/root", prepared);
-    const apply = await executeJob(d, { job, outputRoot: "/root", baseUrl: "http://gw", apiKey: "k", newNodeId: "res" });
-    const b2 = apply(b1);
+    const result = await executeJob(d, { job, outputRoot: "/root", baseUrl: "http://gw", apiKey: "k" });
+    const b2 = addResultNode(b1, { ...result, id: "res" });
     expect((b2.nodes.find((n) => n.id === "res") as ResultNode).layer_count).toBe(0);
     expect([...files.keys()].some((k) => k.includes("layers/"))).toBe(false);
   });
@@ -437,7 +438,7 @@ describe("参考图快照按模型规则缩放 / 转码（#116）", () => {
     const ref = readTaskJson(files, job.relDir).references[0];
     expect(ref.source).toEqual({ kind: "reference", path: "refs/cat.png", sha256: "a".repeat(64) });
     expect(ref.fitted).toEqual({ from: { width: 4096, height: 4096, format: "png", bytes: PNG.length }, to: { width: 2048, height: 2048, format: "png", bytes: FITTED.length } });
-    await executeJob(d, { job, outputRoot: "/root", baseUrl: "http://gw", apiKey: "k", newNodeId: "res" });
+    await executeJob(d, { job, outputRoot: "/root", baseUrl: "http://gw", apiKey: "k" });
     expect(JSON.parse(String(requests[0].init.body)).input.messages[0].content[0].image).toContain(btoa(String.fromCharCode(...FITTED)));
   });
 

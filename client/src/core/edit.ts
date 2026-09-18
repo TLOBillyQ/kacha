@@ -66,7 +66,7 @@ export type BoardChange =
   /** 拖角缩放：box 为新的显示宽高，pos 为从左 / 上角缩放时同批的新位置。resize 每次缩放递增（归并键）。 */
   | { kind: "resize"; resize: number; boxes: { id: string; width: number; height: number; pos: Pos | null }[] }
   | { kind: "nudge"; ids: string[]; delta: Pos }
-  /** 复制选中节点：Ctrl+J 原地偏移（drag = null）；Alt + 拖开始时叠在原处（与这次拖动合为一步）。 */
+  /** 复制选中节点：Ctrl+J 原地偏移（drag = null）；Alt + 拖开始时叠在原处（与这次拖动合为一步），副本按复制顺序追加在节点末尾。 */
   | { kind: "duplicate"; ids: string[]; drag: DragRef | null }
   | { kind: "paste"; clip: Clip }
   | { kind: "newPrompt"; at: Pos }
@@ -199,7 +199,8 @@ function draft(board: Board, change: BoardChange, env: EditEnv): Draft {
       const r = duplicateNodes(board, change.ids, env.newId, drag ? 0 : PASTE_OFFSET);
       if (!r.pairs.length) return { board };
       const label = countLabel("复制", r.pairs.length);
-      return { board: r.board, step: drag ? { label, merge: { key: `drag:${drag.id}` } } : { label }, selection: r.ids };
+      // Alt + 拖进行中选区不动（拖的仍是原节点），松手对调后才选中副本（settleDrag）。
+      return drag ? { board: r.board, step: { label, merge: { key: `drag:${drag.id}` } } } : { board: r.board, step: { label }, selection: r.ids };
     }
     case "paste": {
       if (!change.clip.nodes.length) return { board };

@@ -19,24 +19,17 @@ import {
   type Viewport,
 } from "@xyflow/react";
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
-import { syncAutoRatios } from "../core/autoRatio";
-import { BOARD_EXTENSION, type Board, type BoardEdge, type KnownNode, type ReferenceNode } from "../core/board";
+import { BOARD_EXTENSION, type Board, type BoardEdge } from "../core/board";
 import { findModel, modelsByTier, type CapabilityTable, type InputImageRule } from "../core/capabilities";
 import type { TaskStatus } from "../core/run";
 import { availableModels, defaultTaskModel, modelAvailabilityIssue, type Discovery } from "../core/settings";
 import {
   canConnect,
-  connect,
-  disconnect,
   firstRegionOfEdge,
-  forkPrompt,
   hasDownstreamRecords,
   imageEdges,
   imagePortIndex,
   imagePortSlots,
-  moveImagePort,
-  removeNodes,
-  syncImagePorts,
   taskIssues,
   taskPorts,
   transparentAlphaIssue,
@@ -46,16 +39,15 @@ import {
 import { menuItems, selectionForMenu, actionBarItems, type BoardAction, type MenuFacts, type MenuItem, type MenuTarget } from "../core/contextMenu";
 import { createPortal } from "react-dom";
 import { expandedTasks, forgetOnSelectionChange, toggleExpanded, type ExpandOverrides } from "../core/expand";
-import { attachReferences, cardDropConnection, dragCreateItems, newTask } from "../core/dragCreate";
+import { cardDropConnection, dragCreateItems } from "../core/dragCreate";
 import { BoardToolbar } from "./BoardToolbar";
 import { edgeHoverInfo, type HoverInfo } from "../core/hoverInfo";
 import { connectablePorts, dragKind, edgeClassName, nodeClassName, promptPortKind, type DragFrom, type DragState } from "../core/ports";
-import { countLabel, nodeEditChange, type Change, type UserChange } from "../core/history";
-import { addAsReference, addAsReferenceTarget, continueEditing, copySelection, lineage, LOCKED_HINT, pasteClip, PASTE_OFFSET, producerOf, type Clip, type Outcome } from "../core/iterate";
-import { PROMPT_NODE_SIZE } from "../core/layout";
-import { IMAGE_NODE_WIDTH, imageNodeSize, renderedImageSize } from "../core/nodeSize";
+import { continueEditingChange, type BoardChange, type EdgeRef, type EditResult, type ImportedImage } from "../core/edit";
+import { copySelection, lineage, LOCKED_HINT, PASTE_OFFSET, producerOf, type Clip } from "../core/iterate";
+import { renderedImageSize } from "../core/nodeSize";
 import { basename, dirname, joinPath, resolveFromRoot, toRootRelative } from "../core/paths";
-import { effectiveRegionRender, setEdgeRegion } from "../core/region";
+import { effectiveRegionRender } from "../core/region";
 import { findReferenceFile, findResultFile, IMAGE_EXTENSIONS, type RelocateFs } from "../core/relocate";
 import { imageRefProblems, imageSources, type SnapshotImage } from "../core/submission";
 import { ipc } from "../shell/ipc";
@@ -63,14 +55,13 @@ import { logEvent } from "../shell/log";
 import { saveCopyAs } from "../shell/saveFile";
 import { ActionBar } from "./ActionBar";
 import { ContextMenu } from "./ContextMenu";
-import { BoardContext, knownImageInfo, primeImageInfo, useImageInfos, useMissingImages, useStoredStatuses, type BoardActions } from "./context";
+import { BoardContext, primeImageInfo, useImageInfos, useMissingImages, useStoredStatuses, type BoardActions } from "./context";
 import { edgeTypes } from "./edges";
 import { HoverProvider, useHoverLayer } from "./hoverInfo";
 import { ModelOptions, nodeTypes, type ImagePortInfo, type ImageSlotInfo } from "./nodes";
 import { DragContext } from "./ports";
 import { PreviewDialog, type PreviewRequest, type RegionTarget } from "./PreviewDialog";
 import { isTyping, useCanvasInteraction, type Selection } from "./useCanvasInteraction";
-import { isActive } from "./useRunner";
 
 const relocateFs: RelocateFs = {
   listDir: ipc.listDir,
@@ -87,11 +78,15 @@ interface Props {
   boardFile: string;
   table: CapabilityTable;
   outputRoot: string;
-  /** 画板变更；change = 步描述（用户步）或 system / view（不进撤销历史）。 */
-  update: (fn: (board: Board) => Board, change: Change) => void;
-  /** 撤销 / 重做一步：传排队 / 执行中的任务节点 id（按当前状态保留）。 */
-  onUndo: (locked: ReadonlySet<string>) => void;
-  onRedo: (locked: ReadonlySet<string>) => void;
+  /** 画板写入的唯一入口（见 core/edit）；会话不可编辑时为 null。 */
+  apply: (change: BoardChange) => EditResult | null;
+  /** 按当前画板试算一次变更，不写入。 */
+  check: (change: BoardChange) => EditResult | null;
+  /** 排队 / 执行中的任务节点：参数与连线锁定。 */
+  locked: ReadonlySet<string>;
+  /** 撤销 / 重做一步（锁定任务按当前状态保留）。 */
+  onUndo: () => void;
+  onRedo: () => void;
   /** 可撤销 / 可重做的那一步的描述；无则为 null。 */
   undoLabel: string | null;
   redoLabel: string | null;
@@ -126,7 +121,9 @@ export function BoardCanvas({
   boardFile,
   table,
   outputRoot,
-  update: rawUpdate,
+  apply: applyChange,
+  check,
+  locked,
   onUndo,
   onRedo,
   undoLabel,
@@ -149,44 +146,21 @@ export function BoardCanvas({
   const [selectedEdges, setSelectedEdges] = useState<ReadonlySet<string>>(new Set());
   const [measured, setMeasured] = useState<Record<string, { width?: number; height?: number }>>({});
 
-  // 排队 / 执行中的任务节点（由 statuses 算出，见下）：参数锁定，自动宽高比也不重算。
-  const lockedRef = useRef<ReadonlySet<string>>(new Set());
-  /** 自动宽高比随画板变更当场重算，和触发它的用户操作落在同一个撤销步里（ADR 0012）；图片宽高只取已读到的。 */
-  const withAutoRatios = useCallback(
-    (b: Board) =>
-      syncAutoRatios(
-        b,
-        table,
-        (nodeId) => {
-          const node = b.nodes.find((n) => n.id === nodeId);
-          const info = node?.type === "reference" || node?.type === "result" ? knownImageInfo(resolveFromRoot(outputRoot, node.path)) : undefined;
-          return info && [info.width, info.height];
-        },
-        lockedRef.current,
-      ),
-    [table, outputRoot],
-  );
-  const update = useCallback((fn: (b: Board) => Board, change: Change) => rawUpdate((b) => (change === "view" ? fn(b) : withAutoRatios(fn(b))), change), [rawUpdate, withAutoRatios]);
-  const updateBoard = useCallback((fn: (b: Board) => Board, change: UserChange) => update((b) => syncImagePorts(fn(b)), change), [update]);
+  const lockedRef = useRef(locked);
+  lockedRef.current = locked;
 
-  /** 应用一次可能被拒的画板变更；被拒时提示原因。返回是否已应用（会话不可编辑时也为 false）。 */
-  const applyOutcome = useCallback(
-    (fn: (b: Board) => Outcome, change: UserChange) => {
-      let applied = false;
-      let problem: string | null = null;
-      updateBoard((b) => {
-        const r = fn(b);
-        if (!r.ok) {
-          problem = r.reason;
-          return b;
-        }
-        applied = true;
-        return r.board;
-      }, change);
-      if (problem) toast(problem);
-      return applied;
+  /** 应用一次画板变更：有话要说（被拒原因、删除后的撤销提示）就提示，有建议选中就照选。 */
+  const apply = useCallback(
+    (change: BoardChange) => {
+      const r = applyChange(change);
+      if (r?.hint) toast(r.hint);
+      if (r?.selection) {
+        setSelectedNodes(new Set(r.selection));
+        setSelectedEdges(new Set());
+      }
+      return r;
     },
-    [updateBoard, toast],
+    [applyChange, toast],
   );
 
   const boardRef = useRef(board);
@@ -231,7 +205,7 @@ export function BoardCanvas({
     setExpandOverrides((o) => ([...o.keys()].every((id) => present.has(id)) ? o : new Map([...o].filter(([id]) => present.has(id)))));
   }, [board.nodes]);
   const selection = useMemo<Selection>(() => ({ nodes: selectedRef, edges: selectedEdgesRef, setNodes: setSelectedNodes, setEdges: setSelectedEdges }), []);
-  const nav = useCanvasInteraction({ wrapper, boardRef, selection, dialogOpen: dialogOpenRef, updateBoard });
+  const nav = useCanvasInteraction({ wrapper, boardRef, selection, dialogOpen: dialogOpenRef, apply });
   const previewNonce = useRef(0);
 
   // 每个图片源节点的透明通道（导入 / 定位时已有缓存，未读的批量补读）；未知不进入 Map。
@@ -240,8 +214,8 @@ export function BoardCanvas({
   const imageInfos = useImageInfos(imageAbsPaths);
   // 图片宽高晚于画板变更读到（刚打开画板、刚重新定位）、或任务结束解除锁定（statuses 变化）时补算自动宽高比：系统变更，不构成撤销步。
   useEffect(() => {
-    rawUpdate(withAutoRatios, "system");
-  }, [board, imageInfos, statuses, rawUpdate, withAutoRatios]);
+    applyChange({ kind: "syncAutoRatios" });
+  }, [board, imageInfos, locked, applyChange]);
   const alphaByNode = useMemo(() => {
     const map = new Map<string, boolean>();
     imageNodes.forEach((n, i) => {
@@ -293,9 +267,6 @@ export function BoardCanvas({
 
   const stored = useStoredStatuses(board, boardFile, outputRoot, handled);
   const statusOf = useCallback((taskId: string): TaskStatus | null => statuses.get(taskId) ?? stored.get(taskId) ?? null, [statuses, stored]);
-  // 排队 / 执行中的任务节点：参数与连线锁定，上游提示词仍可编辑（经三选）。
-  const locked = useMemo(() => new Set([...statuses].filter(([, st]) => isActive(st)).map(([id]) => id)), [statuses]);
-  lockedRef.current = locked;
 
   // perform 依赖每次渲染重建的新建类函数，经 ref 取最新一版，actions 保持稳定。
   const performRef = useRef<BoardActions["perform"]>(() => {});
@@ -305,44 +276,17 @@ export function BoardCanvas({
       table,
       outputRoot,
       availableModels: availableModels(table, discovery),
-      setTaskModel: (id, modelId) =>
-        !lockedRef.current.has(id) &&
-        updateBoard(
-          (b) => ({
-            ...b,
-            last_model: modelId,
-            nodes: b.nodes.map((n) => (n.id === id && n.type === "task" ? { ...n, model: modelId } : n)),
-          }),
-          { label: "切换模型" },
-        ),
-      updateNode: (id, patch) =>
-        updateBoard((b) => ({ ...b, nodes: b.nodes.map((n) => (n.id === id && n.type !== "unknown" ? ({ ...n, ...patch } as KnownNode) : n)) }), nodeEditChange(id, patch)),
-      moveImagePort: (taskId, from, to) =>
-        !lockedRef.current.has(taskId) && updateBoard((b) => ({ ...b, edges: moveImagePort(b, taskId, from, to) }), { label: "调整图片顺序" }),
-      forkPrompt: (promptId, text) => updateBoard((b) => forkPrompt(b, promptId, { newNodeId: crypto.randomUUID(), text }), { label: "分叉提示词" }),
+      apply: (change) => void apply(change),
       continueEditing: (nodeId, sourceLayer = null, at) => {
-        const selected = selectedRef.current;
-        // 拖线建节点（带 at）只拖出一根线，只接这一张图；按钮 / 菜单发起时在选区内沿用多选。
-        const sources = !at && selected.has(nodeId) ? [...selected] : [nodeId];
-        const ids = { taskId: crypto.randomUUID(), promptId: crypto.randomUUID() };
-        const sourceLayers = sourceLayer === null ? null : new Map([[nodeId, sourceLayer]]);
-        const taskAt = at ? posOf(at) : null;
-        if (!applyOutcome((b) => continueEditing(b, table, discovery, sources, nodeId, ids, sourceLayers, taskAt), { label: "以此继续编辑" })) return;
-        setSelectedNodes(new Set([ids.promptId]));
-        // 选中的是新提示词；新建的任务节点也默认展开。
-        setExpandOverrides((o) => new Map([...o, [ids.taskId, true]]));
-        setFocusPrompt(ids.promptId);
+        const r = apply(continueEditingChange(selectedRef.current, nodeId, sourceLayer, at ? posOf(at) : null));
+        const promptId = r?.step && r.selection?.[0];
+        if (!promptId) return;
+        // 选中的是新提示词；新建的任务节点（新提示词接的那个）也默认展开。
+        const taskId = r.board.edges.find((e) => e.from[0] === promptId && e.to[1] === "positive")?.to[0];
+        if (taskId) setExpandOverrides((o) => new Map([...o, [taskId, true]]));
+        setFocusPrompt(promptId);
       },
-      addAsReference: (resultId, sourceLayer = null) => {
-        const target = addAsReferenceTarget(boardRef.current, [...selectedRef.current]);
-        if (!target.ok) return toast(target.reason);
-        if (lockedRef.current.has(target.taskId)) return toast(LOCKED_HINT);
-        applyOutcome((b) => addAsReference(b, table, resultId, target.taskId, sourceLayer), { label: "加为参考图" });
-      },
-      setEdgeRegion: (ref, region) => {
-        if (lockedRef.current.has(ref.to[0])) return toast(LOCKED_HINT);
-        updateBoard((b) => setEdgeRegion(b, ref, region), { label: region ? "框选修改区域" : "清除修改区域" });
-      },
+      addAsReference: (resultId, sourceLayer = null) => void apply({ kind: "addAsReference", resultId, selected: [...selectedRef.current], sourceLayer }),
       previewNode: openNodePreview,
       editRegion: (taskId, ref) => {
         if (lockedRef.current.has(taskId)) return toast(LOCKED_HINT);
@@ -391,12 +335,7 @@ export function BoardCanvas({
           try {
             const info = await ipc.inspectImage(found);
             primeImageInfo(found, info);
-            const path = toRootRelative(outputRoot, found);
-            // 参考图换了文件即换了身份（哈希变了，下游任务随之变脏）；结果的身份是 task_id + 文件名，只改路径。
-            const patch = node.type === "reference" ? { path, sha256: info.sha256, display_name: mode === "pick" ? basename(found) : node.display_name } : { path };
-            update((b) => ({ ...b, nodes: b.nodes.map((n) => (n.id === nodeId && n.type === node.type ? ({ ...n, ...patch } as KnownNode) : n)) }), {
-              label: "重新定位图片",
-            });
+            apply({ kind: "relocate", nodeId, path: toRootRelative(outputRoot, found), sha256: info.sha256, fileName: basename(found), picked: mode === "pick" });
             logRelocate({ ok: true });
           } catch (e) {
             logRelocate({ ok: false, reason: "unreadable" });
@@ -404,7 +343,7 @@ export function BoardCanvas({
           }
         })(),
     }),
-    [table, boardFile, outputRoot, discovery, update, updateBoard, applyOutcome, onCancelTask, onRegenerate, toast, openNodePreview, regionTargetsOf],
+    [table, boardFile, outputRoot, discovery, apply, onRegenerate, toast, openNodePreview, regionTargetsOf],
   );
 
   // 选中任一节点即高亮其谱系。
@@ -546,19 +485,19 @@ export function BoardCanvas({
   /** 进行中的拖动编号（0 = 没在拖）；每次拖动一个新合并键。 */
   const activeDrag = useRef(0);
   const dragCounter = useRef(0);
-  /** Alt + 拖复制时这次拖动的步描述（复制与移动合为一步）。 */
-  const dragLabel = useRef<string | null>(null);
+  /** Alt + 拖复制出的节点数（复制与移动合为一步）；0 = 普通拖动。 */
+  const dragCopies = useRef(0);
   const onDragStart = useCallback(
     (event: MouseEvent | TouchEvent | React.MouseEvent, ...rest: [Node, Node[]] | [Node[]]) => {
       activeDrag.current = ++dragCounter.current;
-      dragLabel.current = nav.startDrag(event, rest.length === 2 ? rest[1] : rest[0], `drag:${activeDrag.current}`);
+      dragCopies.current = nav.startDrag(event, rest.length === 2 ? rest[1] : rest[0], activeDrag.current);
     },
     [nav.startDrag],
   );
   const onDragStop = useCallback(() => {
-    nav.stopDrag();
+    nav.stopDrag(activeDrag.current);
     activeDrag.current = 0;
-    dragLabel.current = null;
+    dragCopies.current = 0;
   }, [nav.stopDrag]);
 
   /** 进行中的拖角缩放编号（0 = 没在缩放）；一次缩放从按下到松开合为一步。 */
@@ -586,40 +525,19 @@ export function BoardCanvas({
         activeResize.current ||= ++resizeCounter.current;
         const at = new Map([...resized.keys()].flatMap((id) => (moves.has(id) ? [[id, moves.get(id)!] as const] : [])));
         resized.forEach((_, id) => moves.delete(id));
-        update((b) => {
-          let changed = false;
-          const nodes = b.nodes.map((n) => {
-            const box = resized.get(n.id);
-            if (!box || n.type === "unknown") return n;
-            const p = at.get(n.id);
-            const pos: [number, number] = p ? [Math.round(p.x), Math.round(p.y)] : n.pos;
-            const size = imageNodeSize(box.width, box.height / box.width);
-            if (pos[0] === n.pos[0] && pos[1] === n.pos[1] && size[0] === n.size[0] && size[1] === n.size[1]) return n;
-            changed = true;
-            return { ...n, pos, size };
-          });
-          return changed ? { ...b, nodes } : b;
-        }, { label: countLabel("缩放", resized.size), merge: { key: `resize:${activeResize.current}` } });
+        const boxes = [...resized].map(([id, { width, height }]) => {
+          const p = at.get(id);
+          return { id, width, height, pos: p ? ([p.x, p.y] as [number, number]) : null };
+        });
+        apply({ kind: "resize", resize: activeResize.current, boxes });
       }
       if (moves.size) {
         // 一次拖动（含多选、Alt + 拖复制）从开始到 onNodeDragStop 合为一步；方向键微移不经这里（useCanvasInteraction）。
-        const drag = activeDrag.current;
-        const change: UserChange = drag
-          ? { label: dragLabel.current ?? countLabel("移动", moves.size), merge: { key: `drag:${drag}` } }
-          : { label: countLabel("移动", moves.size) };
-        update((b) => {
-          let changed = false;
-          const nodes = b.nodes.map((n) => {
-            const p = n.type !== "unknown" && moves.get(n.id);
-            if (!p || (n.pos[0] === Math.round(p.x) && n.pos[1] === Math.round(p.y))) return n;
-            changed = true;
-            return { ...n, pos: [Math.round(p.x), Math.round(p.y)] as [number, number] };
-          });
-          return changed ? { ...b, nodes } : b;
-        }, change);
+        const drag = activeDrag.current ? { id: activeDrag.current, copies: dragCopies.current } : null;
+        apply({ kind: "move", moves: [...moves].map(([id, p]) => [id, [p.x, p.y]]), drag });
       }
     },
-    [update, nav.selectNodes],
+    [apply, nav.selectNodes],
   );
 
   const onEdgesChange = useCallback(
@@ -629,15 +547,9 @@ export function BoardCanvas({
 
   const onConnect = useCallback(
     (c: { source: string; sourceHandle: string | null; target: string; targetHandle: string | null }) => {
-      const conn = toConnection(c);
-      updateBoard((b) => {
-        const verdict = canConnect(b, table, conn);
-        if (!verdict.ok || lockedRef.current.has(conn.target)) return b;
-        // 提示词连正向 / 负向即确定其角色；角色由连线端口体现，无需另存字段。
-        return { ...b, edges: connect(b, conn) };
-      }, { label: "连线" });
+      apply({ kind: "connect", connection: toConnection(c) });
     },
-    [table, updateBoard],
+    [apply],
   );
 
   const performDragCreateRef = useRef<(action: BoardAction, from: DragFrom, at: { x: number; y: number }) => void>(() => {});
@@ -671,20 +583,25 @@ export function BoardCanvas({
     [board, table, toast, locked, flow, onConnect],
   );
 
+  /** onBeforeDelete 确认过「先取消再删除」的任务，交给紧随的 onDelete 豁免锁定。 */
+  const cancelledRef = useRef<string[]>([]);
+  /** React Flow 报来的连线 → 画板连线端点（系统连线也在内，画板编辑只断开用户连线）。 */
+  const edgeRefsOf = useCallback((es: Edge[]): EdgeRef[] => {
+    const ids = new Set(es.map((e) => e.id));
+    return boardRef.current.edges.filter((e) => ids.has(edgeId(e))).map((e) => ({ from: e.from, to: e.to }));
+  }, []);
+
   const onBeforeDelete = useCallback(
     async ({ nodes: ns, edges: es }: { nodes: Node[]; edges: Edge[] }) => {
       const ids = ns.map((n) => n.id);
-      // 删除不设禁删、一般不弹确认（靠撤销兜底），只有删排队 / 执行中的任务节点要确认先取消；gone 含级联删除的结果列。
-      const gone = new Set(removeNodes(board, ids).removedIds);
-      // 系统连线只能随节点一起消失，用户不能单独删。
-      const userEdges = es.filter((e) => e.deletable !== false || gone.has(e.source) || gone.has(e.target));
-      // 锁定任务的输入连线不能动（运行期锁定；任务本身一起删除除外），级联断开的也算。
-      const seversLocked = board.edges.some((e) => !e.system && gone.has(e.from[0]) && locked.has(e.to[0]) && !gone.has(e.to[0]));
-      if (seversLocked || userEdges.some((e) => locked.has(e.target) && !gone.has(e.target))) {
-        toast(LOCKED_HINT);
+      // 删除不设禁删、一般不弹确认（靠撤销兜底），只有删排队 / 执行中的任务节点要确认先取消。
+      const running = ids.filter((id) => locked.has(id));
+      // 先按「连同取消」试算：动到其余锁定任务（断开其输入连线，级联断开的也算）就整体拒绝，不必再问。
+      const trial = check({ kind: "delete", nodes: ids, edges: edgeRefsOf(es), cancelled: running });
+      if (trial && !trial.step && trial.hint) {
+        toast(trial.hint);
         return false;
       }
-      const running = ids.filter((id) => locked.has(id));
       if (running.length) {
         const confirmed = await ask(`${running.length} 个任务正在排队 / 执行。先取消再删除？\n已在执行的只停止本地等待，网关侧计算可能仍在继续。`, {
           title: "删除任务节点",
@@ -695,39 +612,28 @@ export function BoardCanvas({
         if (!confirmed) return false;
         running.forEach(onCancelTask);
       }
-      return { nodes: ns, edges: userEdges };
+      cancelledRef.current = running;
+      return { nodes: ns, edges: es };
     },
-    [board, toast, locked, onCancelTask],
+    [check, edgeRefsOf, toast, locked, onCancelTask],
   );
 
   const onDelete = useCallback(
     ({ nodes: ns, edges: es }: { nodes: Node[]; edges: Edge[] }) => {
-      const removedIds = new Set(es.map((e) => e.id));
-      const nodeIds = ns.map((n) => n.id);
-      // React Flow 报来的连线含与被删节点相连的；toast 的节点数与断开条数按删除前的画板只数节点删除。
-      const removal = removeNodes(boardRef.current, nodeIds);
-      const removed = removal.removedIds.length;
-      const label = ns.length ? countLabel("删除", removed) : countLabel("断开", es.length, "条连线");
-      updateBoard((b) => {
-        const userRemoved = b.edges.filter((e) => removedIds.has(edgeId(e)) && !e.system);
-        const next = userRemoved.length ? { ...b, edges: disconnect(b, userRemoved) } : b;
-        return nodeIds.length ? removeNodes(next, nodeIds).board : next;
-      }, { label });
-      if (ns.length) toast(`已删除 ${removed} 个节点${removal.severed ? `、断开 ${removal.severed} 条连线` : ""}，Ctrl+Z 撤销`);
+      const cancelled = cancelledRef.current;
+      cancelledRef.current = [];
+      apply({ kind: "delete", nodes: ns.map((n) => n.id), edges: edgeRefsOf(es), cancelled });
       setSelectedNodes(new Set());
       setSelectedEdges(new Set());
     },
-    [updateBoard, toast],
+    [apply, edgeRefsOf],
   );
 
   const onMoveEnd = useCallback(
     (_: unknown, vp: Viewport) => {
-      update((b) =>
-        b.viewport.x === vp.x && b.viewport.y === vp.y && b.viewport.zoom === vp.zoom ? b : { ...b, viewport: { x: vp.x, y: vp.y, zoom: vp.zoom } },
-        "view",
-      );
+      apply({ kind: "viewport", viewport: { x: vp.x, y: vp.y, zoom: vp.zoom } });
     },
-    [update],
+    [apply],
   );
 
   useEffect(() => {
@@ -746,23 +652,11 @@ export function BoardCanvas({
     return flow.screenToFlowPosition({ x: rect.left + rect.width / 2 - 120, y: rect.top + rect.height / 2 - 80 });
   }, [flow]);
 
-  const addNode = useCallback(
-    (node: KnownNode, change: UserChange) => {
-      update((b) => ({ ...b, nodes: [...b.nodes, node] }), change);
-      setSelectedNodes(new Set([node.id]));
-    },
-    [update],
-  );
-
   // 新建类动作：at = 节点左上角的画布坐标（上下文菜单的点击处）；缺省 = 视口中央（工具栏）。
-  const addPrompt = (at = centerPosition()) =>
-    addNode({ type: "prompt", id: crypto.randomUUID(), pos: posOf(at), size: PROMPT_NODE_SIZE, text: "", extra: {} }, { label: "新建提示词" });
+  const addPrompt = (at = centerPosition()) => void apply({ kind: "newPrompt", at: posOf(at) });
 
   /** promptId = 从该提示词拖出（拖线建节点），接新任务的正向端口，与建节点同一步。 */
-  const addTask = (at = centerPosition(), promptId?: string) => {
-    const id = crypto.randomUUID();
-    if (applyOutcome((b) => newTask(b, table, discovery, id, posOf(at), promptId), { label: "新建生成任务" })) setSelectedNodes(new Set([id]));
-  };
+  const addTask = (at = centerPosition(), promptId?: string) => void apply({ kind: "newTask", at: posOf(at), promptId: promptId ?? null });
 
   /**
    * 导入参考图。attach = 同时接到该任务的下一个空图片端口（拖线建节点 / OS 文件拖到任务卡片上），
@@ -771,42 +665,19 @@ export function BoardCanvas({
   const importReferences = useCallback(
     async (paths: string[], at: { x: number; y: number }, attach?: { taskId: string; place: "asIs" | "left" }) => {
       // 先逐张读取，再一次加到画板：一次导入是一步，张数只算读取成功的，读取期间的其他操作不会把它拆开。
-      const nodes: ReferenceNode[] = [];
+      const images: ImportedImage[] = [];
       for (const abs of paths) {
         try {
           const info = await ipc.inspectImage(abs);
           primeImageInfo(abs, info);
-          const offset = 32 * nodes.length;
-          nodes.push({
-            type: "reference",
-            id: crypto.randomUUID(),
-            pos: posOf({ x: at.x + offset, y: at.y + offset }),
-            size: imageNodeSize(IMAGE_NODE_WIDTH, info.width > 0 ? info.height / info.width : 1),
-            path: toRootRelative(outputRoot, abs),
-            sha256: info.sha256,
-            display_name: basename(abs),
-            extra: {},
-          });
+          images.push({ path: toRootRelative(outputRoot, abs), sha256: info.sha256, display_name: basename(abs), width: info.width, height: info.height });
         } catch (e) {
           toast(`无法导入 ${basename(abs)}：${e instanceof Error ? e.message : String(e)}`);
         }
       }
-      if (!nodes.length) return;
-      const change = { label: countLabel("添加", nodes.length, "张参考图") };
-      if (attach) {
-        let problem: string | null = null;
-        updateBoard((b) => {
-          const r = attachReferences(b, table, nodes, attach.taskId, lockedRef.current, attach.place);
-          problem = r.reason;
-          return r.board;
-        }, change);
-        if (problem) toast(problem);
-      } else {
-        update((b) => ({ ...b, nodes: [...b.nodes, ...nodes] }), change);
-      }
-      setSelectedNodes(new Set([nodes[nodes.length - 1].id]));
+      if (images.length) apply({ kind: "addReferences", images, at: [at.x, at.y], attach: attach ?? null });
     },
-    [update, updateBoard, table, outputRoot, toast],
+    [apply, outputRoot, toast],
   );
 
   /** attachTo = 任务节点 id：只选一张，接到该任务的空图片端口（从图片端口反向拖线建节点）。 */
@@ -817,8 +688,8 @@ export function BoardCanvas({
   };
 
   // 撤销 / 重做（供工具栏与上下文菜单）：锁定任务按当前状态保留。
-  const undo = useCallback(() => onUndo(lockedRef.current), [onUndo]);
-  const redo = useCallback(() => onRedo(lockedRef.current), [onRedo]);
+  const undo = onUndo;
+  const redo = onRedo;
 
   // 通用复制粘贴：Ctrl/⌘+C 复制选中节点，Ctrl/⌘+V 粘贴（新节点整体偏移、从未提交过）。
   // Ctrl/⌘+Z 撤销，Ctrl/⌘+Shift+Z、Ctrl/⌘+Y 重做；文本框聚焦时交给原生撤销。
@@ -839,20 +710,14 @@ export function BoardCanvas({
       } else if (key === "v" && clipboard?.nodes.length) {
         e.preventDefault();
         const clip = clipboard;
-        let pasted: string[] = [];
-        updateBoard((b) => {
-          const r = pasteClip(b, clip, () => crypto.randomUUID());
-          pasted = r.ids;
-          return r.board;
-        }, { label: countLabel("粘贴", clip.nodes.length) });
+        apply({ kind: "paste", clip });
         // 连续粘贴逐次错开。
         clipboard = { ...clip, nodes: clip.nodes.map((n) => ({ ...n, pos: [n.pos[0] + PASTE_OFFSET, n.pos[1] + PASTE_OFFSET] as [number, number] })) };
-        setSelectedNodes(new Set(pasted));
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [updateBoard, undo, redo]);
+  }, [apply, undo, redo]);
 
   const openMenu = (e: ReactMouseEvent | MouseEvent, target: MenuTarget) => {
     e.preventDefault();
@@ -981,10 +846,7 @@ export function BoardCanvas({
                 <select
                   className="toolbar-model"
                   value={defaultTaskModel(table, discovery, board.last_model) ?? ""}
-                  onChange={(e) => {
-                    const modelId = e.target.value;
-                    update((b) => ({ ...b, last_model: modelId }), "view");
-                  }}
+                  onChange={(e) => apply({ kind: "lastModel", model: e.target.value })}
                   aria-label="新建任务模型"
                 >
                   <ModelOptions table={table} available={actions.availableModels} />
