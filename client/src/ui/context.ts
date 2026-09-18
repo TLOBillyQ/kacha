@@ -126,14 +126,14 @@ export function useMissingImages(board: Board, outputRoot: string): ReadonlySet<
   return missing;
 }
 
-// 任务目录的结局记录只写一次，读过就缓存（含读不到）。
-const outcomeReads = new Map<string, Promise<Uint8Array>>();
-const cachedOutcomeFs: Pick<TaskFs, "readFile"> = {
+// 按路径缓存读文件（含读不到）：只交给 storedStatuses 读结局记录——结局记录只写一次，读过就不再读。
+const fileReads = new Map<string, Promise<Uint8Array>>();
+const cachedReadFs: Pick<TaskFs, "readFile"> = {
   readFile: (path) => {
-    let pending = outcomeReads.get(path);
+    let pending = fileReads.get(path);
     if (!pending) {
       pending = taskFs.readFile(path);
-      outcomeReads.set(path, pending);
+      fileReads.set(path, pending);
     }
     return pending;
   },
@@ -150,7 +150,7 @@ export function useStoredStatuses(board: Board, boardFile: string, outputRoot: s
   const signature = JSON.stringify([outputRoot, boardFile, interruptedCandidates(board, handled)]);
   useEffect(() => {
     let alive = true;
-    void storedStatuses(cachedOutcomeFs, board, handled, outputRoot, boardFile).then(({ statuses, newlyInterrupted }) => {
+    void storedStatuses(cachedReadFs, board, handled, outputRoot, boardFile).then(({ statuses, newlyInterrupted }) => {
       for (const event of newlyInterrupted) {
         if (loggedInterrupted.has(event.task_id)) continue;
         loggedInterrupted.add(event.task_id);
