@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { BUILTIN_TABLE } from "./capabilities";
-import { autoRatioLabel, autoSizeSpec, inferRatio, isAutoRatio, ratiosForSizeTier, resolveSize, sizeTiersOf, withinPixelRange } from "./size";
+import { autoRatioLabel, autoSizeSpec, commitRatioInput, inferRatio, isAutoRatio, ratioRangeText, ratiosForSizeTier, resolveSize, sizeTiersOf, withinPixelRange, withSizeTier } from "./size";
 
 const rule = BUILTIN_TABLE.models[0].workflows.text_to_image.size_rule;
 
-describe("档位 × 比例 → 像素", () => {
-  it("档位按表声明顺序，比例随档位变化", () => {
+describe("分辨率档 × 宽高比 → 像素", () => {
+  it("分辨率档按表声明顺序，宽高比随分辨率档变化", () => {
     expect(sizeTiersOf(rule)).toEqual(["1K", "2K"]);
     expect(ratiosForSizeTier(rule, "1K")).toEqual(["1:1"]);
     expect(ratiosForSizeTier(rule, "2K")).toEqual(["1:1", "16:9", "9:16"]);
@@ -16,9 +16,9 @@ describe("档位 × 比例 → 像素", () => {
     expect(resolveSize(rule, { tier: "2K", ratio: "16:9", width: null, height: null })).toEqual({ width: 1920, height: 1080 });
   });
 
-  it("档位或比例不在表里时返回 null", () => {
-    expect(resolveSize(rule, { tier: "1K", ratio: "16:9", width: null, height: null })).toBeNull();
+  it("分辨率档不在表里、或没有 custom 范围的模型宽高比不在表里时返回 null", () => {
     expect(resolveSize(rule, { tier: "8K", ratio: "1:1", width: null, height: null })).toBeNull();
+    expect(resolveSize({ ...rule, custom: null }, { tier: "1K", ratio: "16:9", width: null, height: null })).toBeNull();
   });
 
   it("自定义宽高在区间内按原值、越界返回 null", () => {
@@ -28,13 +28,13 @@ describe("档位 × 比例 → 像素", () => {
   });
 });
 
-describe("Seedream 5.0 档位 × 比例按官方映射表（API 参考 82379/1541523）", () => {
+describe("Seedream 5.0 分辨率档 × 宽高比按官方映射表（API 参考 82379/1541523）", () => {
   const RATIOS = ["1:1", "4:3", "3:4", "16:9", "9:16", "3:2", "2:3", "21:9"];
   const seedream = (id: string) => BUILTIN_TABLE.models.find((m) => m.model_id === id)!;
   const pro = seedream("doubao-seedream-5-0-pro-260628");
   const lite = seedream("doubao-seedream-5-0-lite-260128");
 
-  it("pro：1K / 1.5K / 2K，lite：2K / 3K / 4K，各 8 个比例；文生图与图片编辑同表", () => {
+  it("pro：1K / 1.5K / 2K，lite：2K / 3K / 4K，各 8 个宽高比；文生图与图片编辑同表", () => {
     for (const [model, tiers] of [
       [pro, ["1K", "1.5K", "2K"]],
       [lite, ["2K", "3K", "4K"]],
@@ -58,7 +58,7 @@ describe("Seedream 5.0 档位 × 比例按官方映射表（API 参考 82379/154
     expect(at(lite, "4K", "21:9")).toEqual({ width: 6240, height: 2656 });
   });
 
-  it("每个档位像素都落在该模型像素模式的总像素与宽高比区间内，比例与标称一致（±2%）", () => {
+  it("每个分辨率档的像素都落在该模型像素模式的总像素与宽高比区间内，宽高比与标称一致（±2%）", () => {
     for (const model of [pro, lite]) {
       const rule = model.workflows.text_to_image.size_rule;
       for (const [tier, ratios] of Object.entries(rule.tiers)) {
@@ -143,8 +143,7 @@ describe("自动宽高比：吸附、钳制、像素换算", () => {
     expect(spec).toEqual({ tier: "1K", ratio: "1:1", width: null, height: null, auto_ratio: { ratio: "1:1", image: null, source: null } });
   });
 
-  it("手动的非预设宽高比仍不可运行；旧客户端改过宽高比（与缓存不一致）视为手动", () => {
-    expect(resolveSize(qwen, { tier: "1K", ratio: "10:7", width: null, height: null })).toBeNull();
+  it("旧客户端改过宽高比（与缓存不一致）视为手动", () => {
     const edited = { ...auto(qwen, "2K", 1, [1000, 700]), ratio: "9:16" };
     expect(isAutoRatio(edited)).toBe(false);
     expect(isAutoRatio({ tier: "1K", ratio: "1:1", width: null, height: null })).toBe(false);
@@ -156,5 +155,72 @@ describe("自动宽高比：吸附、钳制、像素换算", () => {
     expect(autoRatioLabel(pro, auto(pro, "2K", 1, [700, 1000]))).toBe("自动（≈1:1.43 · 图1）");
     expect(autoRatioLabel(qwen, auto(qwen, "1K", 1, [4000, 200]))).toBe("自动（8:1 · 图1，已限制）");
     expect(autoRatioLabel(qwen, auto(qwen, "1K", null, null))).toBe("自动（1:1）");
+  });
+});
+
+describe("手填宽高比", () => {
+  const model = (id: string) => BUILTIN_TABLE.models.find((m) => m.model_id === id)!.workflows.image_edit.size_rule;
+  const qwen = model("qwen-image-3.0");
+  const pro = model("doubao-seedream-5-0-pro-260628");
+  const manual = (tier: string, ratio: string) => ({ tier, ratio, width: null, height: null });
+
+  it("四个上架模型都能手填非预设的 5:2：像素按该分辨率档 1:1 的面积、16 的倍数", () => {
+    for (const m of BUILTIN_TABLE.models.filter((m) => m.tier !== null)) {
+      const r = m.workflows.image_edit.size_rule;
+      const tier = sizeTiersOf(r)[0];
+      expect(commitRatioInput(r, "5:2")).toEqual({ ratio: "5:2", clamped: false });
+      const px = resolveSize(r, manual(tier, "5:2"))!;
+      const base = r.tiers[tier]["1:1"];
+      expect(px.width % 16).toBe(0);
+      expect(px.height % 16).toBe(0);
+      expect(px.width / px.height / 2.5).toBeCloseTo(1, 1);
+      expect((px.width * px.height) / (base[0] * base[1])).toBeCloseTo(1, 1);
+    }
+  });
+
+  it("命中预设查表；手动与自动换算一致", () => {
+    expect(resolveSize(qwen, manual("2K", "16:9"))).toEqual({ width: qwen.tiers["2K"]["16:9"][0], height: qwen.tiers["2K"]["16:9"][1] });
+    expect(resolveSize(pro, manual("2K", "10:7"))).toEqual(resolveSize(pro, autoSizeSpec(pro, "2K", 1, [1000, 700])));
+  });
+
+  it("输入归一化：全角冒号、空白、约分、小数", () => {
+    expect(commitRatioInput(qwen, " 32：18 ")).toEqual({ ratio: "16:9", clamped: false });
+    expect(commitRatioInput(qwen, "2.35:1")).toEqual({ ratio: "2.35:1", clamped: false });
+    expect(commitRatioInput(qwen, "5 : 2")).toEqual({ ratio: "5:2", clamped: false });
+  });
+
+  it("越界钳制到模型边界并给出范围", () => {
+    expect(commitRatioInput(qwen, "12:1")).toEqual({ ratio: "8:1", clamped: true });
+    expect(commitRatioInput(qwen, "1:12")).toEqual({ ratio: "1:8", clamped: true });
+    expect(commitRatioInput(pro, "12:1")).toEqual({ ratio: "12:1", clamped: false });
+    const odd = { ...qwen, custom: { ...qwen.custom!, min_aspect_ratio: 1 / 2.336, max_aspect_ratio: 2.336 } };
+    expect(commitRatioInput(odd, "3:1")).toEqual({ ratio: "2.33:1", clamped: true });
+    expect(commitRatioInput(odd, "1:3")).toEqual({ ratio: "1:2.33", clamped: true });
+    expect(ratioRangeText(qwen)).toBe("1:8–8:1");
+    expect(ratioRangeText(pro)).toBe("1:16–16:1");
+    expect(resolveSize(qwen, manual("1K", "8:1"))).not.toBeNull();
+    expect(resolveSize(qwen, manual("1K", "1:8"))).not.toBeNull();
+  });
+
+  it("无法解析的输入、没有 custom 范围的模型返回 null", () => {
+    for (const text of ["abc", "", "16:", ":9", "0:1", "1:0", "-1:2", "1:2:3", "16/9", "1e3:1"]) expect(commitRatioInput(qwen, text)).toBeNull();
+    expect(commitRatioInput({ ...qwen, custom: null }, "5:2")).toBeNull();
+  });
+
+  it("换模型后手动值越界：不可运行，值不改", () => {
+    expect(resolveSize(pro, manual("2K", "12:1"))).not.toBeNull();
+    expect(resolveSize(qwen, manual("2K", "12:1"))).toBeNull();
+  });
+
+  it("旧画板带 width / height 的 size_spec 仍可换算", () => {
+    expect(resolveSize(qwen, { tier: null, ratio: null, width: 1024, height: 768 })).toEqual({ width: 1024, height: 768 });
+  });
+
+  it("换分辨率档：手动宽高比能换算则保留（含手填值与旧画板像素宽高），否则取新档第一个预设；自动只换档", () => {
+    expect(withSizeTier(qwen, manual("2K", "5:2"), "1K")).toEqual(manual("1K", "5:2"));
+    expect(withSizeTier({ ...qwen, custom: null }, manual("2K", "16:9"), "1K")).toEqual(manual("1K", "1:1"));
+    expect(withSizeTier(qwen, manual("2K", "12:1"), "1K")).toEqual(manual("1K", "1:1"));
+    const auto = autoSizeSpec(qwen, "2K", 1, [1000, 700]);
+    expect(withSizeTier(qwen, auto, "1K")).toEqual({ ...auto, tier: "1K" });
   });
 });

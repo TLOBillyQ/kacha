@@ -19,18 +19,32 @@ import {
   type CapabilityTable,
   type InputImageRule,
   type ModelCapability,
+  type SizeRule,
   type WorkflowName,
 } from "../core/capabilities";
 import type { MenuItem } from "../core/contextMenu";
 import type { PortKind } from "../core/ports";
-import { actionHoverInfo, CANCELLED_HINT, portThumbHoverInfo, referenceHoverInfo, resultHoverInfo, taskHoverInfo, taskSizeText, textHoverInfo } from "../core/hoverInfo";
+import { actionHoverInfo, CANCELLED_HINT, portThumbHoverInfo, referenceHoverInfo, resultHoverInfo, taskHoverInfo, textHoverInfo } from "../core/hoverInfo";
 import type { TaskStatus } from "../core/run";
 import { inputImageAdviceAll } from "../core/fitImage";
 import { IMAGE_PORT_PREFIX, type TaskPorts } from "../core/graph";
 import { imageMinSize } from "../core/nodeSize";
 import { regionCss } from "../core/overlay";
 import { resolveFromRoot } from "../core/paths";
-import { autoRatioLabel, autoSizeSpec, isAutoRatio, manualSizeSpec, ratiosForSizeTier, ratioText, sizeTiersOf } from "../core/size";
+import {
+  autoRatioLabel,
+  autoSizeSpec,
+  commitRatioInput,
+  isAutoRatio,
+  manualSizeSpec,
+  ratioRangeText,
+  ratiosForSizeTier,
+  ratioText,
+  resolveSize,
+  sizeTiersOf,
+  withSizeTier,
+  type SizeSpec,
+} from "../core/size";
 import { fileUrl } from "../shell/ipc";
 import { useBoardActions, useImageInfo } from "./context";
 import { HoverButton, HoverSpan, useHover } from "./hoverInfo";
@@ -93,8 +107,10 @@ export type TaskFlowNode = Node<
   "task"
 >;
 
-/** 宽高比下拉里「自动」项的 value。 */
+/** 宽高比控件里「自动」项的 value。 */
 const AUTO_RATIO = "auto";
+/** 手填越界后范围提示的停留时间。 */
+const RATIO_HINT_MS = 4000;
 
 function Shell({ kind, title, className = "", children }: { kind: string; title: ReactNode; className?: string; children: ReactNode }) {
   return (
@@ -293,7 +309,7 @@ export const ResultNodeView = memo(function ResultNodeView({ data, selected, wid
   );
 });
 
-/** 按档位分组的可用模型选项；任务节点与工具栏的模型选择共用。 */
+/** 按模型档位分组的可用模型选项；任务节点与工具栏的模型选择共用。 */
 export function ModelOptions({ table, available }: { table: CapabilityTable; available: ModelCapability[] }) {
   const ids = new Set(available.map((m) => m.model_id));
   return (
@@ -330,7 +346,7 @@ function ModelInfo({ modelId, onClose }: { modelId: string; onClose: () => void 
         </button>
       </div>
       <div className="mono muted">{model.model_id}</div>
-      <div>档位：{model.tier ? TIER_LABELS[model.tier] : "未上架"}</div>
+      <div>模型档位：{model.tier ? TIER_LABELS[model.tier] : "未上架"}</div>
       <div>参考图上限：{model.workflows.image_edit.max_references}</div>
       {untested.length > 0 && (
         <>
@@ -399,6 +415,129 @@ function PortRow({
   );
 }
 
+/**
+ * 宽高比组合框（模型允许任意宽高比时）：首项「自动」、预设作快捷项，也能手填 W:H。
+ * 手填在失焦 / Enter 时才提交（连续键入只有一个撤销步）：越界钳制到模型边界并提示范围，读不出恢复原值；Esc 放弃。
+ */
+function RatioCombo({
+  rule,
+  spec,
+  ratios,
+  unsupported,
+  disabled,
+  onPick,
+}: {
+  rule: SizeRule;
+  spec: SizeSpec;
+  ratios: string[];
+  unsupported: boolean;
+  disabled: boolean;
+  /** AUTO_RATIO 或具体宽高比。 */
+  onPick: (value: string) => void;
+}) {
+  const isAuto = isAutoRatio(spec);
+  /** 非 null = 正在手填。 */
+  const [draft, setDraft] = useState<string | null>(null);
+  const [open, setOpen] = useState(false);
+  const [hint, setHint] = useState<string | null>(null);
+  const input = useRef<HTMLInputElement>(null);
+  /** 选了列表项或按了 Esc：随后的失焦不提交手填内容。 */
+  const discard = useRef(false);
+  /** 聚焦时填入的文本：没改过就失焦不提交（越界的「（不支持）」值点一下不会被钳制）。 */
+  const initial = useRef("");
+  // 手填途中任务被锁定（禁用的输入框不触发失焦）：丢掉草稿。
+  useEffect(() => {
+    if (!disabled) return;
+    setDraft(null);
+    setOpen(false);
+  }, [disabled]);
+  useEffect(() => {
+    if (hint === null) return;
+    const timer = setTimeout(() => setHint(null), RATIO_HINT_MS);
+    return () => clearTimeout(timer);
+  }, [hint]);
+  const shown = isAuto ? autoRatioLabel(rule, spec) : unsupported ? `${spec.ratio}（不支持）` : (spec.ratio ?? "");
+  const commit = () => {
+    const result = draft === null || draft === initial.current || discard.current ? null : commitRatioInput(rule, draft);
+    discard.current = false;
+    setDraft(null);
+    setOpen(false);
+    if (!result) return;
+    if (result.clamped) setHint(`该模型宽高比范围 ${ratioRangeText(rule)}`);
+    if (isAuto || result.ratio !== spec.ratio) onPick(result.ratio);
+  };
+  const pick = (value: string) => {
+    discard.current = document.activeElement === input.current;
+    input.current?.blur();
+    setOpen(false);
+    setHint(null);
+    if (value === AUTO_RATIO ? !isAuto : isAuto || value !== spec.ratio) onPick(value);
+  };
+  return (
+    <div className={`ratio-combo ${unsupported ? "ratio-unsupported" : ""}`}>
+      <input
+        ref={input}
+        role="combobox"
+        aria-label="宽高比"
+        aria-expanded={open}
+        aria-invalid={unsupported}
+        className="nowheel"
+        value={draft ?? shown}
+        title={draft ?? shown}
+        placeholder="W:H"
+        disabled={disabled}
+        spellCheck={false}
+        onFocus={(e) => {
+          initial.current = isAuto ? "" : (spec.ratio ?? "");
+          setDraft(initial.current);
+          setHint(null);
+          const el = e.currentTarget;
+          requestAnimationFrame(() => el.select());
+        }}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") e.currentTarget.blur();
+          else if (e.key === "Escape") {
+            discard.current = true;
+            e.currentTarget.blur();
+          } else if (e.key === "ArrowDown") setOpen(true);
+        }}
+      />
+      <button
+        className="icon ratio-combo-toggle"
+        aria-label="宽高比预设"
+        tabIndex={-1}
+        disabled={disabled}
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => {
+          input.current?.focus();
+          setOpen((v) => !v);
+        }}
+      >
+        ▾
+      </button>
+      {open && !disabled && (
+        <ul className="ratio-combo-list nowheel" role="listbox" aria-label="宽高比预设" onMouseDown={(e) => e.preventDefault()}>
+          {[AUTO_RATIO, ...ratios].map((r) => {
+            const selected = r === AUTO_RATIO ? isAuto : !isAuto && r === spec.ratio;
+            return (
+              <li key={r} role="option" aria-selected={selected} className={selected ? "selected" : ""} onClick={() => pick(r)}>
+                {r === AUTO_RATIO ? (isAuto ? shown : "自动") : r}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {hint !== null && (
+        <div className="ratio-combo-hint" role="status">
+          {hint}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskFlowNode>) {
   const { table, updateNode, moveImagePort, availableModels, setTaskModel, editRegion, previewNode, perform } = useBoardActions();
   const { node, ports, issues, warnings, unreferenced, locked, workflow, images, slots, regionRender, hasPositive, status, expanded, run } = data;
@@ -454,20 +593,18 @@ export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskF
   const tier = node.size_spec.tier;
   const ratios = rule && tier ? ratiosForSizeTier(rule, tier) : [];
   const isAuto = isAutoRatio(node.size_spec);
-  const setTier = (next: string) => {
-    // 自动宽高比：只换分辨率档，宽高比随画板变更当场按新档重算。
-    if (isAuto) return updateNode(node.id, { size_spec: { ...node.size_spec, tier: next } });
-    const available = rule ? ratiosForSizeTier(rule, next) : [];
-    const ratio = node.size_spec.ratio && available.includes(node.size_spec.ratio) ? node.size_spec.ratio : (available[0] ?? null);
-    updateNode(node.id, { size_spec: { ...node.size_spec, tier: next, ratio, width: null, height: null } });
-  };
+  const setTier = (next: string) => rule && updateNode(node.id, { size_spec: withSizeTier(rule, node.size_spec, next) });
+  /** 最终发送的像素（与提交时同一换算）；不可运行时为 null。 */
+  const pixels = rule ? resolveSize(rule, node.size_spec) : null;
+  /** 手动的宽高比在当前模型 / 分辨率档下发不出去：标「（不支持）」，值不动。 */
+  const ratioUnsupported = !isAuto && tier !== null && tiers.includes(tier) && node.size_spec.ratio !== null && pixels === null;
 
   const singleImage = images.length === 1 ? images[0].absPath : null;
   const singleInfo = useImageInfo(singleImage);
   const transparentReady = images.length === 1 && !!singleInfo?.has_alpha;
   const transparentHint = images.length !== 1 ? "需要恰好一条图片线" : singleInfo?.has_alpha ? "" : "该图不带透明通道";
   const blocking = issues.filter((i) => i !== "正向提示词未连接");
-  /** 宽高比下拉：选「自动」转为跟随参考图（当场重算），选具体值转为手动；两者都是一个撤销步。 */
+  /** 宽高比：选「自动」转为跟随参考图（当场重算），选具体值转为手动；两者都是一个撤销步。 */
   const setRatio = (next: string) => {
     if (next !== AUTO_RATIO) return updateNode(node.id, { size_spec: manualSizeSpec(node.size_spec, next) });
     if (rule) updateNode(node.id, { size_spec: autoSizeSpec(rule, tier, null, null, node.size_spec) });
@@ -508,31 +645,6 @@ export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskF
           </div>
           {infoOpen && <ModelInfo modelId={node.model} onClose={() => setInfoOpen(false)} />}
 
-          <div className="field nodrag">
-            <span className="field-label">尺寸</span>
-            <select value={tier ?? ""} onChange={(e) => setTier(e.target.value)} aria-label="尺寸档" disabled={locked}>
-              {tier !== null && !tiers.includes(tier) && <option value={tier}>{tier}（不支持）</option>}
-              {tier === null && <option value="">自定义</option>}
-              {tiers.map((t) => (
-                <option key={t}>{t}</option>
-              ))}
-            </select>
-            <select
-              value={isAuto ? AUTO_RATIO : (node.size_spec.ratio ?? "")}
-              onChange={(e) => setRatio(e.target.value)}
-              aria-label="比例"
-              disabled={locked || tier === null}
-            >
-              {rule && <option value={AUTO_RATIO}>{isAuto ? autoRatioLabel(rule, node.size_spec) : "自动"}</option>}
-              {!isAuto && node.size_spec.ratio !== null && !ratios.includes(node.size_spec.ratio) && (
-                <option value={node.size_spec.ratio}>{node.size_spec.ratio}（不支持）</option>
-              )}
-              {ratios.map((r) => (
-                <option key={r}>{r}</option>
-              ))}
-            </select>
-          </div>
-
           {(ports.layerDecomposition || ports.transparentBackground) && (
             <div className="toggles nodrag">
               {ports.layerDecomposition && (
@@ -563,9 +675,43 @@ export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskF
       ) : (
         <div className="task-summary">
           <div>{modelLabel}</div>
-          <div>{taskSizeText(node.size_spec, ratioNote)}</div>
         </div>
       )}
+
+      {/* 分辨率档与宽高比常驻：收起时也能改；模型与开关只在展开区。 */}
+      <div className="field size-field nodrag">
+        <select value={tier ?? ""} onChange={(e) => setTier(e.target.value)} aria-label="分辨率档" disabled={locked}>
+          {tier !== null && !tiers.includes(tier) && <option value={tier}>{tier}（不支持）</option>}
+          {tier === null && <option value="">自定义</option>}
+          {tiers.map((t) => (
+            <option key={t}>{t}</option>
+          ))}
+        </select>
+        {rule && rule.custom !== null && tier !== null ? (
+          <RatioCombo rule={rule} spec={node.size_spec} ratios={ratios} unsupported={ratioUnsupported} disabled={locked} onPick={setRatio} />
+        ) : (
+          <select
+            className={ratioUnsupported ? "ratio-unsupported" : ""}
+            value={isAuto ? AUTO_RATIO : (node.size_spec.ratio ?? "")}
+            onChange={(e) => setRatio(e.target.value)}
+            aria-label="宽高比"
+            disabled={locked || tier === null}
+          >
+            {rule && <option value={AUTO_RATIO}>{isAuto ? autoRatioLabel(rule, node.size_spec) : "自动"}</option>}
+            {!isAuto && node.size_spec.ratio !== null && !ratios.includes(node.size_spec.ratio) && (
+              <option value={node.size_spec.ratio}>{node.size_spec.ratio}（不支持）</option>
+            )}
+            {ratios.map((r) => (
+              <option key={r}>{r}</option>
+            ))}
+          </select>
+        )}
+        {pixels && (
+          <span className="size-pixels" aria-label="发送像素">
+            {pixels.width}×{pixels.height}
+          </span>
+        )}
+      </div>
 
       <div className="ports">
         <PortRow id="positive" kind="positive" label={ports.negative ? "正向提示词" : "提示词"} className={hasPositive ? "" : "port-required"} connectable={!locked}>

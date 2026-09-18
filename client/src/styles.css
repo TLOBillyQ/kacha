@@ -1205,3 +1205,81 @@ button.primary[aria-disabled="true"] {
 .region-limit-exceeded {
   color: #cf222e;
 }
+
+/* ---- 任务节点常驻的尺寸行：分辨率档 + 宽高比（组合框 / 下拉）+ 发送像素 ---- */
+.size-field > select:first-child {
+  flex: 0 0 auto;
+}
+.size-pixels {
+  flex-shrink: 0;
+  color: #57606a;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.ratio-combo {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+}
+.ratio-combo input {
+  flex: 1;
+  min-width: 0;
+  width: 0;
+  padding-right: 18px;
+  text-overflow: ellipsis;
+}
+.ratio-combo-toggle {
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 18px;
+  padding: 0;
+  border: none;
+  background: none;
+}
+.ratio-unsupported,
+.ratio-unsupported input {
+  color: var(--red);
+  border-color: var(--red);
+}
+.ratio-combo-list {
+  position: absolute;
+  z-index: 20;
+  left: 0;
+  top: 100%;
+  min-width: 100%;
+  max-height: 200px;
+  margin: 2px 0 0;
+  padding: 2px 0;
+  overflow-y: auto;
+  list-style: none;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgb(0 0 0 / 15%);
+}
+.ratio-combo-list li {
+  padding: 2px 8px;
+  white-space: nowrap;
+  cursor: default;
+}
+.ratio-combo-list li:hover,
+.ratio-combo-list li.selected {
+  background: #ddf4ff;
+}
+.ratio-combo-hint {
+  position: absolute;
+  z-index: 20;
+  left: 0;
+  top: 100%;
+  margin-top: 2px;
+  padding: 2px 6px;
+  white-space: nowrap;
+  color: #9a6700;
+  background: #fff8c5;
+  border: 1px solid #d4a72c;
+  border-radius: 6px;
+  font-size: 11px;
+}

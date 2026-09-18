@@ -30,7 +30,7 @@ describe("图片节点尺寸约束", () => {
     expect(renderedImageSize([240, 135], undefined)).toEqual([240, 135]);
   });
 
-  it("尺寸设置的比例：档位比例或自定义像素，读不出时为 1", () => {
+  it("尺寸设置的宽高比：宽高比或旧画板的像素宽高，读不出时为 1", () => {
     expect(sizeSpecAspect({ tier: "2K", ratio: "16:9", width: null, height: null })).toBeCloseTo(9 / 16);
     expect(sizeSpecAspect({ tier: null, ratio: null, width: 1000, height: 500 })).toBe(0.5);
     expect(sizeSpecAspect({ tier: "2K", ratio: null, width: null, height: null })).toBe(1);

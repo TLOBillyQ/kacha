@@ -109,7 +109,7 @@ function statusLine(status: TaskStatus): HoverLine {
   }
 }
 
-/** 任务节点的尺寸一行：「2K · 自动（16:9 · 图1）」；ratioNote 为宽高比的显示文本，没有时按原值。折叠的节点与悬浮信息共用。 */
+/** 任务节点的尺寸一行：「2K · 自动（16:9 · 图1）」；ratioNote 为宽高比的显示文本，没有时按原值。 */
 export function taskSizeText(sizeSpec: SizeSpec, ratioNote: string | null): string {
   return ratioNote !== null && sizeSpec.tier !== null ? `${sizeSpec.tier} · ${ratioNote}` : sizeSpecText(sizeSpec);
 }

@@ -23,7 +23,7 @@ export function renderedImageSize(size: [number, number], image: { width: number
   return imageNodeSize(size[0], aspect);
 }
 
-/** 尺寸设置对应的宽高比（高 / 宽）：档位比例「16:9」或自定义像素；读不出时为 1。 */
+/** 尺寸设置对应的宽高比（高 / 宽）：宽高比「16:9」或旧画板的像素宽高；读不出时为 1。 */
 export function sizeSpecAspect(spec: SizeSpec): number {
   if (spec.tier === null) return spec.width && spec.height ? spec.height / spec.width : 1;
   const [w, h] = (spec.ratio ?? "").split(":").map(Number);

@@ -10,7 +10,7 @@ import {
 } from "./capabilities";
 import { MAX_REGIONS } from "./overlay";
 import { effectiveRegionRender, expandImageEdges, type PortSlot } from "./region";
-import { resolveSize } from "./size";
+import { ratioRangeText, ratioValue, resolveSize, withinRatioRange } from "./size";
 
 export const IMAGE_PORT_PREFIX = "image:";
 
@@ -235,7 +235,11 @@ export function taskIssues(board: Board, table: CapabilityTable, taskId: string)
   if (hasEdge("negative") && !isSupported(wf.supports_negative_prompt)) issues.push("模型不支持负向提示词");
   if (resolveSize(wf.size_rule, task.size_spec) === null) {
     const s = task.size_spec;
-    issues.push(s.tier === null ? `自定义尺寸 ${s.width}×${s.height} 超出模型范围` : `生成尺寸 ${s.tier} · ${s.ratio} 不在模型尺寸表内`);
+    const value = ratioValue(s.ratio);
+    // 只有宽高比本身越界才报范围；分辨率档不认识、或没有 custom 范围的模型仍按「不在尺寸表内」。
+    const range = s.tier !== null && s.tier in wf.size_rule.tiers && value !== null && !withinRatioRange(wf.size_rule, value) ? ratioRangeText(wf.size_rule) : null;
+    if (s.tier === null) issues.push(`自定义尺寸 ${s.width}×${s.height} 超出模型范围`);
+    else issues.push(range !== null ? `宽高比 ${s.ratio} 超出模型范围 ${range}` : `生成尺寸 ${s.tier} · ${s.ratio} 不在模型尺寸表内`);
   }
   if (task.layer_decomposition && !isSupported(wf.layer_decomposition)) issues.push("模型不支持拆分图层");
   if (task.transparent_background) {

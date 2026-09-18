@@ -286,11 +286,18 @@ describe("换模型标红：连线与设置保留、节点不可运行", () => {
     expect(taskIssues(g, table, "t")).toEqual(["模型不支持拆分图层", "模型不支持透明背景"]);
   });
 
-  it("尺寸档位在新模型不存在", () => {
+  it("分辨率档在新模型不存在", () => {
     const g = board([node("p", "prompt"), task("t", "qwen-image-3.0-pro", { size_spec: { tier: "4K", ratio: "1:1", width: null, height: null } })], [
       edge("p", "out", "t", "positive"),
     ]);
     expect(taskIssues(g, table, "t")).toEqual(["生成尺寸 4K · 1:1 不在模型尺寸表内"]);
+  });
+
+  it("手填的宽高比在新模型越界：不可运行，值不改", () => {
+    const size_spec = { tier: "2K", ratio: "12:1", width: null, height: null };
+    const on = (model: string) => board([node("p", "prompt"), task("t", model, { size_spec })], [edge("p", "out", "t", "positive")]);
+    expect(taskIssues(on(SEEDREAM_PRO), table, "t")).toEqual([]);
+    expect(taskIssues(on("qwen-image-3.0-pro"), table, "t")).toEqual(["宽高比 12:1 超出模型范围 1:8–8:1"]);
   });
 
   it("模型不在能力表或未上架", () => {

@@ -1,4 +1,4 @@
-// 模型能力表：模型决定能力，能力决定生成任务节点上露出的端口、开关与档位。
+// 模型能力表：模型决定能力，能力决定生成任务节点上露出的端口、开关与分辨率档。
 // 内置 JSON + 同 schema 覆盖文件，按 model_id 整条合并；不按模型名猜能力。
 import builtinJson from "./capabilities.builtin.json";
 
@@ -30,7 +30,7 @@ export interface PixelRange {
 }
 
 export interface SizeRule {
-  /** 档位 → 比例 → [宽, 高]；对象键顺序即下拉顺序。 */
+  /** 分辨率档 → 宽高比 → [宽, 高]；对象键顺序即下拉顺序。 */
   tiers: Record<string, Record<string, [number, number]>>;
   custom: PixelRange | null;
 }
@@ -74,7 +74,7 @@ export function findModel(table: CapabilityTable, modelId: string): ModelCapabil
   return table.models.find((m) => m.model_id === modelId);
 }
 
-/** 模型选择器：只按档位分组展示上架模型（有档位 = 上架，ADR 0005）。 */
+/** 模型选择器：只按模型档位分组展示上架模型（有模型档位 = 上架，ADR 0005）。 */
 export function modelsByTier(table: CapabilityTable): { tier: Tier; models: ModelCapability[] }[] {
   return (["flagship", "economy"] as const)
     .map((tier) => ({ tier, models: table.models.filter((m) => m.tier === tier) }))
