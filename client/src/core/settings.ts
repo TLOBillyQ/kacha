@@ -1,5 +1,6 @@
 // 高级设置与模型发现。settings.json 在 app-data 目录，只前向迁移；API 密钥不在这里（系统凭据库）。
 import { type CapabilityTable, type ModelCapability, modelsByTier } from "./capabilities";
+import { GatewayError, listModels, type FetchLike } from "./gateway";
 
 export const SETTINGS_FORMAT_VERSION = 1;
 export const MIN_CONCURRENCY = 1;
@@ -161,4 +162,93 @@ export function defaultEditModel(table: CapabilityTable, discovery: Discovery, l
   const toolbar = table.models.find((m) => m.model_id === defaultTaskModel(table, discovery, lastModel));
   if (toolbar && canEdit(toolbar)) return toolbar;
   return availableModels(table, discovery).find(canEdit) ?? shelved(table).find(canEdit) ?? null;
+}
+
+// ---- 载入 / 保存 / 模型刷新（#128）：经端口注入的无状态函数，不弹窗、不含文案；React 状态与提示在 ui/useSettings.ts ----
+
+/** persisted = 已存入系统凭据库；session = 凭据库不可用，只在本次运行的内存里。 */
+export type KeyPersistence = "persisted" | "session";
+
+export interface SettingsPorts {
+  readSettings(): Promise<string | null>;
+  writeSettings(text: string): Promise<void>;
+  readModelsCache(): Promise<string | null>;
+  writeModelsCache(text: string): Promise<void>;
+  /** 系统凭据库；不可用时抛错。 */
+  secretGet(): Promise<string | null>;
+  secretSet(key: string): Promise<void>;
+  secretDelete(): Promise<void>;
+  fetch: FetchLike;
+  now(): Date;
+  log(kind: "connection", fields: Record<string, unknown>): void;
+}
+
+export interface KeyState {
+  file: LoadedSettings["kind"];
+  apiKey: string;
+  keyPersistence: KeyPersistence;
+}
+
+export type SaveResult = { ok: true; settingsWritten: boolean; keyPersistence: KeyPersistence } | { ok: false; error: string };
+
+export interface InitialSettings {
+  file: LoadedSettings;
+  apiKey: string;
+  keyPersistence: KeyPersistence;
+  cache: ModelsCache | null;
+}
+
+/** 读 settings.json、模型缓存与凭据库密钥；读文件失败按缺失处理，凭据库抛错退回 session。 */
+export async function loadSettings(ports: SettingsPorts): Promise<InitialSettings> {
+  const file = parseSettings(await ports.readSettings().catch(() => null));
+  const cache = parseModelsCache(await ports.readModelsCache().catch(() => null));
+  try {
+    return { file, apiKey: (await ports.secretGet()) ?? "", keyPersistence: "persisted", cache };
+  } catch {
+    return { file, apiKey: "", keyPersistence: "session", cache };
+  }
+}
+
+const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+/** 保存设置与密钥。newer 时不覆盖 settings.json 但仍存密钥；密钥变了或当前为 session 才写凭据库，凭据库抛错退回 session。 */
+export async function saveSettings(ports: SettingsPorts, current: KeyState, next: Settings, apiKey: string): Promise<SaveResult> {
+  const settingsWritten = current.file !== "newer";
+  if (settingsWritten) {
+    try {
+      await ports.writeSettings(serializeSettings(next));
+    } catch (e) {
+      return { ok: false, error: errorText(e) };
+    }
+  }
+  let keyPersistence: KeyPersistence = "persisted";
+  if (apiKey !== current.apiKey || current.keyPersistence === "session") {
+    try {
+      if (apiKey) await ports.secretSet(apiKey);
+      else await ports.secretDelete();
+    } catch {
+      keyPersistence = "session";
+    }
+  }
+  return { ok: true, settingsWritten, keyPersistence };
+}
+
+export type RefreshResult =
+  | { ok: true; cache: ModelsCache; discovery: Discovery }
+  /** message：网关错误的可展示说明；非网关错误为 null（由 ui 给兜底文案）。 */
+  | { ok: false; message: string | null; discovery: Discovery };
+
+/** 模型发现：成功写缓存（写失败不影响结果）；失败回落到同 base_url 的缓存。两种结局都记一条 connection 日志。 */
+export async function refreshModels(ports: SettingsPorts, baseUrl: string, apiKey: string, cache: ModelsCache | null): Promise<RefreshResult> {
+  try {
+    const ids = await listModels({ baseUrl, apiKey, fetch: ports.fetch });
+    const fresh: ModelsCache = { base_url: normalizeBaseUrl(baseUrl), fetched_at: ports.now().toISOString(), model_ids: ids };
+    await ports.writeModelsCache(serializeModelsCache(fresh)).catch(() => undefined);
+    ports.log("connection", { stage: "list_models", ok: true, models: ids.length });
+    return { ok: true, cache: fresh, discovery: { source: "live", ids, fetchedAt: fresh.fetched_at } };
+  } catch (e) {
+    const gateway = e instanceof GatewayError ? e : null;
+    ports.log("connection", { stage: "list_models", ok: false, category: gateway?.category ?? "unknown", status_code: gateway?.status, message: gateway?.message ?? String(e) });
+    return { ok: false, message: gateway?.message ?? null, discovery: discoveryFromCache(cache, baseUrl) };
+  }
 }

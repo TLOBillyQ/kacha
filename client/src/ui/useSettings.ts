@@ -1,24 +1,21 @@
-// 高级设置的加载 / 保存、API 密钥（系统凭据库，不可用时只在会话内存）、模型发现。
+// 高级设置的 React 接线：载入 / 保存 / 模型刷新的规则在 core/settings.ts（#128），这里只映射成 React 状态与提示文案，并在载入后静默刷新一次模型。
 import { useCallback, useEffect, useRef, useState } from "react";
-import { GatewayError, listModels } from "../core/gateway";
 import {
   DEFAULT_SETTINGS,
   discoveryFromCache,
+  loadSettings,
   normalizeBaseUrl,
-  parseModelsCache,
-  parseSettings,
-  serializeModelsCache,
-  serializeSettings,
+  refreshModels as refreshModelsWith,
+  saveSettings,
   type Discovery,
+  type KeyPersistence,
   type LoadedSettings,
   type ModelsCache,
   type Settings,
 } from "../core/settings";
-import { httpFetch, ipc } from "../shell/ipc";
-import { logEvent } from "../shell/log";
+import { settingsPorts } from "../shell/adapters";
 
-/** persisted = 已存入系统凭据库；session = 凭据库不可用，只在本次运行的内存里。 */
-export type KeyPersistence = "persisted" | "session";
+export type { KeyPersistence } from "../core/settings";
 
 export type ConnectionResult = { ok: true; count: number } | { ok: false; message: string };
 
@@ -31,6 +28,12 @@ export interface SettingsState {
   apiKey: string;
   keyPersistence: KeyPersistence;
   discovery: Discovery;
+}
+
+function fileProblemOf(loaded: LoadedSettings): string | null {
+  if (loaded.kind === "newer") return `settings.json 由更新版本的工具写入（format_version ${loaded.version}），本次使用默认设置且不会覆盖该文件`;
+  if (loaded.kind === "corrupt") return `settings.json 已损坏（${loaded.reason}），本次使用默认设置`;
+  return null;
 }
 
 export function useSettings() {
@@ -48,47 +51,25 @@ export function useSettings() {
   const cacheRef = useRef<ModelsCache | null>(null);
 
   const refreshModels = useCallback(async (baseUrl: string, apiKey: string): Promise<ConnectionResult> => {
-    try {
-      const ids = await listModels({ baseUrl, apiKey, fetch: httpFetch });
-      const cache: ModelsCache = { base_url: normalizeBaseUrl(baseUrl), fetched_at: new Date().toISOString(), model_ids: ids };
-      cacheRef.current = cache;
-      await ipc.writeModelsCache(serializeModelsCache(cache)).catch(() => undefined);
-      setState((s) => ({ ...s, discovery: { source: "live", ids, fetchedAt: cache.fetched_at } }));
-      logEvent("connection", { stage: "list_models", ok: true, models: ids.length });
-      return { ok: true, count: ids.length };
-    } catch (e) {
-      setState((s) => ({ ...s, discovery: discoveryFromCache(cacheRef.current, baseUrl) }));
-      const gateway = e instanceof GatewayError ? e : null;
-      logEvent("connection", { stage: "list_models", ok: false, category: gateway?.category ?? "unknown", status_code: gateway?.status, message: gateway?.message ?? String(e) });
-      return { ok: false, message: e instanceof GatewayError ? e.message : "连接测试失败" };
-    }
+    const result = await refreshModelsWith(settingsPorts, baseUrl, apiKey, cacheRef.current);
+    if (result.ok) cacheRef.current = result.cache;
+    setState((s) => ({ ...s, discovery: result.discovery }));
+    return result.ok ? { ok: true, count: result.cache.model_ids.length } : { ok: false, message: result.message ?? "连接测试失败" };
   }, []);
 
   useEffect(() => {
     void (async () => {
-      const loaded = parseSettings(await ipc.readSettings().catch(() => null));
-      cacheRef.current = parseModelsCache(await ipc.readModelsCache().catch(() => null));
-      let apiKey = "";
-      let keyPersistence: KeyPersistence = "persisted";
-      try {
-        apiKey = (await ipc.secretGet()) ?? "";
-      } catch {
-        keyPersistence = "session";
-      }
-      const settings = loaded.settings;
+      const { file, apiKey, keyPersistence, cache } = await loadSettings(settingsPorts);
+      cacheRef.current = cache;
+      const settings = file.settings;
       setState({
         loaded: true,
-        file: loaded.kind,
-        fileProblem:
-          loaded.kind === "newer"
-            ? `settings.json 由更新版本的工具写入（format_version ${loaded.version}），本次使用默认设置且不会覆盖该文件`
-            : loaded.kind === "corrupt"
-              ? `settings.json 已损坏（${loaded.reason}），本次使用默认设置`
-              : null,
+        file: file.kind,
+        fileProblem: fileProblemOf(file),
         settings,
         apiKey,
         keyPersistence,
-        discovery: discoveryFromCache(cacheRef.current, settings.base_url),
+        discovery: discoveryFromCache(cache, settings.base_url),
       });
       // 启动时静默刷新一次；失败保持缓存。
       if (apiKey) void refreshModels(settings.base_url, apiKey);
@@ -98,25 +79,11 @@ export function useSettings() {
   /** 保存设置与密钥；返回错误说明，成功为 null。 */
   const save = useCallback(async (next: Settings, apiKey: string): Promise<string | null> => {
     const current = stateRef.current;
-    // 更新版本写入的 settings.json 不覆盖，但密钥仍可保存。
-    const readOnly = current.file === "newer";
-    if (!readOnly) {
-      try {
-        await ipc.writeSettings(serializeSettings(next));
-      } catch (e) {
-        return `保存设置失败：${e instanceof Error ? e.message : String(e)}`;
-      }
-    }
-    let keyPersistence: KeyPersistence = "persisted";
-    if (apiKey !== current.apiKey || current.keyPersistence === "session") {
-      try {
-        if (apiKey) await ipc.secretSet(apiKey);
-        else await ipc.secretDelete();
-      } catch {
-        keyPersistence = "session";
-      }
-    }
-    if (readOnly) {
+    const result = await saveSettings(settingsPorts, current, next, apiKey);
+    if (!result.ok) return `保存设置失败：${result.error}`;
+    const { keyPersistence } = result;
+    // 更新版本写入的 settings.json 没被覆盖：界面上的设置保持不变，只更新密钥。
+    if (!result.settingsWritten) {
       setState((s) => ({ ...s, apiKey, keyPersistence }));
       return null;
     }

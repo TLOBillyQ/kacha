@@ -2,9 +2,11 @@
 import type { PackFs } from "../core/boardPack";
 import type { RelocateFs } from "../core/relocate";
 import type { RunDeps } from "../core/run";
+import type { SettingsPorts } from "../core/settings";
 import type { TaskFs } from "../core/taskDir";
 import { imageCodec } from "./imageCodec";
 import { httpFetch, ipc } from "./ipc";
+import { logEvent } from "./log";
 import { composeOverlay } from "./overlay";
 
 export const taskFs: TaskFs = {
@@ -34,4 +36,17 @@ export const relocateFs: RelocateFs = {
 export const packFs: PackFs = {
   isFile: ipc.isFile,
   sha256: ipc.fileSha256,
+};
+
+export const settingsPorts: SettingsPorts = {
+  readSettings: ipc.readSettings,
+  writeSettings: ipc.writeSettings,
+  readModelsCache: ipc.readModelsCache,
+  writeModelsCache: ipc.writeModelsCache,
+  secretGet: ipc.secretGet,
+  secretSet: ipc.secretSet,
+  secretDelete: ipc.secretDelete,
+  fetch: httpFetch,
+  now: () => new Date(),
+  log: logEvent,
 };
