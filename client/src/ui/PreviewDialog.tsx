@@ -56,7 +56,7 @@ type Drag =
 const CORNERS: Corner[] = ["nw", "ne", "sw", "se"];
 
 export function PreviewDialog({ req, toast, onClose }: Props) {
-  const { setEdgeRegion, addAsReference, continueEditing } = useBoardActions();
+  const { apply, addAsReference, continueEditing } = useBoardActions();
   const stage = useRef<HTMLImageElement>(null);
   const [editing, setEditing] = useState<RegionTarget | null>(req.edit ?? null);
   const [rects, setRects] = useState<Rect01[]>(() => (req.edit ? req.edit.rects.map((r) => [...r] as Rect01) : []));
@@ -143,7 +143,7 @@ export function PreviewDialog({ req, toast, onClose }: Props) {
   };
   const saveRegion = () => {
     if (!editing) return;
-    setEdgeRegion(editing.edgeRef, rects.length ? { rects, render: editing.render } : null);
+    apply({ kind: "setRegion", edge: editing.edgeRef, region: rects.length ? { rects, render: editing.render } : null });
     onClose();
   };
 

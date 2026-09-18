@@ -33,16 +33,13 @@ import { regionCss } from "../core/overlay";
 import { resolveFromRoot } from "../core/paths";
 import {
   autoRatioLabel,
-  autoSizeSpec,
   commitRatioInput,
   isAutoRatio,
-  manualSizeSpec,
   ratioRangeText,
   ratiosForSizeTier,
   ratioText,
   resolveSize,
   sizeTiersOf,
-  withSizeTier,
   type SizeSpec,
 } from "../core/size";
 import { fileUrl } from "../shell/ipc";
@@ -198,7 +195,7 @@ function ImageNode({
 }
 
 export const PromptNodeView = memo(function PromptNodeView({ data }: NodeProps<PromptFlowNode>) {
-  const { updateNode, forkPrompt } = useBoardActions();
+  const { apply } = useBoardActions();
   const { node, recorded, autoFocus, portKind } = data;
   const textarea = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
@@ -208,11 +205,11 @@ export const PromptNodeView = memo(function PromptNodeView({ data }: NodeProps<P
   const [pending, setPending] = useState<string | null>(null);
   const [keep, setKeep] = useState(false);
   const fork = () => {
-    if (pending !== null) forkPrompt(node.id, pending);
+    if (pending !== null) apply({ kind: "forkPrompt", promptId: node.id, text: pending });
     setPending(null);
   };
   const noFork = () => {
-    if (pending !== null) updateNode(node.id, { text: pending });
+    if (pending !== null) apply({ kind: "editPrompt", promptId: node.id, text: pending });
     setPending(null);
     setKeep(true);
   };
@@ -234,7 +231,7 @@ export const PromptNodeView = memo(function PromptNodeView({ data }: NodeProps<P
         }}
         onChange={(e) => {
           if (pending !== null || (recorded && !keep)) setPending(e.target.value);
-          else updateNode(node.id, { text: e.target.value });
+          else apply({ kind: "editPrompt", promptId: node.id, text: e.target.value });
         }}
       />
       {pending !== null && (
@@ -539,7 +536,7 @@ function RatioCombo({
 }
 
 export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskFlowNode>) {
-  const { table, updateNode, moveImagePort, availableModels, setTaskModel, editRegion, previewNode, perform } = useBoardActions();
+  const { table, apply, availableModels, editRegion, previewNode, perform } = useBoardActions();
   const { node, ports, issues, warnings, unreferenced, locked, workflow, images, slots, regionRender, hasPositive, status, expanded, run } = data;
   const [infoOpen, setInfoOpen] = useState(false);
   const [dragFrom, setDragFrom] = useState<number | null>(null);
@@ -569,7 +566,7 @@ export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskF
     };
     const up = (e: PointerEvent) => {
       const to = targetAt(e);
-      if (to !== null) moveImagePort(node.id, dragFrom, to);
+      if (to !== null) apply({ kind: "moveImagePort", taskId: node.id, from: dragFrom, to });
       setDragFrom(null);
     };
     document.body.dataset.portDrag = "none";
@@ -583,7 +580,7 @@ export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskF
       window.removeEventListener("pointerup", up);
       window.removeEventListener("pointercancel", up);
     };
-  }, [dragFrom, node.id, moveImagePort]);
+  }, [dragFrom, node.id, apply]);
 
   // 端口数量、顺序或展开状态变化后，React Flow 需要重新测量 Handle 位置。
   const portSignature = `${expanded}|${ports.negative}|${ports.imageSlots}|${hasPositive}|${slots.map((s) => `${s.kind}:${s.port}:${s.userPort}:${s.label}`).join(",")}`;
@@ -593,7 +590,7 @@ export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskF
   const tier = node.size_spec.tier;
   const ratios = rule && tier ? ratiosForSizeTier(rule, tier) : [];
   const isAuto = isAutoRatio(node.size_spec);
-  const setTier = (next: string) => rule && updateNode(node.id, { size_spec: withSizeTier(rule, node.size_spec, next) });
+  const setTier = (next: string) => apply({ kind: "setTier", taskId: node.id, tier: next });
   /** 最终发送的像素（与提交时同一换算）；不可运行时为 null。 */
   const pixels = rule ? resolveSize(rule, node.size_spec) : null;
   /** 手动的宽高比在当前模型 / 分辨率档下发不出去：标「（不支持）」，值不动。 */
@@ -605,10 +602,7 @@ export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskF
   const transparentHint = images.length !== 1 ? "需要恰好一条图片线" : singleInfo?.has_alpha ? "" : "该图不带透明通道";
   const blocking = issues.filter((i) => i !== "正向提示词未连接");
   /** 宽高比：选「自动」转为跟随参考图（当场重算），选具体值转为手动；两者都是一个撤销步。 */
-  const setRatio = (next: string) => {
-    if (next !== AUTO_RATIO) return updateNode(node.id, { size_spec: manualSizeSpec(node.size_spec, next) });
-    if (rule) updateNode(node.id, { size_spec: autoSizeSpec(rule, tier, null, null, node.size_spec) });
-  };
+  const setRatio = (next: string) => apply({ kind: "setRatio", taskId: node.id, ratio: next === AUTO_RATIO ? null : next });
   const ratioNote = rule && node.size_spec.ratio !== null ? (isAuto ? autoRatioLabel(rule, node.size_spec) : ratioText(rule, node.size_spec.ratio)) : null;
   const hover = useHover(taskHoverInfo({ modelName: modelLabel, sizeSpec: node.size_spec, ratioNote, issues, warnings, status }));
   const target = { kind: "node", nodeId: node.id } as const;
@@ -635,7 +629,7 @@ export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskF
         <>
           <div className="field nodrag">
             <span className="field-label">模型</span>
-            <select value={node.model} onChange={(e) => setTaskModel(node.id, e.target.value)} disabled={locked} aria-label="模型">
+            <select value={node.model} onChange={(e) => apply({ kind: "setModel", taskId: node.id, model: e.target.value })} disabled={locked} aria-label="模型">
               {!listed && <option value={node.model}>{modelLabel}</option>}
               <ModelOptions table={table} available={availableModels} />
             </select>
@@ -653,7 +647,7 @@ export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskF
                     type="checkbox"
                     checked={node.layer_decomposition}
                     disabled={locked}
-                    onChange={(e) => updateNode(node.id, { layer_decomposition: e.target.checked })}
+                    onChange={(e) => apply({ kind: "setTaskFlag", taskId: node.id, flag: "layer_decomposition", value: e.target.checked })}
                   />
                   拆分图层
                 </label>
@@ -664,7 +658,7 @@ export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskF
                     type="checkbox"
                     checked={node.transparent_background}
                     disabled={locked || (!transparentReady && !node.transparent_background)}
-                    onChange={(e) => updateNode(node.id, { transparent_background: e.target.checked })}
+                    onChange={(e) => apply({ kind: "setTaskFlag", taskId: node.id, flag: "transparent_background", value: e.target.checked })}
                   />
                   透明背景{transparentHint && <span className="muted">（{transparentHint}）</span>}
                 </label>

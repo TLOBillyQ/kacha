@@ -6,7 +6,7 @@ import { fitImage, type FittedBytes, type FittedRecord, type ImageCodec } from "
 import { composeSendText, ERROR_CATEGORY_LABELS, fetchResultImage, GatewayError, generate, inlinesNegativePrompt, type FetchLike, type GenerationInput } from "./gateway";
 import { imagePortSlots, workflowOf } from "./graph";
 import { promptLanguage } from "./imageRefs";
-import { addResultNode } from "./layout";
+import type { RunResult } from "./layout";
 import { firstRegionOf, imageRefMap, overlayPhrases, regionNames, type SlotRef } from "./region";
 import { isAutoRatio, resolveSize } from "./size";
 import { imageSources, snapshotOf, withSubmitted } from "./submission";
@@ -273,7 +273,7 @@ export async function writeJob(deps: RunDeps, outputRoot: string, job: PreparedJ
   }
 }
 
-/** 调网关并存结果图；返回把结果节点加到画板上的更新函数。生成请求只发一次。 */
+/** 调网关并存结果图；返回落盘的结果（由画板编辑加成结果节点）。生成请求只发一次。 */
 export async function executeJob(
   deps: RunDeps,
   args: {
@@ -281,12 +281,11 @@ export async function executeJob(
     outputRoot: string;
     baseUrl: string;
     apiKey: string;
-    newNodeId: string;
     signal?: AbortSignal;
     /** 结果图下载结束（日志用）；取消不回调。 */
     onDownload?: (result: { ok: true; images: number } | { ok: false; error: unknown }) => void;
   },
-): Promise<(board: Board) => Board> {
+): Promise<RunResult> {
   const { job, signal } = args;
   // 网关侧的计算停不下来；取消只是不再等待、不落结果。
   const { images } = await generate({ baseUrl: args.baseUrl, apiKey: args.apiKey, fetch: deps.fetch }, job.input);
@@ -320,6 +319,5 @@ export async function executeJob(
   } catch (e) {
     throw new LocalError(`保存结果图失败：${e instanceof Error ? e.message : String(e)}`);
   }
-  return (board) =>
-    addResultNode(board, { id: args.newNodeId, taskId: job.taskNodeId, submittedTaskId: job.taskId, file: saved.file, path: saved.path, record: job.record, layers });
+  return { taskId: job.taskNodeId, submittedTaskId: job.taskId, file: saved.file, path: saved.path, record: job.record, layers };
 }

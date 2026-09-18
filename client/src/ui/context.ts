@@ -1,7 +1,8 @@
 import { createContext, useContext, useEffect, useState } from "react";
-import type { Board, KnownNode, PortRef, Region } from "../core/board";
+import type { Board, PortRef } from "../core/board";
 import type { CapabilityTable, ModelCapability } from "../core/capabilities";
 import type { BoardAction, MenuTarget } from "../core/contextMenu";
+import type { BoardChange } from "../core/edit";
 import { joinPath, resolveFromRoot } from "../core/paths";
 import type { TaskStatus } from "../core/run";
 import { isInterrupted } from "../core/submission";
@@ -14,20 +15,14 @@ export interface BoardActions {
   outputRoot: string;
   /** 任务节点模型下拉：网关发现 ∩ 上架清单。 */
   availableModels: ModelCapability[];
-  /** 选模型：写节点并记为画板级最近模型。 */
-  setTaskModel: (id: string, modelId: string) => void;
-  updateNode: (id: string, patch: Partial<KnownNode>) => void;
-  moveImagePort: (taskId: string, from: number, to: number) => void;
-  /** 编辑已提交过的提示词节点，选「断开并分叉」。 */
-  forkPrompt: (promptId: string, text: string) => void;
+  /** 画板变更的唯一写入口（见 core/edit）：被拒或需告知时提示原因。 */
+  apply: (change: BoardChange) => void;
   /** 迭代动作：触发节点在多选内时按选中顺序带上其余图片节点；sourceLayer（1 起）= 接该图层而非合成结果；at = 新任务左上角的画布坐标（拖线建节点）。 */
   continueEditing: (nodeId: string, sourceLayer?: number | null, at?: { x: number; y: number }) => void;
   addAsReference: (resultId: string, sourceLayer?: number | null) => void;
   generateVariant: (resultId: string) => void;
   /** 缺图节点：pick = 选文件，search = 在输出根目录内按身份找。 */
   relocate: (nodeId: string, mode: "pick" | "search") => void;
-  /** 设置 / 清除一条图片连线的指示区域。 */
-  setEdgeRegion: (ref: { from: PortRef; to: PortRef }, region: Region | null) => void;
   /** 参考图 / 结果节点的「放大预览」：弹窗里可再选扇出任务编辑区域。 */
   previewNode: (nodeId: string) => void;
   /** 任务端口行的「指示区域」：直接编辑该条连线的区域。 */

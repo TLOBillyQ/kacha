@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { Board, TaskNode } from "../core/board";
 import type { CapabilityTable } from "../core/capabilities";
 import { GatewayError } from "../core/gateway";
-import type { Change } from "../core/history";
+import type { BoardChange, EditResult } from "../core/edit";
 import * as Q from "../core/queue";
 import { CancelledError, executeJob, failureLabel, prepareJob, prepareRegenerate, writeJob, type PreparedJob, type RunDeps, type TaskStatus } from "../core/run";
 import { tableDigest, writeOutcome, type TaskOutcome } from "../core/taskDir";
@@ -68,7 +68,7 @@ function errorFields(error: unknown): Record<string, unknown> {
 
 interface RunnerBoards {
   getBoard: (key: string) => Board | null;
-  updateBoard: (key: string, fn: (b: Board) => Board, change: Change) => void;
+  apply: (key: string, change: BoardChange) => EditResult | null;
   boardFileName: (key: string) => string | null;
 }
 
@@ -125,11 +125,7 @@ export function useRunner(boards: RunnerBoards, concurrency: number) {
   );
 
   const setLastSubmitted = useCallback((boardKey: string, taskNodeId: string, value: TaskNode["last_submitted"]) => {
-    boardsRef.current.updateBoard(
-      boardKey,
-      (b) => ({ ...b, nodes: b.nodes.map((n) => (n.id === taskNodeId && n.type === "task" ? { ...n, last_submitted: value } : n)) }),
-      "system",
-    );
+    boardsRef.current.apply(boardKey, { kind: "submitted", taskId: taskNodeId, lastSubmitted: value });
   }, []);
 
   /** 任务目录已写的任务没有结果时记下结局，重开时据此区分失败 / 已取消 / 已中断；写不了就算了。 */
@@ -160,19 +156,18 @@ export function useRunner(boards: RunnerBoards, concurrency: number) {
           if (controller.signal.aborted) recordOutcome(entry, { kind: "cancelled", gatewayMayContinue: false });
         }
         if (controller.signal.aborted) return;
-        const apply = await executeJob(deps, {
+        const result = await executeJob(deps, {
           job: entry.job,
           outputRoot: target.outputRoot,
           baseUrl: target.baseUrl,
           apiKey: target.apiKey,
-          newNodeId: crypto.randomUUID(),
           signal: controller.signal,
           onDownload: (result) =>
             logEvent("download", { task_id: job.taskId, model: job.plan.model, ...(result.ok ? { ok: true, images: result.images } : { ok: false, ...errorFields(result.error) }) }),
         });
         if (controller.signal.aborted) return;
         logTransition(entry, "running", "succeeded");
-        boardsRef.current.updateBoard(target.boardKey, apply, "system");
+        boardsRef.current.apply(target.boardKey, { kind: "runResult", result });
         setStatus(job.taskNodeId, null);
         queue.current = Q.complete(queue.current, taskId);
       } catch (e) {

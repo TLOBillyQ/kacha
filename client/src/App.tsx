@@ -2,10 +2,11 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { ReactFlowProvider } from "@xyflow/react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BOARD_EXTENSION, type Board } from "./core/board";
 import { BUILTIN_TABLE, effectiveTable, type CapabilityTable } from "./core/capabilities";
-import { redoLabel, undoLabel, type Change } from "./core/history";
+import type { BoardChange } from "./core/edit";
+import { redoLabel, undoLabel } from "./core/history";
 import { basename } from "./core/paths";
 import { runDispatch, runScope, buildConfirmItems, imageSources, type ConfirmItem } from "./core/submission";
 import { parseUiState, serializeUiState, type UiState } from "./core/uiState";
@@ -45,17 +46,26 @@ export function App() {
   const started = useRef(false);
   const initialUi = useRef<UiState | null>(null);
   const windowSize = useRef<UiState["window"]>(null);
-  const boards = useBoardSessions(outputRoot);
+  // 编辑环境随渲染更新（能力表、网关发现、锁定集），sessions 在每次画板变更时取最新一份。
+  const envRef = useRef({ table, discovery: settings.discovery, locked: new Set<string>() as ReadonlySet<string> });
+  const boards = useBoardSessions(
+    outputRoot,
+    useCallback(() => envRef.current, []),
+  );
   const { sessions, activeKey, openPath, createBoard, flushAll } = boards;
 
-  const { updateBoard, undoBoard, redoBoard } = boards;
+  const { apply, check, undoBoard, redoBoard } = boards;
   const runner = useRunner(boards, settings.settings.concurrency);
   const runnerRef = useRef(runner);
   runnerRef.current = runner;
+  // 排队 / 执行中的任务节点：参数与连线锁定，上游提示词仍可编辑（经三选）。
+  const locked = useMemo<ReadonlySet<string>>(() => new Set([...runner.statuses].filter(([, st]) => isActive(st)).map(([id]) => id)), [runner.statuses]);
+  envRef.current = { table, discovery: settings.discovery, locked };
   const [focus, setFocus] = useState<{ boardKey: string; nodeId: string; nonce: number } | null>(null);
-  const updateActive = useCallback((fn: (b: Board) => Board, change: Change) => activeKey && updateBoard(activeKey, fn, change), [activeKey, updateBoard]);
-  const undoActive = useCallback((locked: ReadonlySet<string>) => activeKey && undoBoard(activeKey, locked), [activeKey, undoBoard]);
-  const redoActive = useCallback((locked: ReadonlySet<string>) => activeKey && redoBoard(activeKey, locked), [activeKey, redoBoard]);
+  const applyActive = useCallback((change: BoardChange) => (activeKey ? apply(activeKey, change) : null), [activeKey, apply]);
+  const checkActive = useCallback((change: BoardChange) => (activeKey ? check(activeKey, change) : null), [activeKey, check]);
+  const undoActive = useCallback(() => activeKey && undoBoard(activeKey), [activeKey, undoBoard]);
+  const redoActive = useCallback(() => activeKey && redoBoard(activeKey), [activeKey, redoBoard]);
   const openFromCanvas = useCallback((p: string) => void openOrWarnRef.current(p), []);
   const openOrWarnRef = useRef<(p: string) => Promise<void>>(async () => undefined);
 
@@ -457,7 +467,9 @@ export function App() {
               boardFile={basename(active.path)}
               table={table}
               outputRoot={outputRoot}
-              update={updateActive}
+              apply={applyActive}
+              check={checkActive}
+              locked={locked}
               onUndo={undoActive}
               onRedo={redoActive}
               undoLabel={undoLabel(active.history)}

@@ -60,6 +60,9 @@ export interface NewResult {
   layers?: LayerRecord[];
 }
 
+/** 一次运行落盘的结果：节点 id 由画板编辑分配。 */
+export type RunResult = Omit<NewResult, "id">;
+
 /** 加结果节点与系统连线；任务节点已被删除时原样返回。 */
 export function addResultNode(board: Board, result: NewResult): Board {
   const size = imageNodeSize(IMAGE_NODE_WIDTH, sizeSpecAspect(result.record.size_spec));
