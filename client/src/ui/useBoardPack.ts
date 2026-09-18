@@ -4,8 +4,9 @@ import { getVersion } from "@tauri-apps/api/app";
 import { message, open, save } from "@tauri-apps/plugin-dialog";
 import { useCallback, useState } from "react";
 import { BOARD_EXTENSION, type Board } from "../core/board";
-import { buildExportSpec, importSummary, inspectPack, PACK_EXTENSION, PACK_FILE_FILTER, planExport, type PackFs } from "../core/boardPack";
+import { buildExportSpec, importSummary, inspectPack, PACK_EXTENSION, PACK_FILE_FILTER, planExport } from "../core/boardPack";
 import { basename } from "../core/paths";
+import { packFs } from "../shell/adapters";
 import { ipc, PACK_CANCELLED } from "../shell/ipc";
 import { logEvent } from "../shell/log";
 import type { PackDialogState } from "./BoardPackDialog";
@@ -18,7 +19,6 @@ interface PackBoards {
   addImportedBoard: (board: Board) => Promise<string>;
 }
 
-const packFs: PackFs = { isFile: ipc.isFile, sha256: ipc.fileSha256 };
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 type Outcome<T> = { ok: true; value: T } | { ok: false; result: "cancelled" | "failed"; error: string };

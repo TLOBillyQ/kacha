@@ -48,8 +48,9 @@ import { copySelection, lineage, LOCKED_HINT, PASTE_OFFSET, producerOf, type Cli
 import { renderedImageSize } from "../core/nodeSize";
 import { basename, dirname, joinPath, resolveFromRoot, toRootRelative } from "../core/paths";
 import { effectiveRegionRender } from "../core/region";
-import { findReferenceFile, findResultFile, IMAGE_EXTENSIONS, type RelocateFs } from "../core/relocate";
+import { findReferenceFile, findResultFile, IMAGE_EXTENSIONS } from "../core/relocate";
 import { imageRefProblems, imageSources, type SnapshotImage } from "../core/submission";
+import { relocateFs } from "../shell/adapters";
 import { ipc } from "../shell/ipc";
 import { logEvent } from "../shell/log";
 import { saveCopyAs } from "../shell/saveFile";
@@ -62,12 +63,6 @@ import { ModelOptions, nodeTypes, type ImagePortInfo, type ImageSlotInfo } from 
 import { DragContext } from "./ports";
 import { PreviewDialog, type PreviewRequest, type RegionTarget } from "./PreviewDialog";
 import { isTyping, useCanvasInteraction, type Selection } from "./useCanvasInteraction";
-
-const relocateFs: RelocateFs = {
-  listDir: ipc.listDir,
-  isFile: ipc.isFile,
-  sha256: async (path) => (await ipc.inspectImage(path)).sha256,
-};
 
 /** 复制粘贴的剪贴板：应用内共享，可粘到另一个画板（只带节点之间的连线，不跨画板连线）。 */
 let clipboard: Clip | null = null;
