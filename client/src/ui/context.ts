@@ -3,10 +3,11 @@ import type { Board, PortRef } from "../core/board";
 import type { CapabilityTable, ModelCapability } from "../core/capabilities";
 import type { BoardAction, MenuTarget } from "../core/contextMenu";
 import type { BoardChange } from "../core/edit";
-import { joinPath, resolveFromRoot } from "../core/paths";
+import { resolveFromRoot } from "../core/paths";
 import type { TaskStatus } from "../core/run";
 import { isInterrupted } from "../core/submission";
-import { OUTCOME_FILE, parseOutcome, taskDirOfTaskId, type TaskOutcome } from "../core/taskDir";
+import { readOutcome, type TaskOutcome } from "../core/taskDir";
+import { taskFs } from "../shell/adapters";
 import { ipc, type ImageInfo } from "../shell/ipc";
 import { logEvent } from "../shell/log";
 
@@ -128,14 +129,12 @@ export function useMissingImages(board: Board, outputRoot: string): ReadonlySet<
 // 任务目录的结局记录只写一次，读过就缓存；null = 没有记录。
 const outcomeCache = new Map<string, Promise<TaskOutcome | null>>();
 
-function readOutcome(outputRoot: string, taskId: string): Promise<TaskOutcome | null> {
-  const dir = taskDirOfTaskId(taskId);
-  if (!dir) return Promise.resolve(null);
-  const path = joinPath(outputRoot, ...dir.split("/"), OUTCOME_FILE);
-  let pending = outcomeCache.get(path);
+function cachedOutcome(outputRoot: string, taskId: string): Promise<TaskOutcome | null> {
+  const key = JSON.stringify([outputRoot, taskId]);
+  let pending = outcomeCache.get(key);
   if (!pending) {
-    pending = ipc.readFileBytes(path).then(parseOutcome, () => null);
-    outcomeCache.set(path, pending);
+    pending = readOutcome(taskFs, outputRoot, taskId);
+    outcomeCache.set(key, pending);
   }
   return pending;
 }
@@ -157,7 +156,7 @@ export function useStoredStatuses(board: Board, boardFile: string, outputRoot: s
     let alive = true;
     void Promise.all(
       candidates.map(async ([nodeId, taskId]) => {
-        const outcome = await readOutcome(outputRoot, taskId);
+        const outcome = await cachedOutcome(outputRoot, taskId);
         if (!outcome && !loggedInterrupted.has(taskId)) {
           loggedInterrupted.add(taskId);
           logEvent("task", { task_id: taskId, board_file: boardFile, task_node_id: nodeId, from_status: "running", to_status: "interrupted" });

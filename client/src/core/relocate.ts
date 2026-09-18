@@ -1,7 +1,7 @@
 // 重新定位：画板引用的图片缺失时，在输出根目录内按身份找回；不扫全盘。
 // 结果按 task_id 找任务目录，参考图按 sha256 找文件。文件系统由调用方注入。
 import { BOARDS_DIR_NAME, joinPath } from "./paths";
-import { taskDirOfTaskId } from "./taskDir";
+import { taskFilePath } from "./taskDir";
 
 export interface DirEntry {
   name: string;
@@ -21,11 +21,8 @@ const quiet = <T>(p: Promise<T>, fallback: T) => p.catch(() => fallback);
 
 /** 结果：先看 task_id 推导出的任务目录，再在根目录内递归找同名任务目录。 */
 export async function findResultFile(fs: RelocateFs, root: string, ref: { task_id: string; file: string }): Promise<string | null> {
-  const dir = taskDirOfTaskId(ref.task_id);
-  if (dir) {
-    const expected = joinPath(root, ...dir.split("/"), ref.file);
-    if (await quiet(fs.isFile(expected), false)) return expected;
-  }
+  const expected = taskFilePath(root, ref.task_id, ref.file);
+  if (expected && (await quiet(fs.isFile(expected), false))) return expected;
   for (const dir of await walk(fs, root, (name) => name === ref.task_id)) {
     const candidate = joinPath(dir, ref.file);
     if (await quiet(fs.isFile(candidate), false)) return candidate;

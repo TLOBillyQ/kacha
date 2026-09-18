@@ -7,6 +7,7 @@ import { resolveFromRoot } from "./paths";
 import { planSend, promptLanguage, referenceProblemsOf, type ReferenceProblems, type SendPlan } from "./sendPlan";
 import { modelAvailabilityIssue, type Discovery } from "./settings";
 import type { SizeSpec } from "./size";
+import { layerFileName } from "./taskDir";
 
 export type SnapshotImage =
   | { kind: "reference"; path: string; sha256: string; region: Region | null }
@@ -134,7 +135,7 @@ export function imageSources(board: Board, taskId: string, outputRoot: string): 
     if (src?.type === "result") {
       // 接了某一图层：路径指向 layers/NN.<ext>（文件名以结果记录为准），标签点明图层序号。
       if (e.source_layer !== null) {
-        const file = src.record.layers?.[e.source_layer - 1]?.file ?? `layers/${String(e.source_layer).padStart(2, "0")}.png`;
+        const file = src.record.layers?.[e.source_layer - 1]?.file ?? layerFileName(e.source_layer);
         const dir = src.path.slice(0, src.path.length - src.file.length);
         return [{ nodeId: src.id, label: `${src.file} 图层${e.source_layer}`, absPath: resolveFromRoot(outputRoot, `${dir}${file}`) }];
       }

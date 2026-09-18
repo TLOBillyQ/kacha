@@ -4,6 +4,7 @@
 // Rust 壳（src-tauri/src/board_pack.rs）只按给定条目与合并单元搬字节。文件系统由调用方注入。
 import { parseBoard, serializeBoard, type Board, type BoardNode } from "./board";
 import { BOARDS_DIR_NAME, basename, resolveFromRoot, toRootRelative } from "./paths";
+import { TASK_RECORD_FILE, taskDirOfRelPath } from "./taskDir";
 
 export const PACK_FORMAT_VERSION = 1;
 export const PACK_EXTENSION = ".ugcpack";
@@ -12,7 +13,6 @@ export const PACK_FILE_FILTER = { name: "画板包", extensions: [PACK_EXTENSION
 export const PACK_MANIFEST = "manifest.json";
 /** 不在任务目录里的参考图在包内（及导入后根目录内）的位置：导入参考图/<sha256>.<ext>。 */
 export const IMPORTED_REFERENCES_DIR = "导入参考图";
-const TASK_RECORD = "task.json";
 
 export interface PackFs {
   isFile(absPath: string): Promise<boolean>;
@@ -31,14 +31,7 @@ export interface ExportPlan {
   missing: { nodeId: string; path: string }[];
 }
 
-const DATE_DIR = /^\d{4}-\d{2}-\d{2}$/;
 const isAbsolute = (p: string) => /^[a-zA-Z]:[\\/]/.test(p) || p.startsWith("\\\\") || p.startsWith("/");
-
-/** 相对路径落在 `<日期>/<task_id>/…` 里时返回任务目录。 */
-function taskDirOfRelPath(rel: string): string | null {
-  const parts = rel.split("/");
-  return parts.length >= 3 && DATE_DIR.test(parts[0]) && parts[1] ? `${parts[0]}/${parts[1]}` : null;
-}
 
 function extensionOf(path: string): string {
   const name = basename(path);
@@ -183,10 +176,10 @@ export async function inspectPack(entries: string[], readTexts: (names: string[]
     else return { kind: "corrupt", reason: `包内含无法识别的路径：${name}` };
   }
   for (const dir of taskDirs) {
-    if (!names.has(`${dir}/${TASK_RECORD}`)) return { kind: "corrupt", reason: `任务目录 ${dir} 缺少 ${TASK_RECORD}` };
+    if (!names.has(`${dir}/${TASK_RECORD_FILE}`)) return { kind: "corrupt", reason: `任务目录 ${dir} 缺少 ${TASK_RECORD_FILE}` };
   }
   const units: MergeUnit[] = [
-    ...[...taskDirs].sort().map((path) => ({ path, identity: TASK_RECORD })),
+    ...[...taskDirs].sort().map((path) => ({ path, identity: TASK_RECORD_FILE })),
     ...references.sort().map((path) => ({ path, identity: null })),
   ];
   return { kind: "ok", boards: versions.boards, units };

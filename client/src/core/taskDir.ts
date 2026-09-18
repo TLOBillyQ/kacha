@@ -26,9 +26,6 @@ function readError(label: string, e: unknown): LocalError {
   return new LocalError(`读取${label}失败：${e instanceof Error ? e.message : String(e)}`);
 }
 
-/** 任务记录文件名。 */
-export const TASK_RECORD_FILE = "task.json";
-
 const pad = (n: number, width = 2) => String(n).padStart(width, "0");
 
 /** `YYYYMMDDTHHMMSSZ-xxxxxxxx`：可按时间排序，随机段避免同秒冲突。 */
@@ -37,8 +34,8 @@ export function newTaskId(now: Date, random32: () => number = () => crypto.getRa
   return `${stamp}-${(random32() >>> 0).toString(16).padStart(8, "0")}`;
 }
 
-/** 相对输出根目录的任务目录，正斜杠。 */
-export function taskDirOf(submittedAt: Date, taskId: string): string {
+/** 相对输出根目录的任务目录，正斜杠；日期取提交时刻的 UTC 日期。 */
+function taskDirOf(submittedAt: Date, taskId: string): string {
   return `${submittedAt.toISOString().slice(0, 10)}/${taskId}`;
 }
 
@@ -46,6 +43,21 @@ export function taskDirOf(submittedAt: Date, taskId: string): string {
 export function taskDirOfTaskId(taskId: string): string | null {
   const m = /^(\d{4})(\d{2})(\d{2})T\d{6}Z-/.exec(taskId);
   return m ? `${m[1]}-${m[2]}-${m[3]}/${taskId}` : null;
+}
+
+/** 任务目录的第一层：UTC 日期目录。 */
+const DATE_DIR = /^\d{4}-\d{2}-\d{2}$/;
+
+/** 相对输出根目录的路径（正斜杠）落在 `<日期>/<task_id>/…` 里时返回任务目录，否则 null。 */
+export function taskDirOfRelPath(rel: string): string | null {
+  const parts = rel.split("/");
+  return parts.length >= 3 && DATE_DIR.test(parts[0]) && parts[1] ? `${parts[0]}/${parts[1]}` : null;
+}
+
+/** 任务目录里某个文件（相对任务目录，可含 `layers/` 这类子目录）的绝对路径；任务编号不是本工具生成的时为 null。 */
+export function taskFilePath(outputRoot: string, taskId: string, file: string): string | null {
+  const dir = taskDirOfTaskId(taskId);
+  return dir ? taskPath(outputRoot, dir, file) : null;
 }
 
 export function sniffImage(bytes: Uint8Array): { ext: string; mediaType: string } | null {
@@ -237,6 +249,11 @@ export interface LayerImage {
   boundingBox: number[];
 }
 
+/** 图层文件名（相对任务目录）：layers/<两位序号>.<ext>，序号 1 起、按 z_index 升序。 */
+export function layerFileName(index: number, ext = "png"): string {
+  return `layers/${pad(index)}.${ext}`;
+}
+
 /** 拆分图层落盘：按 z_index 升序写 layers/01.<ext>…；返回写盘后的图层记录。 */
 export async function saveLayers(fs: TaskFs, outputRoot: string, relDir: string, layers: LayerImage[]): Promise<LayerRecord[]> {
   const ordered = [...layers].sort((a, b) => a.zIndex - b.zIndex);
@@ -244,7 +261,7 @@ export async function saveLayers(fs: TaskFs, outputRoot: string, relDir: string,
   for (const [i, layer] of ordered.entries()) {
     const kind = sniffImage(layer.bytes);
     if (!kind) throw new Error(`图层${i + 1} 不是可识别的图片`);
-    const file = `layers/${pad(i + 1)}.${kind.ext}`;
+    const file = layerFileName(i + 1, kind.ext);
     await fs.writeNewFile(taskPath(outputRoot, relDir, file), layer.bytes);
     out.push({ file, z_index: layer.zIndex, bounding_box: layer.boundingBox });
   }
@@ -259,12 +276,20 @@ export function layersExportJson(layers: LayerRecord[]): string {
 /** 没有结果图的任务的结局；没有记录 = 上次进行中时程序异常退出（已中断）。 */
 export type TaskOutcome = { kind: "failed"; label: string } | { kind: "cancelled"; gatewayMayContinue: boolean };
 
+/** 任务记录与结局记录的文件名（相对任务目录）。 */
+export const TASK_RECORD_FILE = "task.json";
 export const OUTCOME_FILE = "outcome.json";
 
 /** 写结局记录 outcome.json：只含脱敏的错误类别，不含提示词、密钥与网关原文。 */
 export async function writeOutcome(fs: TaskFs, outputRoot: string, relDir: string, outcome: TaskOutcome): Promise<void> {
   const record = outcome.kind === "failed" ? { outcome: "failed", label: outcome.label } : { outcome: "cancelled", gateway_may_continue: outcome.gatewayMayContinue };
   await fs.writeNewFile(taskPath(outputRoot, relDir, OUTCOME_FILE), new TextEncoder().encode(`${JSON.stringify(record, null, 2)}\n`));
+}
+
+/** 按任务编号读结局记录；没有记录、读不了或读不懂都为 null（无缓存，缓存归调用方）。 */
+export async function readOutcome(fs: Pick<TaskFs, "readFile">, outputRoot: string, taskId: string): Promise<TaskOutcome | null> {
+  const path = taskFilePath(outputRoot, taskId, OUTCOME_FILE);
+  return path ? fs.readFile(path).then(parseOutcome, () => null) : null;
 }
 
 export function parseOutcome(bytes: Uint8Array): TaskOutcome | null {

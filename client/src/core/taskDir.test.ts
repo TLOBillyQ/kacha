@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { BUILTIN_TABLE } from "./capabilities";
 import { memoryTaskFs } from "./testing/memoryTaskFs";
-import { layersExportJson, newTaskId, parseOutcome, saveLayers, saveResult, sha256Hex, sniffImage, tableDigest, taskDirOf, taskDirOfTaskId, LocalError, readSubmission, writeOutcome, writeSubmission, type SubmissionPlan } from "./taskDir";
+import { layerFileName, layersExportJson, LocalError, newTaskId, parseOutcome, readOutcome, readSubmission, saveLayers, saveResult, sha256Hex, sniffImage, tableDigest, taskDirOfRelPath, taskDirOfTaskId, taskFilePath, writeOutcome, writeSubmission, type SubmissionPlan } from "./taskDir";
 
 const PNG = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="), (c) => c.charCodeAt(0));
 const JPEG = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0, 0x10]);
@@ -14,12 +14,25 @@ describe("任务编号与目录", () => {
   it("task_id = UTC 时间戳 + 8 位十六进制；目录 = <UTC 日期>/<task_id>", () => {
     const id = newTaskId(now, () => 0x3f9c2a1b);
     expect(id).toBe("20260916T091500Z-3f9c2a1b");
-    expect(taskDirOf(now, id)).toBe("2026-09-16/20260916T091500Z-3f9c2a1b");
-    // 本地已是次日也按 UTC 日期归档。
-    expect(taskDirOf(new Date("2026-09-16T23:30:00Z"), "x")).toBe("2026-09-16/x");
     expect(newTaskId(now, () => 5)).toMatch(/-00000005$/);
     expect(taskDirOfTaskId(id)).toBe("2026-09-16/20260916T091500Z-3f9c2a1b");
     expect(taskDirOfTaskId("not-a-task")).toBeNull();
+  });
+
+  it("任务目录里的文件路径：按输出根目录的分隔符拼接；任务编号不是本工具生成的为 null", () => {
+    const id = "20260916T091500Z-3f9c2a1b";
+    expect(taskFilePath("/root", id, "result.png")).toBe("/root/2026-09-16/20260916T091500Z-3f9c2a1b/result.png");
+    expect(taskFilePath("D:\\出图", id, "layers/01.png")).toBe("D:\\出图\\2026-09-16\\20260916T091500Z-3f9c2a1b\\layers\\01.png");
+    expect(taskFilePath("/root", "not-a-task", "result.png")).toBeNull();
+  });
+
+  it("相对输出根目录的路径落在 <日期>/<task_id>/… 里时还原任务目录", () => {
+    expect(taskDirOfRelPath("2026-09-16/t1/result.png")).toBe("2026-09-16/t1");
+    expect(taskDirOfRelPath("2026-09-16/t1/layers/01.png")).toBe("2026-09-16/t1");
+    expect(taskDirOfRelPath("2026-09-16/t1")).toBeNull();
+    expect(taskDirOfRelPath("2026-9-16/t1/result.png")).toBeNull();
+    expect(taskDirOfRelPath("refs/cat.png")).toBeNull();
+    expect(taskDirOfRelPath("导入参考图/aa.png")).toBeNull();
   });
 });
 
@@ -101,6 +114,13 @@ describe("提交时写任务目录", () => {
         { file: "reference-2.jpg", media_type: "image/jpeg", sha256: await sha256Hex(JPEG), source: { kind: "result", task_id: "old", file: "result.png" } },
       ],
     });
+  });
+
+  it("任务目录按提交时刻的 UTC 日期归档（本地已是次日也一样）", async () => {
+    const fs = memoryTaskFs();
+    const late = new Date("2026-09-16T23:30:00Z");
+    const { relDir } = await writeSubmission(fs, "/root", plan({ taskId: newTaskId(late, () => 1), submittedAt: late, references: [] }));
+    expect(relDir).toBe("2026-09-16/20260916T233000Z-00000001");
   });
 
   it("文生图没有参考图文件；工作流取自发送计划", async () => {
@@ -310,6 +330,18 @@ describe("结局记录 outcome.json", () => {
     expect(parseOutcome(fs.files.get("/root/2026-09-16/t2/outcome.json")!)).toEqual({ kind: "cancelled", gatewayMayContinue: false });
   });
 
+  it("按任务编号读回：失败 / 已取消 / 无记录", async () => {
+    const fs = memoryTaskFs();
+    const failed = "20260916T091500Z-00000001";
+    const cancelled = "20260916T091500Z-00000002";
+    await writeOutcome(fs, "/root", `2026-09-16/${failed}`, { kind: "failed", label: "网关限流" });
+    await writeOutcome(fs, "/root", `2026-09-16/${cancelled}`, { kind: "cancelled", gatewayMayContinue: true });
+    expect(await readOutcome(fs, "/root", failed)).toEqual({ kind: "failed", label: "网关限流" });
+    expect(await readOutcome(fs, "/root", cancelled)).toEqual({ kind: "cancelled", gatewayMayContinue: true });
+    expect(await readOutcome(fs, "/root", "20260916T091500Z-00000003")).toBeNull();
+    expect(await readOutcome(fs, "/root", "not-a-task")).toBeNull();
+  });
+
   it("读不懂的内容当作没有记录", () => {
     const bytes = (text: string) => new TextEncoder().encode(text);
     expect(parseOutcome(bytes("{"))).toBeNull();
@@ -319,6 +351,11 @@ describe("结局记录 outcome.json", () => {
 });
 
 describe("图层落盘与导出", () => {
+  it("图层文件名：layers/ 下两位序号，缺省扩展名 png", () => {
+    expect(layerFileName(1)).toBe("layers/01.png");
+    expect(layerFileName(12, "jpg")).toBe("layers/12.jpg");
+  });
+
   it("按 z_index 升序写 layers/NN.<ext>，返回图层记录", async () => {
     const fs = memoryTaskFs();
     const layers = await saveLayers(fs, "/root", "2026-09-16/t", [
