@@ -57,7 +57,7 @@ export type ReferenceFlowNode = Node<{ node: ReferenceModel; rules: InputImageRu
 export type ResultFlowNode = Node<{ node: ResultModel; rules: InputImageRule[]; missing: boolean }, "result">;
 export interface ImagePortInfo {
   label: string;
-  /** 源图片绝对路径；源节点不存在时为 null。 */
+  /** 源图片绝对路径（端口槽缩略图用）；源节点不存在时为 null。 */
   absPath: string | null;
 }
 /** 端口行按 imagePortSlots 展开口径：带区域的线在 highlight_overlay 下多出紧随的「叠加」锁定行（从属于原图，不占用户序号）。 */
@@ -587,7 +587,7 @@ export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskF
   const ratios = rule && tier ? ratiosForSizeTier(rule, tier) : [];
   const isAuto = isAutoRatio(node.size_spec);
   const setTier = (next: string) => apply({ kind: "setTier", taskId: node.id, tier: next });
-  /** 最终发送的像素（与提交时同一换算）；不可运行时为 null。 */
+  /** 最终发送的像素（与提交时同一换算）；发不出去或模型缺失时为 null。 */
   const pixels = view.size;
   /** 手动的宽高比在当前模型 / 分辨率档下发不出去：标「（不支持）」，值不动。 */
   const ratioUnsupported = view.ratioUnsupported;
@@ -638,7 +638,7 @@ export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskF
                   <input
                     type="checkbox"
                     checked={node.layer_decomposition}
-                    disabled={locked}
+                    disabled={locked || (!toggles.layerDecomposition.canEnable && !node.layer_decomposition)}
                     onChange={(e) => apply({ kind: "setTaskFlag", taskId: node.id, flag: "layer_decomposition", value: e.target.checked })}
                   />
                   拆分图层

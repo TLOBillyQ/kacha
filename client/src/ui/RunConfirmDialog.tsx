@@ -12,9 +12,9 @@ interface Props {
 }
 
 export function RunConfirmDialog({ items, scope, onConfirm, onCancel }: Props) {
-  const [checked, setChecked] = useState(() => new Set(items.filter((i) => i.issues.length === 0).map((i) => i.taskId)));
+  const [checked, setChecked] = useState(() => new Set(items.filter((i) => i.reasons.length === 0).map((i) => i.taskId)));
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const blocked = items.filter((i) => i.issues.length > 0).length;
+  const blocked = items.filter((i) => i.reasons.length > 0).length;
   const toggle = (set: Set<string>, id: string) => {
     const next = new Set(set);
     if (next.has(id)) next.delete(id);
@@ -30,7 +30,7 @@ export function RunConfirmDialog({ items, scope, onConfirm, onCancel }: Props) {
         </div>
         <ul className="confirm-list">
           {items.map((item, index) => {
-            const bad = item.issues.length > 0;
+            const bad = item.reasons.length > 0;
             const open = expanded.has(item.taskId);
             return (
               <li key={item.taskId} className={bad ? "confirm-bad" : ""}>

@@ -238,7 +238,7 @@ describe("节点标红 ≡ 运行被拦：二次确认与任务视图同一份",
   it.each(CASES)("$name", ({ board: b, table = BUILTIN_TABLE, facts = UNKNOWN }) => {
     const [item] = buildConfirmItems(b, table, ["t"], facts);
     const v = view(b, table, facts);
-    expect(item.issues).toEqual(v.reasons);
+    expect(item.reasons).toEqual(v.reasons);
     expect(item.warnings).toEqual(v.warnings);
   });
 });

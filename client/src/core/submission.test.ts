@@ -8,7 +8,7 @@ import type { UnrunnableReason } from "./taskView";
 import { memoryTaskFs } from "./testing/memoryTaskFs";
 
 /** 二次确认项的原因文案（种类与类别由 taskView.test 断言）。 */
-const texts = (item: ConfirmItem) => item.issues.map((r) => r.text);
+const texts = (item: ConfirmItem) => item.reasons.map((r) => r.text);
 const issue = (text: string): UnrunnableReason => ({ kind: "imageMissing", category: "error", text });
 
 function prompt(id: string, text: string): BoardNode {
@@ -167,7 +167,7 @@ describe("二次确认清单", () => {
       taskId: "t",
       modelName: "qwen-image-3.0-pro",
       firstLine: "把图2的帽子戴到图1头上",
-      issues: [],
+      reasons: [],
     });
     expect(item.send?.text).toBe("本次提供 2 张参考图，按顺序为图1、图2。\n把图2的帽子戴到图1头上\n第二行");
     expect(item.send?.negativeInlined).toBe(false);
@@ -228,7 +228,7 @@ describe("运行分派", () => {
     modelName: "m",
     firstLine: "",
     send: null,
-    issues: [],
+    reasons: [],
     warnings: [],
     ...patch,
   });
@@ -242,11 +242,11 @@ describe("运行分派", () => {
   });
 
   it("恰好一个标红任务：提示第一条原因", () => {
-    expect(runDispatch([confirmItem("t", { issues: [issue("正向提示词未连接")] })])).toEqual({ kind: "toast", message: "无法运行：正向提示词未连接" });
+    expect(runDispatch([confirmItem("t", { reasons: [issue("正向提示词未连接")] })])).toEqual({ kind: "toast", message: "无法运行：正向提示词未连接" });
   });
 
   it("恰好一个标红任务、多条原因：追加「等另外 N 项」（N 不含第一条）", () => {
-    const item = confirmItem("t", { issues: [issue("正向提示词未连接"), issue("图1 图片缺失：r1.png")], warnings: ["该模型英文序号未验证"] });
+    const item = confirmItem("t", { reasons: [issue("正向提示词未连接"), issue("图1 图片缺失：r1.png")], warnings: ["该模型英文序号未验证"] });
     expect(runDispatch([item])).toEqual({ kind: "toast", message: "无法运行：正向提示词未连接 等另外 1 项" });
   });
 
@@ -256,7 +256,7 @@ describe("运行分派", () => {
 
   it("两个及以上任务：弹确认窗，即使全部干净", () => {
     expect(runDispatch([confirmItem("t1"), confirmItem("t2")])).toEqual({ kind: "confirm" });
-    expect(runDispatch([confirmItem("t1", { issues: [issue("x")] }), confirmItem("t2")])).toEqual({ kind: "confirm" });
+    expect(runDispatch([confirmItem("t1", { reasons: [issue("x")] }), confirmItem("t2")])).toEqual({ kind: "confirm" });
   });
 });
 

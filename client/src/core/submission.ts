@@ -161,7 +161,7 @@ export interface ConfirmItem {
   /** 当前会发给模型的内容；模型不在能力表内时为 null（任务本就标红、不可运行）。 */
   send: SendPlan | null;
   /** 生成任务视图的不可运行原因（两类都拦）；非空 = 不可勾选。 */
-  issues: UnrunnableReason[];
+  reasons: UnrunnableReason[];
   /** 生成任务视图的警告：仅提示，不阻断。 */
   warnings: string[];
 }
@@ -209,7 +209,7 @@ export function buildConfirmItems(board: Board, table: CapabilityTable, taskIds:
         modelName: findModel(table, task.model)?.display_name ?? task.model,
         firstLine: prompt.split("\n").find((line) => line.trim())?.trim() ?? "",
         send: sendPlanOf(board, table, taskId),
-        issues: view.reasons,
+        reasons: view.reasons,
         warnings: view.warnings,
       },
     ];
@@ -223,9 +223,9 @@ export function runDispatch(items: ConfirmItem[]): RunDispatch {
   if (items.length === 0) return { kind: "toast", message: "没有需要运行的任务" };
   if (items.length > 1) return { kind: "confirm" };
   const [item] = items;
-  if (item.issues.length > 0) {
-    const more = item.issues.length > 1 ? ` 等另外 ${item.issues.length - 1} 项` : "";
-    return { kind: "toast", message: `无法运行：${item.issues[0].text}${more}` };
+  if (item.reasons.length > 0) {
+    const more = item.reasons.length > 1 ? ` 等另外 ${item.reasons.length - 1} 项` : "";
+    return { kind: "toast", message: `无法运行：${item.reasons[0].text}${more}` };
   }
   return item.warnings.length > 0 ? { kind: "confirm" } : { kind: "submit", taskId: item.taskId };
 }

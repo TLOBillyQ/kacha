@@ -33,10 +33,10 @@ export function SendTextDialog({ item, onCopy, onClose }: Props) {
 export function ItemProblems({ item }: { item: ConfirmItem }) {
   return (
     <>
-      {item.issues.length > 0 && (
+      {item.reasons.length > 0 && (
         <ul className="error-list">
-          {item.issues.map((issue) => (
-            <li key={`${issue.kind}:${issue.text}`}>{issue.text}</li>
+          {item.reasons.map((reason) => (
+            <li key={`${reason.kind}:${reason.text}`}>{reason.text}</li>
           ))}
         </ul>
       )}
