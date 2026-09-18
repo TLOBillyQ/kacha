@@ -50,7 +50,6 @@ import { countLabel, nodeEditChange, type Change, type UserChange } from "../cor
 import { addAsReference, addAsReferenceTarget, continueEditing, copySelection, lineage, LOCKED_HINT, pasteClip, PASTE_OFFSET, producerOf, type Clip, type Outcome } from "../core/iterate";
 import { PROMPT_NODE_SIZE } from "../core/layout";
 import { IMAGE_NODE_WIDTH, imageNodeSize, renderedImageSize } from "../core/nodeSize";
-import { placePreset, type Preset } from "../core/presets";
 import { basename, dirname, joinPath, resolveFromRoot, toRootRelative } from "../core/paths";
 import { effectiveRegionRender, setEdgeRegion } from "../core/region";
 import { findReferenceFile, findResultFile, IMAGE_EXTENSIONS, type RelocateFs } from "../core/relocate";
@@ -60,7 +59,6 @@ import { logEvent } from "../shell/log";
 import { saveCopyAs } from "../shell/saveFile";
 import { ActionBar } from "./ActionBar";
 import { ContextMenu } from "./ContextMenu";
-import { PresetDialog } from "./PresetDialog";
 import { BoardContext, primeImageInfo, useImageInfos, useMissingImages, useStoredStatuses, type BoardActions } from "./context";
 import { edgeTypes } from "./edges";
 import { HoverButton, HoverProvider, useHoverLayer } from "./hoverInfo";
@@ -145,7 +143,6 @@ export function BoardCanvas({
   const wrapper = useRef<HTMLDivElement>(null);
   const [selectedNodes, setSelectedNodes] = useState<ReadonlySet<string>>(new Set());
   const [selectedEdges, setSelectedEdges] = useState<ReadonlySet<string>>(new Set());
-  const [presetsOpen, setPresetsOpen] = useState(false);
   const [measured, setMeasured] = useState<Record<string, { width?: number; height?: number }>>({});
 
   const updateBoard = useCallback((fn: (b: Board) => Board, change: UserChange) => update((b) => syncImagePorts(fn(b)), change), [update]);
@@ -192,8 +189,8 @@ export function BoardCanvas({
   }, []);
   /** 拖线建节点多候选时弹的菜单（目前三种起点均为单候选，此路径预留）。 */
   const [dragMenu, setDragMenu] = useState<{ from: DragFrom; items: MenuItem[]; client: { x: number; y: number }; at: { x: number; y: number } } | null>(null);
-  // 预设 / 预览弹窗、上下文菜单开着时快捷键不作用于背后的画板（菜单自己处理 Esc）。
-  const dialogOpen = presetsOpen || preview !== null || menu !== null || dragMenu !== null;
+  // 预览弹窗、上下文菜单开着时快捷键不作用于背后的画板（菜单自己处理 Esc）。
+  const dialogOpen = preview !== null || menu !== null || dragMenu !== null;
   const dialogOpenRef = useRef(false);
   dialogOpenRef.current = dialogOpen;
   /** 设置原地展开的任务节点：只在本地，不存盘。 */
@@ -727,14 +724,6 @@ export function BoardCanvas({
   const addPrompt = (at = centerPosition()) =>
     addNode({ type: "prompt", id: crypto.randomUUID(), pos: posOf(at), size: PROMPT_NODE_SIZE, text: "", extra: {} }, { label: "新建提示词" });
 
-  const applyPreset = (preset: Preset) => {
-    // 先在空画板上落好节点再并入：更新函数可能延后执行，选中的 id 要先定下来。
-    const { board: placed, nodeIds } = placePreset({ ...board, nodes: [] }, preset, posOf(centerPosition()), () => crypto.randomUUID());
-    update((b) => ({ ...b, nodes: [...b.nodes, ...placed.nodes] }), { label: `使用预设「${preset.name}」` });
-    setSelectedNodes(new Set(nodeIds));
-    setPresetsOpen(false);
-  };
-
   /** promptId = 从该提示词拖出（拖线建节点），接新任务的正向端口，与建节点同一步。 */
   const addTask = (at = centerPosition(), promptId?: string) => {
     const id = crypto.randomUUID();
@@ -952,7 +941,6 @@ export function BoardCanvas({
         onPointerUpCapture={nav.onPointerUpCapture}
       >
         <div className="toolbar">
-          <button onClick={() => setPresetsOpen(true)}>项目预设…</button>
           {/* 新建生成任务用的模型（board.last_model）：是偏好不是画板编辑，不进撤销。 */}
           <select
             className="toolbar-model"
@@ -1038,7 +1026,6 @@ export function BoardCanvas({
             onClose={() => setDragMenu(null)}
           />
         )}
-        {presetsOpen && <PresetDialog onUse={applyPreset} onClose={() => setPresetsOpen(false)} />}
         {preview && <PreviewDialog key={preview.nonce} req={preview.req} toast={toast} onClose={() => setPreview(null)} />}
         {hover.layer}
       </div>

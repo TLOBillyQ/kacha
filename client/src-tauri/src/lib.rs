@@ -21,7 +21,6 @@ const UI_STATE_FILE: &str = "ui-state.json";
 pub(crate) const CAPABILITY_OVERRIDE_FILE: &str = "capabilities.override.json";
 pub(crate) const SETTINGS_FILE: &str = "settings.json";
 const MODELS_CACHE_FILE: &str = "models-cache.json";
-const PRESETS_FILE: &str = "presets.json";
 /// 与 v1 保持一致的默认输出根目录名（图片目录下）。
 const DEFAULT_OUTPUT_DIR_NAME: &str = "UGC AI 生图工具";
 
@@ -113,16 +112,6 @@ fn read_models_cache(app: tauri::AppHandle) -> Result<Option<String>, String> {
 #[tauri::command]
 fn write_models_cache(app: tauri::AppHandle, text: String) -> Result<(), String> {
     store::atomic_write(&app_data_dir(&app)?.join(MODELS_CACHE_FILE), text.as_bytes()).map_err(err)
-}
-
-#[tauri::command]
-fn read_presets(app: tauri::AppHandle) -> Result<Option<String>, String> {
-    store::read_text(&app_data_dir(&app)?.join(PRESETS_FILE)).map_err(err)
-}
-
-#[tauri::command]
-fn write_presets(app: tauri::AppHandle, text: String) -> Result<(), String> {
-    store::atomic_write(&app_data_dir(&app)?.join(PRESETS_FILE), text.as_bytes()).map_err(err)
 }
 
 /// 前端写日志的唯一入口；日志器未就绪（app-data 目录不可用）时静默丢弃。
@@ -324,8 +313,6 @@ pub fn run() {
             write_settings,
             read_models_cache,
             write_models_cache,
-            read_presets,
-            write_presets,
             log_event,
             diagnostics_preview,
             diagnostics_export,

@@ -589,11 +589,6 @@ button.primary[aria-disabled="true"] {
   background: #fff8c5;
   border: 1px solid var(--yellow);
 }
-.empty-small {
-  padding: 24px;
-  text-align: center;
-  color: #656d76;
-}
 
 .confirm-list {
   margin: 0;
@@ -954,41 +949,6 @@ button.primary[aria-disabled="true"] {
 .diagnostics-list li {
   display: flex;
   align-items: center;
-  gap: 6px;
-}
-.preset-list {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  margin: 4px 0 0;
-  padding: 0;
-  list-style: none;
-}
-.preset-row {
-  display: flex;
-  gap: 8px;
-  padding: 6px 8px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-}
-.preset-main {
-  flex: 1;
-  min-width: 0;
-}
-.preset-text {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.preset-actions {
-  display: flex;
-  align-items: flex-start;
-  gap: 4px;
-}
-.preset-editor,
-.form-col {
-  display: flex;
-  flex-direction: column;
   gap: 6px;
 }
 
