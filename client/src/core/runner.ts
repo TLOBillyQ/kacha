@@ -88,8 +88,8 @@ interface Job {
   target: RunTarget;
   taskNodeId: string;
   phase: Phase;
-  /** 同一批提交共用；取消画板 / 全部时整批后续不再读图。 */
-  batch: { cancelled: boolean };
+  /** 同一次提交的一组任务共用；按画板 / 全部取消时，其中还没读图的不再提交。 */
+  submission: { cancelled: boolean };
   prepared?: PreparedJob;
   /** 派发时写到任务节点上；undefined = 不改（生成变体）。 */
   lastSubmitted?: TaskNode["last_submitted"];
@@ -122,6 +122,8 @@ export function createRunner(ports: RunnerPorts): Runner {
   /** 画板键 → 任务节点 id → 终态（失败 / 已取消）。 */
   const finished = new Map<string, Map<string, TaskStatus>>();
   const handled = new Map<string, Set<string>>();
+  /** 已关闭的画板键（键不复用）：关闭前已开始、还在算摘要的提交不再入队。 */
+  const closed = new Set<string>();
   const listeners = new Set<() => void>();
   let snapshot = buildSnapshot();
 
@@ -285,8 +287,9 @@ export function createRunner(ports: RunnerPorts): Runner {
   const occupied = (boardKey: string, taskNodeId: string) => [...jobs].some((j) => j.target.boardKey === boardKey && j.taskNodeId === taskNodeId);
 
   /** 读参考图并入队；读的期间被取消则不入队。返回本地失败说明。 */
-  async function enqueue(target: RunTarget, taskNodeId: string, batch: Job["batch"], prepare: () => Promise<Prepared>): Promise<string | null> {
-    const job: Job = { target, taskNodeId, phase: "reading", batch, written: false, retries: 0, startedAt: 0, controller: new AbortController() };
+  async function enqueue(target: RunTarget, taskNodeId: string, submission: Job["submission"], prepare: () => Promise<Prepared>): Promise<string | null> {
+    if (closed.has(target.boardKey)) return null;
+    const job: Job = { target, taskNodeId, phase: "reading", submission, written: false, retries: 0, startedAt: 0, controller: new AbortController() };
     jobs.add(job);
     setFinished(job, null);
     publish();
@@ -348,8 +351,8 @@ export function createRunner(ports: RunnerPorts): Runner {
     };
     for (const job of [...jobs]) {
       if (!match(job)) continue;
-      // 按画板 / 全部取消时，同一批里还没读图的任务也不再提交。
-      if (filter.kind !== "task") job.batch.cancelled = true;
+      // 按画板 / 全部取消时，同一次提交里还没读图的任务也不再提交。
+      if (filter.kind !== "task") job.submission.cancelled = true;
       cancelJob(job);
     }
     pump();
@@ -357,12 +360,12 @@ export function createRunner(ports: RunnerPorts): Runner {
 
   async function submit(target: RunTarget, board: Board, taskNodeIds: string[]): Promise<string[]> {
     const problems: string[] = [];
-    const batch = { cancelled: false };
+    const submission = { cancelled: false };
     const tableSha256 = await tableDigest(target.table);
     for (const taskNodeId of taskNodeIds) {
-      if (batch.cancelled) break;
+      if (submission.cancelled || closed.has(target.boardKey)) break;
       if (occupied(target.boardKey, taskNodeId)) continue;
-      const problem = await enqueue(target, taskNodeId, batch, () => prepareJob(deps, { board, table: target.table, tableSha256, outputRoot: target.outputRoot, taskNodeId }));
+      const problem = await enqueue(target, taskNodeId, submission, () => prepareJob(deps, { board, table: target.table, tableSha256, outputRoot: target.outputRoot, taskNodeId }));
       if (problem) problems.push(problem);
     }
     return problems;
@@ -382,6 +385,7 @@ export function createRunner(ports: RunnerPorts): Runner {
     regenerate,
     cancel,
     closeBoard(boardKey) {
+      closed.add(boardKey);
       cancel({ kind: "board", boardKey });
       finished.delete(boardKey);
       handled.delete(boardKey);

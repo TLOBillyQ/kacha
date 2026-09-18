@@ -210,6 +210,7 @@ describe("任务运行器：取消", () => {
     expect(h.runner.getSnapshot().pending("A")).toBe(1);
     h.runner.cancel({ kind: "board", boardKey: "A" });
     expect(h.statuses()).toEqual({});
+    expect(h.read.held).toBe(1);
     h.read.open();
     expect(await submitting).toEqual([]);
     await settle();
@@ -217,6 +218,18 @@ describe("任务运行器：取消", () => {
     expect(h.runner.getSnapshot().pending()).toBe(0);
     expect(h.files.size).toBe(0);
     expect(h.logs).toEqual([]);
+    // t2 没有参考图：若提交了，会读图后入队留下日志；这里只断言读图闸没再被经过。
+    expect(h.read.held).toBe(0);
+  });
+
+  it("取消不存在的任务：无事发生", async () => {
+    const h = harness();
+    await h.runner.submit(h.target(), board(), ["t1"]);
+    await settle();
+    const before = h.runner.getSnapshot();
+    h.runner.cancel({ kind: "task", boardKey: "A", taskNodeId: "zzz" });
+    expect(h.statuses()).toEqual(Object.fromEntries(before.board("A").statuses));
+    expect(h.logs.filter((l) => l.fields.to_status === "cancelled")).toEqual([]);
   });
 
   it("取消全部排队：执行中的不受影响", async () => {
@@ -316,6 +329,7 @@ describe("任务运行器：429 退避", () => {
     await settle();
     expect(h.runner.getSnapshot().active.map((a) => [a.taskNodeId, a.state])).toEqual([["t1", "running"], ["t2", "running"], ["t3", "waiting"]]);
     h.gateway.open();
+    await settle();
   });
 });
 
@@ -332,6 +346,7 @@ describe("任务运行器：并发上限", () => {
     const dispatches = h.logs.filter((l) => l.kind === "queue_dispatch").map((l) => [l.fields.task_node_id, l.fields.running, l.fields.waiting, l.fields.limit]);
     expect(dispatches).toEqual([["t1", 1, 0, 1], ["t2", 3, 0, 3], ["t3", 3, 0, 3]]);
     h.gateway.open();
+    await settle();
   });
 });
 
@@ -345,6 +360,7 @@ describe("任务运行器：跨画板", () => {
     expect(await h.runner.regenerate(h.target("A"), board(["t1"]), "t1")).toBeNull();
     await settle();
     expect(h.runner.getSnapshot().active.map((a) => `${a.boardKey}/${a.taskNodeId}`)).toEqual(["A/t1", "B/t9", "A/t2"]);
+    expect(h.logs.filter((l) => l.fields.to_status === "queued").map((l) => `${l.fields.board_file}/${l.fields.task_node_id}`)).toEqual(["A.ugcboard/t1", "B.ugcboard/t9", "A.ugcboard/t2"]);
     h.gateway.open();
     await settle();
     expect(h.changes.filter((c) => c.change.kind === "runResult").map((c) => c.boardKey)).toEqual(["A", "B", "A"]);
@@ -395,6 +411,22 @@ describe("任务运行器：关闭画板", () => {
     // 执行中被关掉的任务照样记下已取消，重开时由 outcome.json 给出。
     expect(outcomes(h)).toEqual(expect.arrayContaining([{ kind: "failed", label: "鉴权失败" }, { kind: "cancelled", gatewayMayContinue: true }]));
     expect(h.changes.filter((c) => c.change.kind === "runResult").map((c) => c.boardKey)).toEqual(["B"]);
+  });
+});
+
+describe("任务运行器：关闭画板时正在算摘要的提交", () => {
+  it("submit / regenerate 在关闭前已开始：不入队、不留状态", async () => {
+    const h = harness();
+    const submitting = h.runner.submit(h.target(), board(["t1", "t2"]), ["t1", "t2"]);
+    const regenerating = h.runner.regenerate(h.target(), board(), "t1");
+    h.runner.closeBoard("A");
+    expect(await submitting).toEqual([]);
+    expect(await regenerating).toBeNull();
+    await settle();
+    expect(h.statuses()).toEqual({});
+    expect(h.runner.getSnapshot().pending()).toBe(0);
+    expect(h.files.size).toBe(0);
+    expect(h.logs).toEqual([]);
   });
 });
 

@@ -35,7 +35,7 @@ interface Saver {
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const samePath = (a: string, b: string) => a.replace(/\\/g, "/").toLowerCase() === b.replace(/\\/g, "/").toLowerCase();
 
-/** 编辑环境里随应用状态变化的部分：能力表、网关发现、该画板的锁定集（排队 / 执行中的任务节点）。 */
+/** 编辑环境里随应用状态变化的部分：能力表、网关发现、该画板的锁定集（排队 / 执行 / 限流退避中的任务节点）。 */
 export type EnvSource = (key: string) => Pick<EditEnv, "table" | "discovery" | "locked">;
 
 export function useBoardSessions(outputRoot: string | null, envSource: EnvSource) {
