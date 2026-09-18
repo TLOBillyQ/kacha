@@ -9,8 +9,9 @@ import type { BoardChange } from "./core/edit";
 import { redoLabel, undoLabel } from "./core/history";
 import { basename } from "./core/paths";
 import type { Runner, RunTarget } from "./core/runner";
-import { runDispatch, runScope, buildConfirmItems, imageSources, type ConfirmItem } from "./core/submission";
+import { runDispatch, runScope, buildConfirmItems, collectRunFacts, type ConfirmItem } from "./core/submission";
 import { parseUiState, serializeUiState, type UiState } from "./core/uiState";
+import { imageProbe } from "./shell/adapters";
 import { ipc } from "./shell/ipc";
 import { BoardPackDialog } from "./ui/BoardPackDialog";
 import { BoardToolbar } from "./ui/BoardToolbar";
@@ -127,19 +128,7 @@ export function App() {
   /** 与运行时相同的上下文算确认项：逐张检测参考图（缺失 / 透明通道）。运行与查看发送文本共用。 */
   const confirmItemsOf = useCallback(
     async (board: Board, ids: string[], root: string) => {
-      const sources = ids.flatMap((id) => imageSources(board, id, root));
-      const missingNodes = new Set<string>();
-      const alphaByNode = new Map<string, boolean>();
-      await Promise.all(
-        sources.map((src) =>
-          ipc.inspectImage(src.absPath).then(
-            (info) => alphaByNode.set(src.nodeId, info.has_alpha),
-            () => {
-              missingNodes.add(src.nodeId);
-            },
-          ),
-        ),
-      );
+      const { missingNodes, alphaByNode } = await collectRunFacts(imageProbe, board, ids, root);
       return buildConfirmItems(board, table, ids, { discovery: settings.discovery, missingNodes, alphaByNode });
     },
     [settings.discovery, table],

@@ -3,6 +3,7 @@ import type { PackFs, PackIo } from "../core/boardPack";
 import type { RelocateFs } from "../core/relocate";
 import type { RunDeps } from "../core/run";
 import type { SettingsPorts } from "../core/settings";
+import type { ImageProbe } from "../core/submission";
 import type { TaskFs } from "../core/taskDir";
 import { imageCodec } from "./imageCodec";
 import { httpFetch, ipc } from "./ipc";
@@ -43,6 +44,10 @@ export const packIo: PackIo = {
   entries: ipc.boardPackEntries,
   readTexts: ipc.boardPackReadTexts,
   importUnits: ipc.boardPackImport,
+};
+
+export const imageProbe: ImageProbe = {
+  inspectImage: ipc.inspectImage,
 };
 
 export const settingsPorts: SettingsPorts = {

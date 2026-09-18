@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Board, BoardEdge, BoardNode, TaskNode } from "./board";
 import { BUILTIN_TABLE } from "./capabilities";
-import { buildConfirmItems, imageRefProblems, imageSources, isDirty, isInterrupted, runDispatch, runScope, snapshotOf, withSubmitted, type ConfirmItem } from "./submission";
+import { buildConfirmItems, collectRunFacts, imageRefProblems, imageSources, isDirty, isInterrupted, runDispatch, runScope, snapshotOf, withSubmitted, type ConfirmItem } from "./submission";
 
 function prompt(id: string, text: string): BoardNode {
   return { id, type: "prompt", pos: [0, 0], size: [100, 100], extra: {}, text };
@@ -282,6 +282,34 @@ describe("图片来源", () => {
       { nodeId: "r1", label: "r1.png", absPath: "/root/refs/r1.png" },
       { nodeId: "x", label: "result.png", absPath: "/root/2026-09-16/task-x/result.png" },
     ]);
+  });
+});
+
+describe("运行前事实采集", () => {
+  it("逐张探测参考图：探测成功记透明通道，探测抛任何错（缺失或不可解码）都算缺失", async () => {
+    const probed: string[] = [];
+    const probe = {
+      inspectImage: async (absPath: string) => {
+        probed.push(absPath);
+        if (absPath.endsWith("r1.png")) return { has_alpha: true };
+        throw new Error("无法解码");
+      },
+    };
+    const facts = await collectRunFacts(probe, editBoard(), ["t"], "/root");
+    expect(probed.sort()).toEqual(["/root/2026-09-16/task-x/result.png", "/root/refs/r1.png"]);
+    expect([...facts.missingNodes]).toEqual(["x"]);
+    expect([...facts.alphaByNode]).toEqual([["r1", true]]);
+  });
+
+  it("没有图片输入的任务不探测", async () => {
+    const probe = {
+      inspectImage: async () => {
+        throw new Error("不该调用");
+      },
+    };
+    const facts = await collectRunFacts(probe, board([prompt("p", "猫"), task("t")], [edge("p", "t", "positive")]), ["t"], "/root");
+    expect(facts.missingNodes.size).toBe(0);
+    expect(facts.alphaByNode.size).toBe(0);
   });
 });
 

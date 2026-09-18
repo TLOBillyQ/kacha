@@ -179,6 +179,36 @@ export interface ConfirmContext {
   alphaByNode?: ReadonlyMap<string, boolean>;
 }
 
+/** 运行前探测参考图的端口（壳层 inspectImage）。 */
+export interface ImageProbe {
+  inspectImage(absPath: string): Promise<{ has_alpha: boolean }>;
+}
+
+/**
+ * 运行前事实采集（#128）：逐张探测这些任务的图片输入。探测抛任何错都算缺失（含文件在但不可解码）；
+ * 成功则记透明通道。与运行时相同的上下文，供 buildConfirmItems 使用。
+ */
+export async function collectRunFacts(
+  probe: ImageProbe,
+  board: Board,
+  taskIds: string[],
+  outputRoot: string,
+): Promise<{ missingNodes: Set<string>; alphaByNode: Map<string, boolean> }> {
+  const missingNodes = new Set<string>();
+  const alphaByNode = new Map<string, boolean>();
+  await Promise.all(
+    taskIds
+      .flatMap((id) => imageSources(board, id, outputRoot))
+      .map((src) =>
+        probe.inspectImage(src.absPath).then(
+          (info) => void alphaByNode.set(src.nodeId, info.has_alpha),
+          () => void missingNodes.add(src.nodeId),
+        ),
+      ),
+  );
+  return { missingNodes, alphaByNode };
+}
+
 export function buildConfirmItems(board: Board, table: CapabilityTable, taskIds: string[], ctx: ConfirmContext): ConfirmItem[] {
   return taskIds.flatMap((taskId) => {
     const task = findTask(board, taskId);
