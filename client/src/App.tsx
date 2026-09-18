@@ -7,13 +7,14 @@ import { BOARD_EXTENSION, type Board } from "./core/board";
 import { BUILTIN_TABLE, effectiveTable, type CapabilityTable } from "./core/capabilities";
 import { redoLabel, undoLabel, type Change } from "./core/history";
 import { basename } from "./core/paths";
-import { runScope, buildConfirmItems, imageSources, type ConfirmItem } from "./core/submission";
+import { runDispatch, runScope, buildConfirmItems, imageSources, type ConfirmItem } from "./core/submission";
 import { parseUiState, serializeUiState, type UiState } from "./core/uiState";
 import { ipc } from "./shell/ipc";
 import { BoardPackDialog } from "./ui/BoardPackDialog";
 import { BoardCanvas } from "./ui/BoardCanvas";
 import { RunConfirmDialog } from "./ui/RunConfirmDialog";
 import { RunIndicator } from "./ui/RunIndicator";
+import { SendTextDialog } from "./ui/SendTextDialog";
 import { SettingsPanel } from "./ui/SettingsPanel";
 import { isActive, useRunner, type RunTarget } from "./ui/useRunner";
 import { useSettings } from "./ui/useSettings";
@@ -28,6 +29,7 @@ export function App() {
   const [defaultRoot, setDefaultRoot] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [confirm, setConfirm] = useState<{ boardKey: string; board: Board; items: ConfirmItem[]; scope: "selection" | "board" } | null>(null);
+  const [sendText, setSendText] = useState<ConfirmItem | null>(null);
   const settings = useSettings();
   const [table, setTable] = useState<CapabilityTable>(BUILTIN_TABLE);
   const [tableError, setTableError] = useState<string | null>(null);
@@ -106,20 +108,10 @@ export function App() {
     [boards, toast],
   );
 
-  const openRunConfirm = useCallback(
-    async (selectedIds: string[]) => {
-      if (!activeKey || !outputRoot) return;
-      if (!settings.apiKey) {
-        toast("请先在高级设置中填写 API 密钥");
-        setSettingsOpen(true);
-        return;
-      }
-      await boards.flushAll();
-      const board = boards.getBoard(activeKey);
-      if (!board) return;
-      const busy = new Set([...runner.statuses].filter(([, st]) => isActive(st)).map(([id]) => id));
-      const ids = runScope(board, selectedIds, busy);
-      const sources = ids.flatMap((id) => imageSources(board, id, outputRoot));
+  /** 与运行时相同的上下文算确认项：逐张检测参考图（缺失 / 透明通道）。运行与查看发送文本共用。 */
+  const confirmItemsOf = useCallback(
+    async (board: Board, ids: string[], root: string) => {
+      const sources = ids.flatMap((id) => imageSources(board, id, root));
       const missingNodes = new Set<string>();
       const alphaByNode = new Map<string, boolean>();
       await Promise.all(
@@ -132,10 +124,9 @@ export function App() {
           ),
         ),
       );
-      const items = buildConfirmItems(board, table, ids, { discovery: settings.discovery, missingNodes, alphaByNode });
-      setConfirm({ boardKey: activeKey, board, items, scope: selectedIds.length ? "selection" : "board" });
+      return buildConfirmItems(board, table, ids, { discovery: settings.discovery, missingNodes, alphaByNode });
     },
-    [activeKey, outputRoot, settings.apiKey, settings.discovery, boards, runner.statuses, table, toast],
+    [settings.discovery, table],
   );
 
   const startRun = useCallback(
@@ -154,6 +145,48 @@ export function App() {
       if (problems.length) toast(`${problems.length} 个任务提交失败：${problems[0]}`);
     },
     [outputRoot, runner, table, settings.settings.base_url, settings.apiKey, toast],
+  );
+
+  // 单个干净任务直接提交，单个标红 / 没有任务只提示；其余弹二次确认（分派规则见 runDispatch）。
+  const openRunConfirm = useCallback(
+    async (selectedIds: string[]) => {
+      if (!activeKey || !outputRoot) return;
+      if (!settings.apiKey) {
+        toast("请先在高级设置中填写 API 密钥");
+        setSettingsOpen(true);
+        return;
+      }
+      await boards.flushAll();
+      const board = boards.getBoard(activeKey);
+      if (!board) return;
+      const busy = new Set([...runner.statuses].filter(([, st]) => isActive(st)).map(([id]) => id));
+      const items = await confirmItemsOf(board, runScope(board, selectedIds, busy), outputRoot);
+      const dispatch = runDispatch(items);
+      if (dispatch.kind === "toast") toast(dispatch.message);
+      else if (dispatch.kind === "submit") void startRun(activeKey, board, [dispatch.taskId]);
+      else setConfirm({ boardKey: activeKey, board, items, scope: selectedIds.length ? "selection" : "board" });
+    },
+    [activeKey, outputRoot, settings.apiKey, boards, runner.statuses, confirmItemsOf, startRun, toast],
+  );
+
+  const viewSendText = useCallback(
+    async (taskNodeId: string) => {
+      if (!activeKey || !outputRoot) return;
+      const board = boards.getBoard(activeKey);
+      if (!board) return;
+      const [item] = await confirmItemsOf(board, [taskNodeId], outputRoot);
+      if (item) setSendText(item);
+    },
+    [activeKey, outputRoot, boards, confirmItemsOf],
+  );
+
+  const copyText = useCallback(
+    (text: string) =>
+      void navigator.clipboard.writeText(text).then(
+        () => toast("已复制发送文本"),
+        (e) => toast(`复制失败：${e}`),
+      ),
+    [toast],
   );
 
   const regenerate = useCallback(
@@ -374,6 +407,7 @@ export function App() {
               onRun={(ids) => void openRunConfirm(ids)}
               onCancelTask={cancelTask}
               onRegenerate={regenerate}
+              onViewSendText={(id) => void viewSendText(id)}
               onExportPack={() => void pack.prepareExport(active.key)}
               focus={focus?.boardKey === active.key ? focus : null}
             />
@@ -399,6 +433,7 @@ export function App() {
           onConfirm={(ids) => void startRun(confirm.boardKey, confirm.board, ids)}
         />
       )}
+      {sendText && <SendTextDialog item={sendText} onCopy={copyText} onClose={() => setSendText(null)} />}
       {pack.dialog && <BoardPackDialog {...pack.dialog} />}
       {toastText && <div className="toast">{toastText}</div>}
     </div>

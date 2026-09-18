@@ -25,6 +25,7 @@ export type BoardAction =
   | "cancel"
   | "regenerate"
   | "toggleSettings"
+  | "viewSendText"
   | "disconnect"
   | "editRegion"
   | "exportPack";
@@ -95,13 +96,14 @@ export function menuItems(target: MenuTarget, facts: MenuFacts): MenuItem[] {
         }
         case "task": {
           const busy = locked.has(node.id);
+          // 查看发送文本按当前画板现算；排队 / 执行中时看到的不是正在执行的那份输入，故置灰。
           return grouped(
             [
               item("run", "运行", busy ? TASK_BUSY : null),
               item("regenerate", "重新生成", busy ? TASK_BUSY : regenerateBlocker(node)),
               item("cancel", "取消", busy ? null : "任务不在排队 / 执行中"),
             ],
-            [item("toggleSettings", facts.expanded.has(node.id) ? "收起设置" : "展开设置")],
+            [item("toggleSettings", facts.expanded.has(node.id) ? "收起设置" : "展开设置"), item("viewSendText", "查看发送文本", busy ? TASK_BUSY : null)],
             [item("delete", "删除")],
           );
         }

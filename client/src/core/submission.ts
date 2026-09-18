@@ -233,3 +233,17 @@ export function buildConfirmItems(board: Board, table: CapabilityTable, taskIds:
     ];
   });
 }
+
+/** 点「运行」后的分派：空 / 单项干净 / 单项标红不弹窗；单项仅有警告或两项及以上才弹二次确认。 */
+export type RunDispatch = { kind: "toast"; message: string } | { kind: "submit"; taskId: string } | { kind: "confirm" };
+
+export function runDispatch(items: ConfirmItem[]): RunDispatch {
+  if (items.length === 0) return { kind: "toast", message: "没有需要运行的任务" };
+  if (items.length > 1) return { kind: "confirm" };
+  const [item] = items;
+  if (item.issues.length > 0) {
+    const more = item.issues.length > 1 ? ` 等 ${item.issues.length} 项` : "";
+    return { kind: "toast", message: `无法运行：${item.issues[0]}${more}` };
+  }
+  return item.warnings.length > 0 ? { kind: "confirm" } : { kind: "submit", taskId: item.taskId };
+}

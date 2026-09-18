@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Board, BoardEdge, BoardNode, TaskNode } from "./board";
 import { BUILTIN_TABLE } from "./capabilities";
-import { buildConfirmItems, imageRefProblems, imageSources, isDirty, isInterrupted, runScope, snapshotOf, withSubmitted } from "./submission";
+import { buildConfirmItems, imageRefProblems, imageSources, isDirty, isInterrupted, runDispatch, runScope, snapshotOf, withSubmitted, type ConfirmItem } from "./submission";
 
 function prompt(id: string, text: string): BoardNode {
   return { id, type: "prompt", pos: [0, 0], size: [100, 100], extra: {}, text };
@@ -191,6 +191,46 @@ describe("二次确认清单", () => {
     const b = board([prompt("p", "一只橘猫"), task("t", { model: "doubao-seedream-5-0-lite-260128" })], [edge("p", "t", "positive")]);
     const [item] = buildConfirmItems(b, BUILTIN_TABLE, ["t"], { discovery: { source: "none" }, missingNodes: new Set() });
     expect(item.issues.join()).not.toContain("请求形态");
+  });
+});
+
+describe("运行分派", () => {
+  const confirmItem = (taskId: string, patch: Partial<ConfirmItem> = {}): ConfirmItem => ({
+    taskId,
+    modelName: "m",
+    firstLine: "",
+    negativePrompt: "",
+    sendText: "",
+    referenceCount: 0,
+    issues: [],
+    warnings: [],
+    ...patch,
+  });
+
+  it("没有需要运行的任务：提示，不弹窗", () => {
+    expect(runDispatch([])).toEqual({ kind: "toast", message: "没有需要运行的任务" });
+  });
+
+  it("恰好一个干净任务：直接提交", () => {
+    expect(runDispatch([confirmItem("t")])).toEqual({ kind: "submit", taskId: "t" });
+  });
+
+  it("恰好一个标红任务：提示第一条原因", () => {
+    expect(runDispatch([confirmItem("t", { issues: ["正向提示词未连接"] })])).toEqual({ kind: "toast", message: "无法运行：正向提示词未连接" });
+  });
+
+  it("恰好一个标红任务、多条原因：追加「等 N 项」", () => {
+    const item = confirmItem("t", { issues: ["正向提示词未连接", "图1 图片缺失：r1.png"], warnings: ["该模型英文序号未验证"] });
+    expect(runDispatch([item])).toEqual({ kind: "toast", message: "无法运行：正向提示词未连接 等 2 项" });
+  });
+
+  it("恰好一个任务仅有黄色警告：弹确认窗", () => {
+    expect(runDispatch([confirmItem("t", { warnings: ["图2 已接线但提示词未引用"] })])).toEqual({ kind: "confirm" });
+  });
+
+  it("两个及以上任务：弹确认窗，即使全部干净", () => {
+    expect(runDispatch([confirmItem("t1"), confirmItem("t2")])).toEqual({ kind: "confirm" });
+    expect(runDispatch([confirmItem("t1", { issues: ["x"] }), confirmItem("t2")])).toEqual({ kind: "confirm" });
   });
 });
 

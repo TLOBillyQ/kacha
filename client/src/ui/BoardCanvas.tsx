@@ -104,6 +104,8 @@ interface Props {
   onCancelTask: (taskId: string) => void;
   /** fromTaskId：生成变体时按该结果的任务目录重跑；缺省 = 按上次提交。 */
   onRegenerate: (taskId: string, fromTaskId?: string) => void;
+  /** 任务节点「查看发送文本」。 */
+  onViewSendText: (taskId: string) => void;
   /** 导出本画板为画板包。 */
   onExportPack: () => void;
   /** 运行指示跳转：居中并选中该节点；nonce 变化即再跳一次。 */
@@ -135,6 +137,7 @@ export function BoardCanvas({
   onRun,
   onCancelTask,
   onRegenerate,
+  onViewSendText,
   onExportPack,
   focus,
 }: Props) {
@@ -866,6 +869,7 @@ export function BoardCanvas({
       else if (action === "run") onRun([id]);
       else if (action === "cancel") onCancelTask(id);
       else if (action === "regenerate") onRegenerate(id);
+      else if (action === "viewSendText") onViewSendText(id);
       else if (action === "toggleSettings") setExpanded((s) => (s.has(id) ? new Set([...s].filter((x) => x !== id)) : new Set([...s, id])));
       else if (action === "delete") void flow.deleteElements({ nodes: [...selectionForMenu(selectedRef.current, id)].map((n) => ({ id: n })) });
     } else if (target.kind === "edge") {

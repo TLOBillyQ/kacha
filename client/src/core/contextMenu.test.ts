@@ -126,6 +126,7 @@ describe("任务 / 提示词节点菜单", () => {
       ["cancel", "取消", "任务不在排队 / 执行中"],
       "---",
       ["toggleSettings", "展开设置", null],
+      ["viewSendText", "查看发送文本", null],
       "---",
       ["delete", "删除", null],
     ]);
@@ -139,9 +140,17 @@ describe("任务 / 提示词节点菜单", () => {
       ["cancel", "取消", null],
       "---",
       ["toggleSettings", "展开设置", null],
+      ["viewSendText", "查看发送文本", "任务正在排队 / 执行"],
       "---",
       ["delete", "删除", null],
     ]);
+  });
+
+  it("标红任务仍可查看发送文本", () => {
+    // 没接正向提示词 = 标红。
+    const b = board([task("t")]);
+    const items = menuItems({ kind: "node", nodeId: "t" }, facts({ board: b, selected: new Set(["t"]) }));
+    expect(items.find((i) => i.action === "viewSendText")?.disabledReason).toBeNull();
   });
 
   it("已展开的任务：该项为收起设置", () => {
