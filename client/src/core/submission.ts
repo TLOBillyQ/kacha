@@ -2,12 +2,11 @@
 import type { Board, Region, TaskNode } from "./board";
 import { findModel, type CapabilityTable } from "./capabilities";
 import { isRequestShapeImplemented } from "./gateway";
-import { imageEdges, imagePortSlots, taskIssues, transparentAlphaIssue } from "./graph";
-import { resolveFromRoot } from "./paths";
+import { imageEdges, imagePortSlots, imageSources, promptText, taskIssues, transparentAlphaIssue } from "./graph";
 import { planSend, promptLanguage, referenceProblemsOf, type ReferenceProblems, type SendPlan } from "./sendPlan";
 import { modelAvailabilityIssue, type Discovery } from "./settings";
 import type { SizeSpec } from "./size";
-import { layerFileName, readOutcome, type TaskFs, type TaskOutcome } from "./taskDir";
+import { readOutcome, type TaskFs, type TaskOutcome } from "./taskDir";
 
 export type SnapshotImage =
   | { kind: "reference"; path: string; sha256: string; region: Region | null }
@@ -27,12 +26,6 @@ export interface Snapshot {
 function findTask(board: Board, id: string): TaskNode | undefined {
   const node = board.nodes.find((n) => n.id === id);
   return node?.type === "task" ? node : undefined;
-}
-
-function promptText(board: Board, taskId: string, port: "positive" | "negative"): string {
-  const edge = board.edges.find((e) => e.to[0] === taskId && e.to[1] === port);
-  const node = edge && board.nodes.find((n) => n.id === edge.from[0]);
-  return node?.type === "prompt" ? node.text : "";
 }
 
 export function snapshotOf(board: Board, taskId: string): Snapshot | null {
@@ -160,30 +153,6 @@ export function runScope(board: Board, selectedIds: string[], busy: ReadonlySet<
     .filter((n) => selected.size === 0 || selected.has(n.id) || downstream.has(n.id))
     .filter((n) => !busy.has(n.id) && (isDirty(board, n.id) || !hasExecuted(board, n)))
     .map((n) => n.id);
-}
-
-export interface ImageSource {
-  nodeId: string;
-  label: string;
-  absPath: string;
-}
-
-/** 任务的参考图来源，按端口顺序；结果节点回灌的是文件本身，不带会话参数。 */
-export function imageSources(board: Board, taskId: string, outputRoot: string): ImageSource[] {
-  return imageEdges(board, taskId).flatMap((e) => {
-    const src = board.nodes.find((n) => n.id === e.from[0]);
-    if (src?.type === "reference") return [{ nodeId: src.id, label: src.display_name, absPath: resolveFromRoot(outputRoot, src.path) }];
-    if (src?.type === "result") {
-      // 接了某一图层：路径指向 layers/NN.<ext>（文件名以结果记录为准），标签点明图层序号。
-      if (e.source_layer !== null) {
-        const file = src.record.layers?.[e.source_layer - 1]?.file ?? layerFileName(e.source_layer);
-        const dir = src.path.slice(0, src.path.length - src.file.length);
-        return [{ nodeId: src.id, label: `${src.file} 图层${e.source_layer}`, absPath: resolveFromRoot(outputRoot, `${dir}${file}`) }];
-      }
-      return [{ nodeId: src.id, label: src.file, absPath: resolveFromRoot(outputRoot, src.path) }];
-    }
-    return [];
-  });
 }
 
 export interface ConfirmItem {

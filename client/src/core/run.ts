@@ -4,12 +4,12 @@ import type { Board, ResultRecord, TaskNode } from "./board";
 import { findModel, type CapabilityTable, type InputImageRule, type ModelCapability } from "./capabilities";
 import { fitImage, type FittedBytes, type ImageCodec } from "./fitImage";
 import { ERROR_CATEGORY_LABELS, fetchResultImage, GatewayError, generate, type FetchLike, type GenerationInput } from "./gateway";
-import { imagePortSlots, workflowOf } from "./graph";
+import { imagePortSlots, imageSources, workflowOf } from "./graph";
 import type { RunResult } from "./layout";
 import { firstRegionOf, slotsFromReferences } from "./region";
 import { planSend } from "./sendPlan";
 import { isAutoRatio, resolveSize } from "./size";
-import { imageSources, snapshotOf } from "./submission";
+import { snapshotOf } from "./submission";
 import { LocalError, newTaskId, readSubmission, taskDirOfTaskId, saveLayers, saveResult, sniffImage, writeSubmission, type LayerRecord, type ReferenceSource, type SubmissionPlan, type TaskFs } from "./taskDir";
 
 export type TaskStatus =

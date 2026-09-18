@@ -10,8 +10,10 @@ import {
   type WorkflowName,
 } from "./capabilities";
 import { MAX_REGIONS } from "./overlay";
+import { resolveFromRoot } from "./paths";
 import { effectiveRegionRender, expandImageEdges, type PortSlot } from "./region";
 import { ratioRangeText, ratioValue, resolveSize, withinRatioRange } from "./size";
+import { layerFileName } from "./taskDir";
 
 export const IMAGE_PORT_PREFIX = "image:";
 
@@ -62,6 +64,37 @@ export function imagePortSlots(board: Board, table: CapabilityTable, taskId: str
   const task = findTask(board, taskId);
   const model = task && findModel(table, task.model);
   return expandImageEdges(imageEdges(board, taskId), effectiveRegionRender(model));
+}
+
+/** 接到任务某提示词端口的提示词文本；未接为空串。 */
+export function promptText(board: Board, taskId: string, port: "positive" | "negative"): string {
+  const edge = board.edges.find((e) => e.to[0] === taskId && e.to[1] === port);
+  const node = edge && board.nodes.find((n) => n.id === edge.from[0]);
+  return node?.type === "prompt" ? node.text : "";
+}
+
+export interface ImageSource {
+  nodeId: string;
+  label: string;
+  absPath: string;
+}
+
+/** 任务的参考图来源，按端口顺序；结果节点回灌的是文件本身，不带会话参数。 */
+export function imageSources(board: Board, taskId: string, outputRoot: string): ImageSource[] {
+  return imageEdges(board, taskId).flatMap((e) => {
+    const src = board.nodes.find((n) => n.id === e.from[0]);
+    if (src?.type === "reference") return [{ nodeId: src.id, label: src.display_name, absPath: resolveFromRoot(outputRoot, src.path) }];
+    if (src?.type === "result") {
+      // 接了某一图层：路径指向 layers/NN.<ext>（文件名以结果记录为准），标签点明图层序号。
+      if (e.source_layer !== null) {
+        const file = src.record.layers?.[e.source_layer - 1]?.file ?? layerFileName(e.source_layer);
+        const dir = src.path.slice(0, src.path.length - src.file.length);
+        return [{ nodeId: src.id, label: `${src.file} 图层${e.source_layer}`, absPath: resolveFromRoot(outputRoot, `${dir}${file}`) }];
+      }
+      return [{ nodeId: src.id, label: src.file, absPath: resolveFromRoot(outputRoot, src.path) }];
+    }
+    return [];
+  });
 }
 
 function reachable(board: Board, from: string, to: string): boolean {

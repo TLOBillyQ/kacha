@@ -30,6 +30,7 @@ import {
   imageEdges,
   imagePortIndex,
   imagePortSlots,
+  imageSources,
   taskIssues,
   taskPorts,
   transparentAlphaIssue,
@@ -49,7 +50,7 @@ import { renderedImageSize } from "../core/nodeSize";
 import { basename, dirname, joinPath, resolveFromRoot, toRootRelative } from "../core/paths";
 import { effectiveRegionRender } from "../core/region";
 import { findReferenceFile, findResultFile, IMAGE_EXTENSIONS } from "../core/relocate";
-import { imageRefProblems, imageSources, type SnapshotImage } from "../core/submission";
+import { imageRefProblems, type SnapshotImage } from "../core/submission";
 import { relocateFs } from "../shell/adapters";
 import { ipc } from "../shell/ipc";
 import { logEvent } from "../shell/log";

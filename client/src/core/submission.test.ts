@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { Board, BoardEdge, BoardNode, TaskNode } from "./board";
 import { BUILTIN_TABLE } from "./capabilities";
-import { buildConfirmItems, collectRunFacts, imageRefProblems, imageSources, isDirty, isInterrupted, runDispatch, runScope, snapshotOf, storedStatuses, withSubmitted, type ConfirmItem } from "./submission";
+import { imageSources } from "./graph";
+import { buildConfirmItems, collectRunFacts, imageRefProblems, isDirty, isInterrupted, runDispatch, runScope, snapshotOf, storedStatuses, withSubmitted, type ConfirmItem } from "./submission";
 import { taskDirOfTaskId, writeOutcome } from "./taskDir";
 import { memoryTaskFs } from "./testing/memoryTaskFs";
 
