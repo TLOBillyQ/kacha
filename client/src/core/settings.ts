@@ -183,8 +183,9 @@ export interface SettingsPorts {
   log(kind: "connection", fields: Record<string, unknown>): void;
 }
 
-export interface KeyState {
-  file: LoadedSettings["kind"];
+/** 保存前的现状：决定写不写 settings.json、要不要碰凭据库。 */
+export interface SaveBaseline {
+  fileKind: LoadedSettings["kind"];
   apiKey: string;
   keyPersistence: KeyPersistence;
 }
@@ -212,8 +213,8 @@ export async function loadSettings(ports: SettingsPorts): Promise<InitialSetting
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 /** 保存设置与密钥。newer 时不覆盖 settings.json 但仍存密钥；密钥变了或当前为 session 才写凭据库，凭据库抛错退回 session。 */
-export async function saveSettings(ports: SettingsPorts, current: KeyState, next: Settings, apiKey: string): Promise<SaveResult> {
-  const settingsWritten = current.file !== "newer";
+export async function saveSettings(ports: SettingsPorts, current: SaveBaseline, next: Settings, apiKey: string): Promise<SaveResult> {
+  const settingsWritten = current.fileKind !== "newer";
   if (settingsWritten) {
     try {
       await ports.writeSettings(serializeSettings(next));

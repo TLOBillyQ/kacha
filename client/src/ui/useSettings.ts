@@ -15,8 +15,6 @@ import {
 } from "../core/settings";
 import { settingsPorts } from "../shell/adapters";
 
-export type { KeyPersistence } from "../core/settings";
-
 export type ConnectionResult = { ok: true; count: number } | { ok: false; message: string };
 
 export interface SettingsState {
@@ -79,7 +77,7 @@ export function useSettings() {
   /** 保存设置与密钥；返回错误说明，成功为 null。 */
   const save = useCallback(async (next: Settings, apiKey: string): Promise<string | null> => {
     const current = stateRef.current;
-    const result = await saveSettings(settingsPorts, current, next, apiKey);
+    const result = await saveSettings(settingsPorts, { fileKind: current.file, apiKey: current.apiKey, keyPersistence: current.keyPersistence }, next, apiKey);
     if (!result.ok) return `保存设置失败：${result.error}`;
     const { keyPersistence } = result;
     // 更新版本写入的 settings.json 没被覆盖：界面上的设置保持不变，只更新密钥。

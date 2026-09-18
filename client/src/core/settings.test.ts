@@ -150,7 +150,7 @@ describe("保存设置", () => {
 
   it("文件由更新版本写入（newer）时不写 settings.json，但仍存密钥", async () => {
     const { ports, writes } = memoryPorts();
-    const result = await saveSettings(ports, { file: "newer", apiKey: "", keyPersistence: "persisted" }, next, "sk-new");
+    const result = await saveSettings(ports, { fileKind: "newer", apiKey: "", keyPersistence: "persisted" }, next, "sk-new");
     expect(result).toEqual({ ok: true, settingsWritten: false, keyPersistence: "persisted" });
     expect(writes.settings).toEqual([]);
     expect(writes.secretSet).toEqual(["sk-new"]);
@@ -158,7 +158,7 @@ describe("保存设置", () => {
 
   it("文件正常时写 settings.json；密钥未变且已存入凭据库时不碰凭据库", async () => {
     const { ports, writes } = memoryPorts();
-    const result = await saveSettings(ports, { file: "ok", apiKey: "sk", keyPersistence: "persisted" }, next, "sk");
+    const result = await saveSettings(ports, { fileKind: "ok", apiKey: "sk", keyPersistence: "persisted" }, next, "sk");
     expect(result).toEqual({ ok: true, settingsWritten: true, keyPersistence: "persisted" });
     expect(JSON.parse(writes.settings[0])).toMatchObject({ base_url: "http://other:3001" });
     expect(writes.secretSet).toEqual([]);
@@ -171,20 +171,20 @@ describe("保存设置", () => {
         throw new Error("凭据库不可用");
       },
     });
-    const result = await saveSettings(ports, { file: "ok", apiKey: "", keyPersistence: "persisted" }, next, "sk-new");
+    const result = await saveSettings(ports, { fileKind: "ok", apiKey: "", keyPersistence: "persisted" }, next, "sk-new");
     expect(result).toEqual({ ok: true, settingsWritten: true, keyPersistence: "session" });
   });
 
   it("当前为 session 时即使密钥未变也重试写入凭据库，成功后回到 persisted", async () => {
     const { ports, writes } = memoryPorts();
-    const result = await saveSettings(ports, { file: "ok", apiKey: "sk", keyPersistence: "session" }, next, "sk");
+    const result = await saveSettings(ports, { fileKind: "ok", apiKey: "sk", keyPersistence: "session" }, next, "sk");
     expect(writes.secretSet).toEqual(["sk"]);
     expect(result).toMatchObject({ ok: true, keyPersistence: "persisted" });
   });
 
   it("清空密钥走删除", async () => {
     const { ports, writes } = memoryPorts();
-    await saveSettings(ports, { file: "ok", apiKey: "sk", keyPersistence: "persisted" }, next, "");
+    await saveSettings(ports, { fileKind: "ok", apiKey: "sk", keyPersistence: "persisted" }, next, "");
     expect(writes.secretDelete).toBe(1);
     expect(writes.secretSet).toEqual([]);
   });
@@ -195,7 +195,7 @@ describe("保存设置", () => {
         throw new Error("磁盘已满");
       },
     });
-    const result = await saveSettings(ports, { file: "ok", apiKey: "", keyPersistence: "persisted" }, next, "sk-new");
+    const result = await saveSettings(ports, { fileKind: "ok", apiKey: "", keyPersistence: "persisted" }, next, "sk-new");
     expect(result).toEqual({ ok: false, error: "磁盘已满" });
     expect(writes.secretSet).toEqual([]);
   });
