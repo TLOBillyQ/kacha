@@ -270,7 +270,7 @@ describe("区域指示：提交链路", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0].bytes).toEqual(PNG);
     expect(calls[0].rects).toEqual(REGION.rects);
-    expect(prepared.input.regionPhrases?.[0]).toContain("图2 是图1 的标注版");
+    expect(prepared.input.text).toContain("图2 是图1 的标注版");
 
     const job = await writeJob(d, "/root", prepared);
     const dir = `/root/${job.relDir}`;
@@ -298,7 +298,7 @@ describe("区域指示：提交链路", () => {
     d.now = () => new Date("2026-09-17T01:00:00Z");
     const { job: again } = await regen(d, { board: b1, table: BUILTIN_TABLE, tableSha256: "y", outputRoot: "/root", taskNodeId: "t" });
     expect(again.plan.references[1]).toMatchObject({ source: { kind: "overlay", of: 1 }, region: { source_port: 1 } });
-    expect(again.input.regionPhrases?.[0]).toContain("图2 是图1 的标注版");
+    expect(again.input.text).toContain("图2 是图1 的标注版");
     const job = await writeJob(d, "/root", again);
     expect(files.get(`/root/${job.relDir}/reference-2.png`)).toEqual(PNG);
   });
@@ -323,8 +323,10 @@ describe("区域指示：提交链路", () => {
     expect(taskJson.send_text).toContain("本次提供 3 张参考图，按顺序为图1、图2、图3。\n把图3的少女放入图1\n图2 是图1 的标注版");
 
     await executeJob(d, { job, outputRoot: "/root", baseUrl: "http://gw", apiKey: "k" });
+    // 提交路径：task.json 的 send_text 与请求体里的提示文本是同一字符串。
     const body = JSON.parse(String(requests[0].init.body));
     expect(body.input.messages[0].content[3].text).toBe(taskJson.send_text);
+    expect(body.prompt).toBe(taskJson.send_text);
   });
 
   it("重新生成旧 task.json（按旧口径存的 send_text）：按 references[] 还原用户序号，发送文本与新规则一致", async () => {
@@ -340,10 +342,15 @@ describe("区域指示：提交链路", () => {
 
     d.now = () => new Date("2026-09-17T01:00:00Z");
     const { job: again } = await regen(d, { board: b1, table: BUILTIN_TABLE, tableSha256: "y", outputRoot: "/root", taskNodeId: "t" });
-    expect(again.plan.sendText).toBe(expected);
+    expect(again.plan.send.text).toBe(expected);
     const job = await writeJob(d, "/root", again);
     await executeJob(d, { job, outputRoot: "/root", baseUrl: "http://gw", apiKey: "k" });
-    expect(JSON.parse(String(requests[0].init.body)).input.messages[0].content[3].text).toBe(expected);
+    // 重新生成路径：新 task.json 的 send_text 与请求体里的提示文本是同一字符串。
+    const regenerated = JSON.parse(new TextDecoder().decode(files.get(`/root/${job.relDir}/task.json`)));
+    const body = JSON.parse(String(requests[0].init.body));
+    expect(regenerated.send_text).toBe(expected);
+    expect(body.input.messages[0].content[3].text).toBe(regenerated.send_text);
+    expect(body.prompt).toBe(regenerated.send_text);
   });
 
   it("有区域但没注入叠加合成能力：本地错误", async () => {

@@ -1,5 +1,6 @@
 // 模型能力表：模型决定能力，能力决定生成任务节点上露出的端口、开关与分辨率档。
 // 内置 JSON + 同 schema 覆盖文件，按 model_id 整条合并；不按模型名猜能力。
+import type { RegionRender } from "./board";
 import builtinJson from "./capabilities.builtin.json";
 
 export const CAPABILITY_FORMAT_VERSION = 1;
@@ -8,7 +9,6 @@ export const CAPABILITY_FORMAT_VERSION = 1;
 export type TriState = "supported" | "unsupported" | "untested";
 export type Tier = "flagship" | "economy";
 export type WorkflowName = "text_to_image" | "image_edit";
-export type RegionHintKind = "highlight_overlay" | "marked_image" | "bbox_tag";
 
 export const TIER_LABELS: Record<Tier, string> = { flagship: "旗舰", economy: "经济" };
 
@@ -52,8 +52,8 @@ export interface ModelCapability {
   fixed_params: Record<string, unknown>;
   input_image_rule: InputImageRule;
   reference_phrasing: { en_verified: TriState };
-  region_hint: Record<RegionHintKind, TriState>;
-  region_hint_phrasing: Partial<Record<RegionHintKind, { zh: string; en: string }>>;
+  region_hint: Record<RegionRender, TriState>;
+  region_hint_phrasing: Partial<Record<RegionRender, { zh: string; en: string }>>;
   native_mask: TriState;
   transparent_background: TriState;
   workflows: Record<WorkflowName, WorkflowCapability>;
@@ -70,6 +70,11 @@ export function isSupported(value: TriState): boolean {
   return value === "supported";
 }
 
+/** 工作流由参考图张数决定：0 张 = 文生图，≥1 张 = 图片编辑。 */
+export function workflowFor(referenceCount: number): WorkflowName {
+  return referenceCount > 0 ? "image_edit" : "text_to_image";
+}
+
 export function findModel(table: CapabilityTable, modelId: string): ModelCapability | undefined {
   return table.models.find((m) => m.model_id === modelId);
 }
@@ -81,7 +86,7 @@ export function modelsByTier(table: CapabilityTable): { tier: Tier; models: Mode
     .filter((group) => group.models.length > 0);
 }
 
-const REGION_LABELS: Record<RegionHintKind, string> = {
+const REGION_LABELS: Record<RegionRender, string> = {
   highlight_overlay: "区域指示：高亮叠加参考图",
   marked_image: "区域指示：图上标记",
   bbox_tag: "区域指示：坐标标签",
@@ -92,7 +97,7 @@ const WORKFLOW_LABELS: Record<WorkflowName, string> = { text_to_image: "文生�
 export function untestedCapabilities(model: ModelCapability): string[] {
   const out: string[] = [];
   if (model.reference_phrasing.en_verified === "untested") out.push("英文序号措辞");
-  for (const kind of Object.keys(REGION_LABELS) as RegionHintKind[]) {
+  for (const kind of Object.keys(REGION_LABELS) as RegionRender[]) {
     if (model.region_hint[kind] === "untested") out.push(REGION_LABELS[kind]);
   }
   if (model.native_mask === "untested") out.push("原生蒙版");

@@ -1,9 +1,8 @@
 // 团队网关适配器（契约 docs/contracts/team-gateway-contract.md）。
 // 路径、载荷与出图解析全部来自 contracts/fixtures 实测夹具；生成请求只发一次，不重发、不用幂等键、不查任务。
 // HTTP 由调用方注入（壳里是 tauri-plugin-http 的 fetch，测试里是夹具回放）。
+// 发什么由发送计划（sendPlan.ts）决定；这里只把发送文本与原生负向放进请求体。
 import { isSupported, type ModelCapability } from "./capabilities";
-import { promptLanguage, rewriteImageRefs, type PromptLanguage } from "./imageRefs";
-import { rewriteRegionRefs } from "./region";
 
 export const MODELS_PATH = "/v1/models";
 export const TEXT_TO_IMAGE_PATH = "/v1/images/generations";
@@ -62,17 +61,13 @@ export interface ReferenceImage {
 
 export interface GenerationInput {
   model: ModelCapability;
-  prompt: string;
-  negativePrompt: string;
+  /** 发送文本（发送计划的 text），原样作为请求里的提示文本。 */
+  text: string;
+  /** 走原生字段的负向提示词（发送计划的 nativeNegativePrompt）；null = 不发。 */
+  nativeNegativePrompt: string | null;
   size: { width: number; height: number };
-  /** 按参考图序号排列；0 张 = 文生图。 */
+  /** 按发送序号排列；0 张 = 文生图。 */
   references: ReferenceImage[];
-  /** 区域指示固定句，追加在发送文本末尾。 */
-  regionPhrases?: string[];
-  /** 区域编号的颜色指代（区域N 取第 N 个），改写提示词里的「区域N」。 */
-  regionNames?: string[];
-  /** 用户序号 → 发送序号（区域叠加图插在原图之后）；缺省 = 恒等。 */
-  imageRefMap?: number[];
   /** 透明背景开关；只对能力表支持透明背景的模型生效。 */
   transparentBackground?: boolean;
 }
@@ -83,56 +78,6 @@ export type GeneratedImage = ({ kind: "url"; url: string } | { kind: "bytes"; by
 };
 
 // ---- 请求构造 ----
-
-function referenceNote(count: number, language: PromptLanguage): string {
-  if (language === "en") {
-    if (count === 1) return "This request provides 1 reference image.";
-    const ordered = Array.from({ length: count }, (_, i) => `Image ${i + 1}`).join(", ");
-    return `This request provides ${count} reference images, in order: ${ordered}.`;
-  }
-  if (count <= 1) return `本次提供 ${count} 张参考图。`;
-  const ordered = Array.from({ length: count }, (_, i) => `图${i + 1}`).join("、");
-  return `本次提供 ${count} 张参考图，按顺序为${ordered}。`;
-}
-
-/** 模型在该张数对应的工作流下不支持原生负向提示词时，负向拼进发送文本末尾；支持则走原生字段、不拼。 */
-export function inlinesNegativePrompt(model: ModelCapability, referenceCount: number): boolean {
-  return !isSupported(model.workflows[referenceCount > 0 ? "image_edit" : "text_to_image"].supports_negative_prompt);
-}
-
-/**
- * 完整发送文本：二次确认弹窗展示、任务记录保存的都是它。
- * 提示词里的 @图N 按语言改写、用户序号按 imageRefMap 换算成发送序号（只改发送文本）；有参考图时注入数量顺序前缀；
- * inlineNegative 为真时负向以「避免出现：」拼在提示词之后（见 inlinesNegativePrompt）；区域指示固定句追加在末尾。
- */
-export function composeSendText({
-  prompt,
-  negativePrompt,
-  referenceCount,
-  inlineNegative = false,
-  regionPhrases = [],
-  regionNames = [],
-  imageRefMap,
-}: {
-  prompt: string;
-  negativePrompt: string;
-  referenceCount: number;
-  /** 负向是否拼进文本；不拼时由请求形态走原生字段。 */
-  inlineNegative?: boolean;
-  /** 区域指示固定句（每个叠加参考图一句），逐句追加在末尾。 */
-  regionPhrases?: string[];
-  /** 区域编号的颜色指代，改写提示词里的「区域N」。 */
-  regionNames?: string[];
-  /** 用户序号 → 发送序号；固定句本就按发送序号书写，在换算之后追加。 */
-  imageRefMap?: number[];
-}): string {
-  const phrases = regionPhrases.length ? `\n${regionPhrases.join("\n")}` : "";
-  const language = promptLanguage(prompt);
-  const text = rewriteRegionRefs(rewriteImageRefs(prompt, imageRefMap), regionNames);
-  const withNote = referenceCount === 0 ? text : `${referenceNote(referenceCount, language)}\n${text}`;
-  const negative = inlineNegative && negativePrompt ? `\n${language === "en" ? "Avoid: " : "避免出现："}${negativePrompt}` : "";
-  return `${withNote}${negative}${phrases}`;
-}
 
 function toBase64(bytes: Uint8Array): string {
   let binary = "";
@@ -151,15 +96,13 @@ const dataUrl = (r: ReferenceImage) => `data:${r.mediaType};base64,${toBase64(r.
 
 /** qwen 系列：文生图顶层字段；图片编辑 JSON 透传（ADR 0006）。负向走原生字段：文生图顶层 negative_prompt，图片编辑 input.negative_prompt。 */
 const buildQwenImagesEdits: RequestShape["build"] = (input) => {
-  const { model, prompt, negativePrompt, size, references } = input;
-  const inlineNegative = inlinesNegativePrompt(model, references.length);
-  const native = negativePrompt && !inlineNegative ? { negative_prompt: negativePrompt } : {};
+  const { model, text, nativeNegativePrompt, size, references } = input;
+  const native = nativeNegativePrompt ? { negative_prompt: nativeNegativePrompt } : {};
   if (references.length === 0) {
-    const body: Record<string, unknown> = { model: model.model_id, prompt: composeSendText({ prompt, negativePrompt, referenceCount: 0, inlineNegative }), ...native };
+    const body: Record<string, unknown> = { model: model.model_id, prompt: text, ...native };
     Object.assign(body, { n: 1, size: `${size.width}x${size.height}` }, model.fixed_params);
     return { path: TEXT_TO_IMAGE_PATH, body };
   }
-  const text = composeSendText({ prompt, negativePrompt, referenceCount: references.length, inlineNegative, regionPhrases: input.regionPhrases ?? [], regionNames: input.regionNames ?? [], imageRefMap: input.imageRefMap });
   const content = [...references.map((r) => ({ image: dataUrl(r) })), { text }];
   return {
     path: IMAGE_EDIT_PATH,
@@ -176,13 +119,13 @@ const buildQwenImagesEdits: RequestShape["build"] = (input) => {
 
 /**
  * Seedream 系列（#83 实测）：文生图与图片编辑都走 /v1/images/generations 顶层字段，
- * 参考图为顶层 image 的 data-URL 数组（按序即图N）；无原生负向字段，负向拼进提示词末尾。
+ * 参考图为顶层 image 的 data-URL 数组（按序即图N）；无原生负向字段（能力表标不支持，发送计划已把负向拼进发送文本）。
  */
 const buildSeedreamImagesGenerations: RequestShape["build"] = (input) => {
-  const { model, prompt, negativePrompt, size, references } = input;
+  const { model, text, size, references } = input;
   const body: Record<string, unknown> = {
     model: model.model_id,
-    prompt: composeSendText({ prompt, negativePrompt, referenceCount: references.length, inlineNegative: inlinesNegativePrompt(model, references.length), regionPhrases: input.regionPhrases ?? [], regionNames: input.regionNames ?? [], imageRefMap: input.imageRefMap }),
+    prompt: text,
     size: `${size.width}x${size.height}`,
     response_format: "url",
     ...model.fixed_params,

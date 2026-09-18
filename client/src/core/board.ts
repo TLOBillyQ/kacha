@@ -9,6 +9,7 @@ export const DEFAULT_BOARD_TITLE = "未命名画板";
 type Json = Record<string, unknown>;
 type Vec2 = [number, number];
 
+/** 区域指示的渲染方式：画板区域记录与能力表 region_hint 共用。 */
 export type RegionRender = "highlight_overlay" | "marked_image" | "bbox_tag";
 export interface Region {
   rects: [number, number, number, number][];

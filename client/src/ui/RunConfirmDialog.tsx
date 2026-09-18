@@ -44,7 +44,7 @@ export function RunConfirmDialog({ items, scope, onConfirm, onCancel }: Props) {
                   <span className="muted">#{index + 1}</span>
                   <strong>{item.modelName}</strong>
                   <span className="confirm-line">{item.firstLine || <span className="muted">（无提示词）</span>}</span>
-                  {item.referenceCount > 0 && <span className="badge">{item.referenceCount} 张参考图</span>}
+                  {item.send && item.send.referenceCount > 0 && <span className="badge">{item.send.referenceCount} 张参考图</span>}
                 </label>
                 <ItemProblems item={item} />
                 <button className="link small" onClick={() => setExpanded((s) => toggle(s, item.taskId))}>

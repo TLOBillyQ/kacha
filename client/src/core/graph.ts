@@ -4,6 +4,7 @@ import type { Board, BoardEdge, TaskNode } from "./board";
 import {
   findModel,
   isSupported,
+  workflowFor,
   type CapabilityTable,
   type InputImageRule,
   type WorkflowName,
@@ -53,7 +54,7 @@ export function firstRegionOfEdge(board: Board, taskId: string, toPort: string):
 
 /** 工作流由连线推导：图片端口 0 条线 = 文生图，≥1 条 = 图片编辑。 */
 export function workflowOf(board: Board, taskId: string): WorkflowName {
-  return imageEdges(board, taskId).length > 0 ? "image_edit" : "text_to_image";
+  return workflowFor(imageEdges(board, taskId).length);
 }
 
 /** 任务的图片连线按当前模型渲染方式展开后的槽位（区域叠加图紧随原图，占发送序名额）。 */

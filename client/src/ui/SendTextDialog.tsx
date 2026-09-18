@@ -17,7 +17,7 @@ export function SendTextDialog({ item, onCopy, onClose }: Props) {
         <ItemProblems item={item} />
         <SendTextBody item={item} />
         <div className="modal-foot">
-          <button onClick={() => onCopy(item.sendText)} disabled={!item.sendText}>
+          <button onClick={() => onCopy(item.send?.text ?? "")} disabled={!item.send?.text}>
             复制
           </button>
           <button className="primary" onClick={onClose}>
@@ -51,12 +51,14 @@ export function ItemProblems({ item }: { item: ConfirmItem }) {
   );
 }
 
-/** 完整发送文本；负向走原生字段的模型另起一段（拼进文本的已在 sendText 里）。 */
+/** 发送计划的发送文本；负向走原生字段时另起一段（拼进文本的已在发送文本里）。模型不可用时没有发送计划。 */
 export function SendTextBody({ item }: { item: ConfirmItem }) {
+  const { send } = item;
+  if (!send) return <pre className="send-text"><span className="muted">模型不可用，无法生成发送文本</span></pre>;
   return (
     <>
-      <pre className="send-text">{item.sendText || <span className="muted">（无提示词）</span>}</pre>
-      {!item.negativeInlined && item.negativePrompt && <pre className="send-text">负向：{item.negativePrompt}</pre>}
+      <pre className="send-text">{send.text || <span className="muted">（无提示词）</span>}</pre>
+      {send.nativeNegativePrompt && <pre className="send-text">负向：{send.nativeNegativePrompt}</pre>}
     </>
   );
 }

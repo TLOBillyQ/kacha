@@ -3,17 +3,14 @@ import { describe, expect, it } from "vitest";
 import { BUILTIN_TABLE, findModel } from "./capabilities";
 import {
   buildGenerationRequest,
-  composeSendText,
   fetchResultImage,
   generate,
   GatewayError,
-  inlinesNegativePrompt,
   listModels,
   parseGeneratedImages,
   type FetchLike,
   type GenerationInput,
 } from "./gateway";
-import { overlayPhrases, regionNames, type SlotRef } from "./region";
 
 const FIXTURE_DIRS = [
   "2026-08-17-team-gateway",
@@ -108,8 +105,8 @@ const png = { mediaType: "image/png", bytes: PNG_BYTES };
 
 const textInput = (patch: Partial<GenerationInput> = {}): GenerationInput => ({
   model: qwenPro,
-  prompt: "一只橘猫",
-  negativePrompt: "",
+  text: "一只橘猫",
+  nativeNegativePrompt: null,
   size: { width: 1024, height: 1024 },
   references: [],
   ...patch,
@@ -121,7 +118,7 @@ describe("网关适配器：请求载荷对照夹具", () => {
   it("文生图 POST /v1/images/generations，字段 model / prompt / negative_prompt / n / size(WxH) / fixed_params", async () => {
     const fixture = loadFixture("2026-08-17-team-gateway", "text-parameters-result.json");
     const { fetch, calls } = replay(fixture);
-    await generate({ baseUrl: `${BASE}/`, apiKey: "sk-test", fetch }, textInput({ negativePrompt: "模糊" }));
+    await generate({ baseUrl: `${BASE}/`, apiKey: "sk-test", fetch }, textInput({ nativeNegativePrompt: "模糊" }));
     expect(calls[0].url).toBe(`${BASE}/v1/images/generations`);
     expect(calls[0].method).toBe("POST");
     expectMatchesFixture(calls[0].headers, fixture.request.headers, "headers");
@@ -139,7 +136,7 @@ describe("网关适配器：请求载荷对照夹具", () => {
   it("图片编辑 POST /v1/images/edits JSON：data-URL 参考图、末尾 text、size 星号、n 固定 1、fixed_params 合并", async () => {
     const fixture = loadFixture("2026-08-29-team-gateway-edit-json", "edit-json-single.json");
     const { fetch, calls } = replay(fixture);
-    await generate({ baseUrl: BASE, apiKey: "sk-test", fetch }, textInput({ references: [png] }));
+    await generate({ baseUrl: BASE, apiKey: "sk-test", fetch }, textInput({ text: "本次提供 1 张参考图。\n一只橘猫", references: [png] }));
     expect(calls[0].url).toBe(`${BASE}/v1/images/edits`);
     expectMatchesFixture(calls[0].headers, fixture.request.headers, "headers");
     expectMatchesFixture(calls[0].body, fixture.request.body);
@@ -149,10 +146,10 @@ describe("网关适配器：请求载荷对照夹具", () => {
     expect(body.prompt).toBe(body.input.messages[0].content[1].text);
   });
 
-  it("三张参考图按序进入 content，提示词注入数量顺序前缀", () => {
+  it("三张参考图按序进入 content，发送文本原样放在末尾 text", () => {
     const fixture = loadFixture("2026-09-16-team-gateway-multiturn-refs-mask", "edit-ref-index-tu-3.json");
     const refs = [png, { mediaType: "image/jpeg", bytes: new Uint8Array([1]) }, { mediaType: "image/webp", bytes: new Uint8Array([2]) }];
-    const { path, body } = buildGenerationRequest(textInput({ prompt: "把图3的帽子戴到图1头上", references: refs }));
+    const { path, body } = buildGenerationRequest(textInput({ text: "本次提供 3 张参考图，按顺序为图1、图2、图3。\n把图3的帽子戴到图1头上", references: refs }));
     expect(path).toBe("/v1/images/edits");
     const expected = fixture.request.body as { input: unknown };
     expectMatchesFixture((body as { input: unknown }).input, expected.input, "input");
@@ -164,43 +161,14 @@ describe("网关适配器：请求载荷对照夹具", () => {
     expect(content[3].text).toBe("本次提供 3 张参考图，按顺序为图1、图2、图3。\n把图3的帽子戴到图1头上");
   });
 
-  it("qwen 图片编辑的负向走原生 input.negative_prompt，不并入发送文本（8-31 夹具已验证网关接受）", () => {
+  it("qwen 图片编辑的原生负向放进 input.negative_prompt（8-31 夹具已验证网关接受）", () => {
     const fixture = loadFixture("2026-08-31-team-gateway-edit-boundaries", "edit-json-native-negative.json");
-    const { body } = buildGenerationRequest(textInput({ negativePrompt: "文字", references: [png] }));
+    const { body } = buildGenerationRequest(textInput({ nativeNegativePrompt: "文字", references: [png] }));
     expect(Object.keys((fixture.request.body as { input: object }).input).sort()).toEqual(["messages", "negative_prompt"]);
     const b = body as { prompt: string; input: { negative_prompt?: string } };
     expect(b.input.negative_prompt).toBe("文字");
     expect(b.prompt).not.toContain("文字");
     expect((buildGenerationRequest(textInput({ references: [png] })).body as { input: object }).input).not.toHaveProperty("negative_prompt");
-  });
-
-  it("composeSendText：inlineNegative 决定负向是否拼进文本，与张数无关", () => {
-    expect(composeSendText({ prompt: "换成蓝色", negativePrompt: "文字", referenceCount: 2 })).toBe("本次提供 2 张参考图，按顺序为图1、图2。\n换成蓝色");
-    expect(composeSendText({ prompt: "换成蓝色", negativePrompt: "文字", referenceCount: 2, inlineNegative: true })).toBe(
-      "本次提供 2 张参考图，按顺序为图1、图2。\n换成蓝色\n避免出现：文字",
-    );
-    expect(composeSendText({ prompt: "蓝天", negativePrompt: "文字", referenceCount: 0, inlineNegative: true })).toBe("蓝天\n避免出现：文字");
-    expect(composeSendText({ prompt: "蓝天", negativePrompt: "", referenceCount: 0, inlineNegative: true })).toBe("蓝天");
-    expect(inlinesNegativePrompt(qwenPro, 0)).toBe(false);
-    expect(inlinesNegativePrompt(seedreamPro, 0)).toBe(true);
-    expect(inlinesNegativePrompt(seedreamLite, 2)).toBe(true);
-  });
-
-  it("发送文本里 @图N 按提示词语言改写；英文提示词用英文数量顺序前缀", () => {
-    expect(composeSendText({ prompt: "把@图2的帽子戴到@图1头上", negativePrompt: "", referenceCount: 2 })).toBe(
-      "本次提供 2 张参考图，按顺序为图1、图2。\n把图2的帽子戴到图1头上",
-    );
-    expect(composeSendText({ prompt: "Put the hat from @图2 on @图1", negativePrompt: "text", referenceCount: 2, inlineNegative: true })).toBe(
-      "This request provides 2 reference images, in order: Image 1, Image 2.\nPut the hat from Image 2 on Image 1\nAvoid: text",
-    );
-    expect(composeSendText({ prompt: "Make @图1 blue", negativePrompt: "", referenceCount: 1 })).toBe("This request provides 1 reference image.\nMake Image 1 blue");
-  });
-
-  it("用户序号换算成发送序号；前缀按实际张数，固定句在换算之后追加、不被二次换算", () => {
-    const phrase = "图2 是图1 的标注版";
-    expect(
-      composeSendText({ prompt: "把@图2的少女放入图1的区域1", negativePrompt: "", referenceCount: 3, regionPhrases: [phrase], regionNames: ["紫色区域"], imageRefMap: [1, 3] }),
-    ).toBe(`本次提供 3 张参考图，按顺序为图1、图2、图3。\n把图3的少女放入图1的紫色区域\n${phrase}`);
   });
 
   it("request_shape 未实现的模型拒绝构造请求", () => {
@@ -243,10 +211,10 @@ describe("网关适配器：Seedream 请求形态对照夹具", () => {
     expect(calls[0].body).toMatchObject({ prompt: "一只橘猫", size: "2048x2048", sequential_image_generation: "disabled" });
   });
 
-  it("参考图按序进顶层 image（data-URL 数组），提示词注入数量顺序前缀", () => {
+  it("参考图按序进顶层 image（data-URL 数组），发送文本原样进顶层 prompt", () => {
     const fixture = loadFixture(SEEDREAM_DIR, "pro-refs-tu-3.json");
     const refs = [png, { mediaType: "image/jpeg", bytes: new Uint8Array([1]) }, { mediaType: "image/webp", bytes: new Uint8Array([2]) }];
-    const { path, body } = buildGenerationRequest(textInput({ model: seedreamPro, prompt: "把@图3的帽子戴到@图1头上", size: { width: 2048, height: 2048 }, references: refs }));
+    const { path, body } = buildGenerationRequest(textInput({ model: seedreamPro, text: "本次提供 3 张参考图，按顺序为图1、图2、图3。\n把图3的帽子戴到图1头上", size: { width: 2048, height: 2048 }, references: refs }));
     expect(path).toBe("/v1/images/generations");
     expectSeedreamBody(body, fixture, 3);
     expect((body.image as string[])[0].startsWith("data:image/png;base64,")).toBe(true);
@@ -256,35 +224,14 @@ describe("网关适配器：Seedream 请求形态对照夹具", () => {
     expect(body).not.toHaveProperty("parameters");
   });
 
-  it("区域指示：叠加图紧随原图，固定句追加在末尾、「区域N」改写为颜色指代", () => {
+  it("区域指示：叠加图紧随原图进顶层 image", () => {
     const fixture = loadFixture(SEEDREAM_DIR, "lite-region-overlay-1.json");
     const overlay = { mediaType: "image/png", bytes: new Uint8Array([9]) };
-    const slots: SlotRef[] = [
-      { kind: "image", port: 1, userPort: 1, sourcePort: null, regionCount: 0 },
-      { kind: "overlay", port: 2, userPort: 1, sourcePort: 1, regionCount: 1 },
-    ];
-    const { body } = buildGenerationRequest(
-      textInput({
-        model: seedreamLite,
-        prompt: "把区域1改成红色",
-        size: { width: 3456, height: 1152 },
-        references: [png, overlay],
-        regionPhrases: overlayPhrases(seedreamLite, slots, "zh"),
-        regionNames: regionNames(slots, "zh"),
-      }),
-    );
+    const text = "本次提供 2 张参考图，按顺序为图1、图2。\n把紫色区域改成红色\n图2 是图1 的标注版";
+    const { body } = buildGenerationRequest(textInput({ model: seedreamLite, text, size: { width: 3456, height: 1152 }, references: [png, overlay] }));
     expectSeedreamBody(body, fixture, 2);
     expect((body.image as string[])[1]).toBe("data:image/png;base64,CQ==");
-    const template = seedreamLite.region_hint_phrasing.highlight_overlay!.zh;
-    expect(body.prompt).toBe(`本次提供 2 张参考图，按顺序为图1、图2。\n把紫色区域改成红色\n${template.replaceAll("{overlay}", "2").replaceAll("{source}", "1").replaceAll("{colors}", "紫色")}`);
-  });
-
-  it("区域指示：请求文本按 imageRefMap 换算用户序号", () => {
-    const overlay = { mediaType: "image/png", bytes: new Uint8Array([9]) };
-    const { body } = buildGenerationRequest(
-      textInput({ model: seedreamLite, prompt: "把@图2的少女放进来", size: { width: 3456, height: 1152 }, references: [png, overlay, png], imageRefMap: [1, 3] }),
-    );
-    expect(body.prompt).toBe("本次提供 3 张参考图，按顺序为图1、图2、图3。\n把图3的少女放进来");
+    expect(body.prompt).toBe(text);
   });
 
   it("透明背景：pro 打开开关附带 background:transparent；关闭不带", () => {
@@ -298,13 +245,11 @@ describe("网关适配器：Seedream 请求形态对照夹具", () => {
     expectSeedreamBody(off, ctl, 1);
   });
 
-  it("无原生负向字段：负向拼进 prompt 末尾，不发 negative_prompt", () => {
-    const edit = buildGenerationRequest(textInput({ model: seedreamPro, negativePrompt: "模糊", references: [png] })).body;
+  it("无原生负向字段：不发 negative_prompt（负向已由发送计划拼进文本）", () => {
+    const edit = buildGenerationRequest(textInput({ model: seedreamPro, text: "本次提供 1 张参考图。\n一只橘猫\n避免出现：模糊", references: [png] })).body;
     expect(edit.prompt).toBe("本次提供 1 张参考图。\n一只橘猫\n避免出现：模糊");
     expect(edit).not.toHaveProperty("negative_prompt");
-    const text = buildGenerationRequest(textInput({ model: seedreamLite, negativePrompt: "模糊" })).body;
-    expect(text.prompt).toBe("一只橘猫\n避免出现：模糊");
-    expect(text).not.toHaveProperty("negative_prompt");
+    expect(buildGenerationRequest(textInput({ model: seedreamLite })).body).not.toHaveProperty("negative_prompt");
   });
 
   it("透明背景：能力表不支持的模型（lite、qwen）即使开关打开也不发 background", () => {

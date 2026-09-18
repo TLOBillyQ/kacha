@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Board, BoardEdge, BoardNode, TaskNode } from "./board";
 import { BUILTIN_TABLE, findModel } from "./capabilities";
-import { effectiveRegionRender, expandImageEdges, imageRefMap, overlayPhrases, setEdgeRegion } from "./region";
+import { effectiveRegionRender, expandImageEdges, setEdgeRegion, slotsFromReferences, type SlotRef } from "./region";
 
 function task(id: string, patch: Partial<TaskNode> = {}): TaskNode {
   return {
@@ -47,10 +47,9 @@ describe("渲染方式推导", () => {
     expect(effectiveRegionRender(undefined)).toBeNull();
   });
 
-  it("highlight_overlay 优先于 bbox_tag，bbox_tag 优先于 marked_image", () => {
-    const model = { ...qwen, region_hint: { highlight_overlay: "supported" as const, marked_image: "supported" as const, bbox_tag: "supported" as const } };
-    expect(effectiveRegionRender(model)).toBe("highlight_overlay");
-    expect(effectiveRegionRender({ ...model, region_hint: { ...model.region_hint, highlight_overlay: "unsupported" as const } })).toBe("bbox_tag");
+  it("只认客户端已实现的渲染方式：能力表标了 bbox_tag / marked_image 支持、高亮叠加不支持时为 null", () => {
+    const model = { ...qwen, region_hint: { highlight_overlay: "unsupported" as const, marked_image: "supported" as const, bbox_tag: "supported" as const } };
+    expect(effectiveRegionRender(model)).toBeNull();
   });
 });
 
@@ -74,16 +73,6 @@ describe("端口槽展开", () => {
       ["overlay", 2, 1],
       ["image", 3, 2],
     ]);
-    expect(imageRefMap(slots)).toEqual([1, 3]);
-  });
-
-  it("多张图各带区域（共 3 个区域）：用户序号 → 发送序号", () => {
-    const two = { ...REGION, rects: [REGION.rects[0], REGION.rects[0]] };
-    const edges = [edge("r1", "t", "image:0", { region: two }), edge("r2", "t", "image:1"), edge("r3", "t", "image:2", { region: REGION })];
-    expect(imageRefMap(expandImageEdges(edges, "highlight_overlay"))).toEqual([1, 3, 4]);
-    // 删除区域 / 渲染方式不是 highlight_overlay：恒等。
-    expect(imageRefMap(expandImageEdges(edges.map((e) => ({ ...e, region: null })), "highlight_overlay"))).toEqual([1, 2, 3]);
-    expect(imageRefMap(expandImageEdges(edges, "bbox_tag"))).toEqual([1, 2, 3]);
   });
 
   it("无区域的线不占叠加名额", () => {
@@ -107,26 +96,46 @@ describe("端口槽展开", () => {
   });
 });
 
-describe("区域固定句", () => {
-  it("按语言取模板并替换 {source} / {overlay}", () => {
-    const slots = expandImageEdges([edge("r1", "t", "image:0", { region: REGION }), edge("r2", "t", "image:1")], "highlight_overlay");
-    const zh = overlayPhrases(qwen, slots, "zh");
-    expect(zh).toHaveLength(1);
-    expect(zh[0]).toContain("图2 是图1 的标注版");
-    const en = overlayPhrases(qwen, slots, "en");
-    expect(en[0]).toContain("Image 2 is an annotated copy of Image 1");
+describe("从任务记录重建槽", () => {
+  /** 槽的最小形状：去掉来源连线，便于和重建结果比较。 */
+  const shape = (slots: SlotRef[]): SlotRef[] => slots.map(({ kind, port, userPort, sourcePort, regionCount }) => ({ kind, port, userPort, sourcePort, regionCount }));
+
+  // #113 之前的旧口径 task.json：send_text 里叠加图占了用户序号（「把图2的少女」实指发送图3）；references[] 形状不变。
+  const OLD_TASK_JSON = {
+    task_id: "20260915T080000Z-0a1b2c3d",
+    workflow: "image_edit",
+    model: "qwen-image-3.0-pro",
+    prompt: "把@图2的少女放入图1",
+    send_text: "本次提供 3 张参考图，按顺序为图1、图2、图3。\n把图2的少女放入图1\n图2 是图1 的标注版，紫色、黄色半透明高亮标出的是要修改的区域。",
+    references: [
+      { file: "reference-1.png", media_type: "image/png", sha256: "a".repeat(64), source: { kind: "reference", path: "refs/r1.png", sha256: "a".repeat(64) } },
+      {
+        file: "reference-2.png",
+        media_type: "image/png",
+        sha256: "b".repeat(64),
+        source: { kind: "overlay", of: 1 },
+        region: { rects: [[0.1, 0.1, 0.5, 0.5], [0.6, 0.6, 0.9, 0.9]], render: "highlight_overlay", source_port: 1 },
+      },
+      { file: "reference-3.png", media_type: "image/png", sha256: "c".repeat(64), source: { kind: "result", task_id: "20260914T000000Z-00000000", file: "result.png" } },
+    ],
+  };
+
+  it("旧口径 task.json 重建的槽与从画板展开的槽一致", () => {
+    const two = { ...REGION, rects: [REGION.rects[0], REGION.rects[0]] };
+    const fromBoard = expandImageEdges([edge("r1", "t", "image:0", { region: two }), edge("r2", "t", "image:1")], "highlight_overlay");
+    expect(slotsFromReferences(OLD_TASK_JSON.references)).toEqual(shape(fromBoard));
   });
 
-  it("多个区域各出一句；无叠加槽时为空", () => {
-    const two = expandImageEdges([edge("r1", "t", "image:0", { region: REGION }), edge("r2", "t", "image:1", { region: REGION })], "highlight_overlay");
-    expect(overlayPhrases(qwen, two, "zh")).toHaveLength(2);
-    expect(overlayPhrases(qwen, expandImageEdges([edge("r1", "t", "image:0")], "highlight_overlay"), "zh")).toEqual([]);
-  });
-
-  it("模型没有模板时为空", () => {
-    const noTemplate = { ...qwen, region_hint_phrasing: {} };
-    const slots = expandImageEdges([edge("r1", "t", "image:0", { region: REGION })], "highlight_overlay");
-    expect(overlayPhrases(noTemplate, slots, "zh")).toEqual([]);
+  it("多张图各带区域、无参考图", () => {
+    const edges = [edge("r1", "t", "image:0", { region: REGION }), edge("r2", "t", "image:1"), edge("r3", "t", "image:2", { region: REGION })];
+    const fromBoard = shape(expandImageEdges(edges, "highlight_overlay"));
+    const references = fromBoard.map((s) =>
+      s.kind === "overlay"
+        ? { source: { kind: "overlay", of: s.sourcePort! }, region: { rects: REGION.rects, render: "highlight_overlay" as const, source_port: s.sourcePort! } }
+        : { source: { kind: "reference" } },
+    );
+    expect(slotsFromReferences(references)).toEqual(fromBoard);
+    expect(slotsFromReferences([])).toEqual([]);
   });
 });
 

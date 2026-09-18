@@ -57,8 +57,14 @@ describe("提交时写任务目录", () => {
     model: "qwen-image-3.0-pro",
     prompt: "把图2的帽子戴到图1头上",
     negativePrompt: "模糊",
-    sendText: "本次提供 2 张参考图，按顺序为图1、图2。\n把图2的帽子戴到图1头上\n避免出现：模糊",
-    regionPhrases: [],
+    send: {
+      text: "本次提供 2 张参考图，按顺序为图1、图2。\n把图2的帽子戴到图1头上\n避免出现：模糊",
+      nativeNegativePrompt: null,
+      workflow: "image_edit",
+      negativeInlined: true,
+      referenceCount: 2,
+      referenceProblems: { issues: [], warnings: [], unreferenced: [] },
+    },
     sizeSpec: { tier: "1K", ratio: "1:1", width: null, height: null },
     size: { width: 1024, height: 1024 },
     layerDecomposition: false,
@@ -92,7 +98,7 @@ describe("提交时写任务目录", () => {
       capability_table_sha256: "c".repeat(64),
       prompt: "把图2的帽子戴到图1头上",
       negative_prompt: "模糊",
-      send_text: plan().sendText,
+      send_text: plan().send.text,
       size_spec: { tier: "1K", ratio: "1:1", width: null, height: null },
       size: { width: 1024, height: 1024 },
       layer_decomposition: false,
@@ -104,9 +110,9 @@ describe("提交时写任务目录", () => {
     });
   });
 
-  it("文生图没有参考图文件", async () => {
+  it("文生图没有参考图文件；工作流取自发送计划", async () => {
     const fs = memoryFs();
-    await writeSubmission(fs, "/root", plan({ references: [] }));
+    await writeSubmission(fs, "/root", plan({ references: [], send: { ...plan().send, text: "一只橘猫", workflow: "text_to_image", referenceCount: 0 } }));
     expect([...fs.files.keys()]).toEqual(["/root/2026-09-16/20260916T091500Z-3f9c2a1b/task.json"]);
     expect(JSON.parse(fs.text("/root/2026-09-16/20260916T091500Z-3f9c2a1b/task.json")).workflow).toBe("text_to_image");
   });

@@ -7,6 +7,7 @@ import type { LayerRecord, RegionRender } from "./board";
 export type { LayerRecord };
 import type { ReferenceImage } from "./gateway";
 import { joinPath } from "./paths";
+import type { SendPlan } from "./sendPlan";
 import type { SizeSpec } from "./size";
 
 export interface TaskFs {
@@ -74,13 +75,8 @@ export interface SubmissionPlan {
   model: string;
   prompt: string;
   negativePrompt: string;
-  sendText: string;
-  /** 区域指示固定句（每个叠加参考图一句），追加在发送文本末尾。 */
-  regionPhrases: string[];
-  /** 区域编号的颜色指代（区域N 取第 N 个）；只参与发送文本，不单独落盘。 */
-  regionNames?: string[];
-  /** 用户序号 → 发送序号；只参与发送文本，不单独落盘（task.json 的 references[] 足以还原）。 */
-  imageRefMap?: number[];
+  /** 发送计划：task.json 的 workflow 与 send_text 取自这里，请求也发它的发送文本。 */
+  send: SendPlan;
   sizeSpec: SizeSpec;
   size: { width: number; height: number };
   layerDecomposition: boolean;
@@ -112,13 +108,13 @@ export async function writeSubmission(fs: TaskFs, outputRoot: string, plan: Subm
   const record = {
     task_id: plan.taskId,
     submitted_at: plan.submittedAt.toISOString(),
-    workflow: plan.references.length ? "image_edit" : "text_to_image",
+    workflow: plan.send.workflow,
     model: plan.model,
     capability_format_version: plan.capabilityFormatVersion,
     capability_table_sha256: plan.capabilityTableSha256,
     prompt: plan.prompt,
     negative_prompt: plan.negativePrompt,
-    send_text: plan.sendText,
+    send_text: plan.send.text,
     size_spec: plan.sizeSpec,
     size: plan.size,
     layer_decomposition: plan.layerDecomposition,

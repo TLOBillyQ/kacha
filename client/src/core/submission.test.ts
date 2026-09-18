@@ -161,24 +161,24 @@ describe("二次确认清单", () => {
       firstLine: "把图2的帽子戴到图1头上",
       issues: [],
     });
-    expect(item.sendText).toBe("本次提供 2 张参考图，按顺序为图1、图2。\n把图2的帽子戴到图1头上\n第二行");
-    expect(item.negativeInlined).toBe(false);
+    expect(item.send?.text).toBe("本次提供 2 张参考图，按顺序为图1、图2。\n把图2的帽子戴到图1头上\n第二行");
+    expect(item.send?.negativeInlined).toBe(false);
     expect(item.negativePrompt).toBe("模糊");
   });
 
   it("qwen 支持原生负向：发送文本即提示词，负向另列", () => {
     const b = board([prompt("p", "一只橘猫"), prompt("n", "模糊"), task("t")], [edge("p", "t", "positive"), edge("n", "t", "negative")]);
     const [item] = buildConfirmItems(b, BUILTIN_TABLE, ["t"], ctx);
-    expect(item.sendText).toBe("一只橘猫");
+    expect(item.send?.text).toBe("一只橘猫");
     expect(item.negativePrompt).toBe("模糊");
-    expect(item.negativeInlined).toBe(false);
+    expect(item.send?.negativeInlined).toBe(false);
   });
 
   it("Seedream 无原生负向：负向拼进发送文本末尾", () => {
     const b = board([prompt("p", "一只橘猫"), prompt("n", "模糊"), task("t", { model: "doubao-seedream-5-0-lite-260128" })], [edge("p", "t", "positive"), edge("n", "t", "negative")]);
     const [item] = buildConfirmItems(b, BUILTIN_TABLE, ["t"], ctx);
-    expect(item.sendText).toBe("一只橘猫\n避免出现：模糊");
-    expect(item.negativeInlined).toBe(true);
+    expect(item.send?.text).toBe("一只橘猫\n避免出现：模糊");
+    expect(item.send?.negativeInlined).toBe(true);
   });
 
   it("标红任务列出原因：未连正向、提示词为空、请求形态未接入、网关未发现、缺图", () => {
@@ -197,6 +197,14 @@ describe("二次确认清单", () => {
     expect(items[2].issues).toEqual(expect.arrayContaining(["网关未提供模型 qwen-image-3.0-pro", "图1 图片缺失：r1.png"]));
   });
 
+  it("模型不在能力表内：没有发送计划，任务标红", () => {
+    const b = board([prompt("p", "一只橘猫"), task("t", { model: "retired-model" })], [edge("p", "t", "positive")]);
+    const [item] = buildConfirmItems(b, BUILTIN_TABLE, ["t"], ctx);
+    expect(item.send).toBeNull();
+    expect(item.modelName).toBe("retired-model");
+    expect(item.issues).toContain("模型 retired-model 不在能力表内");
+  });
+
   it("Seedream 请求形态已接入，不因请求形态标红", () => {
     const b = board([prompt("p", "一只橘猫"), task("t", { model: "doubao-seedream-5-0-lite-260128" })], [edge("p", "t", "positive")]);
     const [item] = buildConfirmItems(b, BUILTIN_TABLE, ["t"], { discovery: { source: "none" }, missingNodes: new Set() });
@@ -210,9 +218,7 @@ describe("运行分派", () => {
     modelName: "m",
     firstLine: "",
     negativePrompt: "",
-    negativeInlined: false,
-    sendText: "",
-    referenceCount: 0,
+    send: null,
     issues: [],
     warnings: [],
     ...patch,
@@ -254,7 +260,7 @@ describe("二次确认：「图N」校验与提示", () => {
     const [item] = buildConfirmItems(b, BUILTIN_TABLE, ["t"], ctx);
     expect(item.issues).toEqual(["提示词引用了图3，但只接了 2 张参考图"]);
     expect(item.warnings).toEqual(["图2 已接线但提示词未引用"]);
-    expect(item.sendText).toContain("把图3 的颜色用到图1 上");
+    expect(item.send?.text).toContain("把图3 的颜色用到图1 上");
   });
 
   it("英文序号未验证的模型：英文提示词带参考图时提示", () => {
@@ -266,7 +272,7 @@ describe("二次确认：「图N」校验与提示", () => {
     t.models.find((m) => m.model_id === "doubao-seedream-5-0-lite-260128")!.reference_phrasing.en_verified = "untested";
     const [item] = buildConfirmItems(b, t, ["t"], ctx);
     expect(item.warnings).toContain("该模型英文序号未验证");
-    expect(item.sendText).toBe("This request provides 1 reference image.\nPut Image 1 on a beach");
+    expect(item.send?.text).toBe("This request provides 1 reference image.\nPut Image 1 on a beach");
   });
 });
 
@@ -300,8 +306,8 @@ describe("区域指示：图N 校验与发送文本", () => {
     const [item] = buildConfirmItems(regionBoard("把@图1 的帽子改成红色"), BUILTIN_TABLE, ["t"], ctx);
     expect(item.issues).toEqual([]);
     expect(item.warnings).toEqual([]);
-    expect(item.referenceCount).toBe(2);
-    expect(item.sendText).toBe(
+    expect(item.send?.referenceCount).toBe(2);
+    expect(item.send?.text).toBe(
       "本次提供 2 张参考图，按顺序为图1、图2。\n把图1 的帽子改成红色\n图2 是图1 的标注版，紫色半透明高亮标出的是要修改的区域。只修改图1 中高亮区域内的内容，高亮区域之外的所有内容保持完全不变，输出图里不要出现任何高亮颜色。",
     );
   });
@@ -315,9 +321,9 @@ describe("区域指示：图N 校验与发送文本", () => {
     const [item] = buildConfirmItems(b, BUILTIN_TABLE, ["t"], ctx);
     // 两张图各带叠加图共 4 张，超出 qwen 上限另行标红；这里只看区域编号本身。
     expect(item.issues.filter((i) => i.includes("区域"))).toEqual([]);
-    expect(item.sendText).toContain("紫色区域 放狐狸，洋红色区域 放礼物盒，黄色区域 放路牌");
-    expect(item.sendText).toContain("图2 是图1 的标注版，紫色、黄色半透明高亮");
-    expect(item.sendText).toContain("图4 是图3 的标注版，洋红色半透明高亮");
+    expect(item.send?.text).toContain("紫色区域 放狐狸，洋红色区域 放礼物盒，黄色区域 放路牌");
+    expect(item.send?.text).toContain("图2 是图1 的标注版，紫色、黄色半透明高亮");
+    expect(item.send?.text).toContain("图4 是图3 的标注版，洋红色半透明高亮");
 
     const [over] = buildConfirmItems(regionBoard("区域2 改成红色"), BUILTIN_TABLE, ["t"], ctx);
     expect(over.issues).toContain("提示词引用了区域2，但只框选了 1 个区域");
@@ -331,7 +337,7 @@ describe("区域指示：图N 校验与发送文本", () => {
     const plain = board([prompt("p", "把区域2 的草地加深"), reference("r1"), task("t")], [edge("p", "t", "positive"), edge("r1", "t", "image:0")]);
     const [item] = buildConfirmItems(plain, BUILTIN_TABLE, ["t"], ctx);
     expect(item.issues).toEqual([]);
-    expect(item.sendText).toContain("把区域2 的草地加深");
+    expect(item.send?.text).toContain("把区域2 的草地加深");
   });
 
   const twoImages = (text: string, region: typeof REGION | null) =>
@@ -344,14 +350,14 @@ describe("区域指示：图N 校验与发送文本", () => {
     const [item] = buildConfirmItems(twoImages("把@图2的少女放入图1的区域1", REGION), BUILTIN_TABLE, ["t"], ctx);
     expect(item.issues).toEqual([]);
     expect(item.warnings).toEqual([]);
-    expect(item.referenceCount).toBe(3);
-    expect(item.sendText).toBe(
+    expect(item.send?.referenceCount).toBe(3);
+    expect(item.send?.text).toBe(
       "本次提供 3 张参考图，按顺序为图1、图2、图3。\n把图3的少女放入图1的紫色区域\n图2 是图1 的标注版，紫色半透明高亮标出的是要修改的区域。只修改图1 中高亮区域内的内容，高亮区域之外的所有内容保持完全不变，输出图里不要出现任何高亮颜色。",
     );
 
     // 删除区域：恢复原发送顺序，用户序号不变。
     const [plain] = buildConfirmItems(twoImages("把@图2的少女放入图1", null), BUILTIN_TABLE, ["t"], ctx);
-    expect(plain.sendText).toBe("本次提供 2 张参考图，按顺序为图1、图2。\n把图2的少女放入图1");
+    expect(plain.send?.text).toBe("本次提供 2 张参考图，按顺序为图1、图2。\n把图2的少女放入图1");
   });
 
   it("多张图各带区域（共 3 个区域）：@图N、不带 @ 的图N、Image N 都按用户序号换算，地图2 不动", () => {
@@ -361,11 +367,11 @@ describe("区域指示：图N 校验与发送文本", () => {
       [edge("p", "t", "positive"), { ...edge("r1", "t", "image:0"), region: two }, edge("r2", "t", "image:1"), { ...edge("r3", "t", "image:2"), region: REGION }],
     );
     const [item] = buildConfirmItems(b, BUILTIN_TABLE, ["t"], ctx);
-    expect(item.referenceCount).toBe(5);
+    expect(item.send?.referenceCount).toBe(5);
     expect(item.issues).toEqual([]);
-    expect(item.sendText).toContain("本次提供 5 张参考图，按顺序为图1、图2、图3、图4、图5。\n把图3 放进图1，照着地图2 摆，图4 当背景；Image 4\n");
-    expect(item.sendText).toContain("图2 是图1 的标注版，紫色、黄色半透明高亮");
-    expect(item.sendText).toContain("图5 是图4 的标注版，洋红色半透明高亮");
+    expect(item.send?.text).toContain("本次提供 5 张参考图，按顺序为图1、图2、图3、图4、图5。\n把图3 放进图1，照着地图2 摆，图4 当背景；Image 4\n");
+    expect(item.send?.text).toContain("图2 是图1 的标注版，紫色、黄色半透明高亮");
+    expect(item.send?.text).toContain("图5 是图4 的标注版，洋红色半透明高亮");
   });
 
   it("引用越界按用户连线数：两张用户图其中一张带区域时 @图3 标红；未引用的用户图标黄，叠加图从不标黄", () => {

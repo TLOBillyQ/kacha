@@ -1,13 +1,15 @@
-// 区域指示：连线上的矩形区域如何渲染、如何展开成参考图序号、固定句如何生成。
+// 区域指示：连线上的矩形区域如何渲染、如何展开成端口槽、区域如何编号。
 // 区域端口是派生的，不写进画板连线：换模型自动长出 / 消失，区域数据原样保留。
 // 两套序号：用户序号（「图N」，只数用户图片连线，不受区域影响）与发送序号（叠加图紧随原图的实际发送顺序）。
+// 区域编号是槽的属性：成像（叠加图上色、画板给框上色）与发送计划各自从同一份槽读 firstRegionOf。文本部分在发送计划（sendPlan.ts）。
 import type { Board, BoardEdge, PortRef, Region, RegionRender } from "./board";
 import { isSupported, type ModelCapability } from "./capabilities";
-import type { PromptLanguage } from "./imageRefs";
-import { REGION_COLORS } from "./overlay";
 
-/** 渲染方式选择优先级：取模型支持的第一个。高亮叠加居首：分色 +「区域N」改写在 qwen 与 Seedream 上均已实测多区域命中（#83）。 */
-export const RENDER_PRIORITY: RegionRender[] = ["highlight_overlay", "bbox_tag", "marked_image"];
+/**
+ * 客户端已实现的渲染方式，按优先级取模型支持的第一个。能力表记模型事实、不记客户端实现（ADR 0004）：
+ * marked_image / bbox_tag 在能力表里可以标支持，但客户端尚未实现，由这里挡在外面。
+ */
+export const RENDER_PRIORITY: RegionRender[] = ["highlight_overlay"];
 
 /** 模型当前生效的区域渲染方式；全部不支持 / 待测为 null。 */
 export function effectiveRegionRender(model: ModelCapability | undefined): RegionRender | null {
@@ -15,7 +17,7 @@ export function effectiveRegionRender(model: ModelCapability | undefined): Regio
   return RENDER_PRIORITY.find((kind) => isSupported(model.region_hint[kind])) ?? null;
 }
 
-/** 展开后槽位的最小形状（重新生成时从 task.json 重建，没有连线对象）。 */
+/** 展开后槽位的最小形状（重新生成时由 slotsFromReferences 从 task.json 重建，没有连线对象）。 */
 export interface SlotRef {
   kind: "image" | "overlay";
   /** 发送序号（1 起）：叠加图紧随原图的实际发送顺序。 */
@@ -50,9 +52,17 @@ export function expandImageEdges(edges: BoardEdge[], render: RegionRender | null
   return slots;
 }
 
-/** 用户序号 → 发送序号：第 N-1 项为用户图N 的发送序号。没有叠加槽时为恒等。 */
-export function imageRefMap(slots: SlotRef[]): number[] {
-  return slots.filter((s) => s.kind === "image").map((s) => s.port);
+/**
+ * 槽的第二个构造函数：从任务记录的 references[]（按发送序号排列，叠加图紧随原图）重建。
+ * 用户序号按顺序给非叠加条目编 1..k；叠加条目沿用原图的用户序号。#113 之前的旧任务记录 references[] 形状相同，同样适用。
+ */
+export function slotsFromReferences(references: { source: { kind: string }; region?: { source_port: number; rects: unknown[] } }[]): SlotRef[] {
+  let userPort = 0;
+  return references.map((ref, i) =>
+    ref.source.kind === "overlay" && ref.region
+      ? { kind: "overlay", port: i + 1, userPort, sourcePort: ref.region.source_port, regionCount: ref.region.rects.length }
+      : { kind: "image", port: i + 1, userPort: ++userPort, sourcePort: null, regionCount: 0 },
+  );
 }
 
 /** 各叠加槽第一个区域的区域编号（0 起）：按槽顺序、再按框选先后连续编号。 */
@@ -65,43 +75,6 @@ export function firstRegionOf(slots: SlotRef[]): Map<number, number> {
     next += s.regionCount;
   }
   return out;
-}
-
-const colorName = (index: number, language: PromptLanguage) => REGION_COLORS[index % REGION_COLORS.length][language];
-
-/**
- * 每个叠加槽一句区域固定句，模板取自能力表 region_hint_phrasing.highlight_overlay；无模板时为空。
- * 占位符：{overlay} 叠加图序号、{source} 原图序号、{colors} 该图各区域的颜色名。
- */
-export function overlayPhrases(model: ModelCapability, slots: SlotRef[], language: PromptLanguage): string[] {
-  const template = model.region_hint_phrasing.highlight_overlay?.[language];
-  if (!template) return [];
-  const first = firstRegionOf(slots);
-  return slots
-    .filter((s) => s.kind === "overlay")
-    .map((s) => {
-      const colors = Array.from({ length: s.regionCount }, (_, k) => colorName(first.get(s.port)! + k, language)).join(language === "zh" ? "、" : ", ");
-      return template.split("{source}").join(String(s.sourcePort)).split("{overlay}").join(String(s.port)).split("{colors}").join(colors);
-    });
-}
-
-/** 区域编号 → 发送文本里的指代（区域1 → 紫色区域 / the purple region），按区域编号排列。 */
-export function regionNames(slots: SlotRef[], language: PromptLanguage): string[] {
-  const total = slots.reduce((n, s) => n + (s.kind === "overlay" ? s.regionCount : 0), 0);
-  return Array.from({ length: total }, (_, i) => (language === "zh" ? `${colorName(i, language)}区域` : `the ${colorName(i, language)} region`));
-}
-
-const REGION_REF = /区域\s*(\d+)|\bregion\s*(\d+)/gi;
-
-/** 提示词里的「区域N」/「Region N」改写为颜色指代；越界的编号原样保留（由校验标红）。 */
-export function rewriteRegionRefs(text: string, names: string[]): string {
-  if (names.length === 0) return text;
-  return text.replace(REGION_REF, (match, zh?: string, en?: string) => names[Number(zh ?? en) - 1] ?? match);
-}
-
-/** 提示词引用的区域编号（1 起）。 */
-export function referencedRegions(text: string): number[] {
-  return [...new Set([...text.matchAll(REGION_REF)].map((m) => Number(m[1] ?? m[2])))].sort((a, b) => a - b);
 }
 
 /** 设置 / 清除一条连线的区域。region.render 仅作创建时记录，行为一律按当前模型推导（effectiveRegionRender）。 */

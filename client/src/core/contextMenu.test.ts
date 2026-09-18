@@ -254,7 +254,8 @@ describe("连线菜单", () => {
     ...BUILTIN_TABLE,
     models: BUILTIN_TABLE.models.map((m) => ({
       ...m,
-      region_hint: { highlight_overlay: "unsupported" as const, marked_image: "unsupported" as const, bbox_tag: supported ? ("supported" as const) : ("unsupported" as const) },
+      // 客户端只实现了高亮叠加参考图（ADR 0004），能力表里其余渲染方式的支持不算。
+      region_hint: { highlight_overlay: supported ? ("supported" as const) : ("unsupported" as const), marked_image: "supported" as const, bbox_tag: "supported" as const },
     })),
   });
   const imageLine = edge("r", "out", "t", "image:0");

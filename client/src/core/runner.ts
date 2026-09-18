@@ -181,7 +181,7 @@ export function createRunner(ports: RunnerPorts): Runner {
   /** 任务迁移事件带画板文件名 + 任务节点 id。 */
   function taskFields(job: Job) {
     const p = job.prepared!;
-    return { task_id: p.taskId, board_file: job.target.boardFile, task_node_id: job.taskNodeId, model: p.plan.model, workflow: p.plan.references.length ? "image_edit" : "text_to_image" };
+    return { task_id: p.taskId, board_file: job.target.boardFile, task_node_id: job.taskNodeId, model: p.plan.model, workflow: p.plan.send.workflow };
   }
   function logTransition(job: Job, from: string | null, to: string, extra: Record<string, unknown> = {}) {
     ports.log("task", { ...taskFields(job), from_status: from, to_status: to, ...extra });

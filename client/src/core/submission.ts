@@ -1,11 +1,10 @@
 // 提交前的纯函数：脏判据快照、运行范围、二次确认清单。
 import type { Board, Region, TaskNode } from "./board";
 import { findModel, type CapabilityTable } from "./capabilities";
-import { composeSendText, inlinesNegativePrompt, isRequestShapeImplemented } from "./gateway";
+import { isRequestShapeImplemented } from "./gateway";
 import { imageEdges, imagePortSlots, taskIssues, transparentAlphaIssue } from "./graph";
-import { checkImageRefs, promptLanguage } from "./imageRefs";
 import { resolveFromRoot } from "./paths";
-import { imageRefMap, overlayPhrases, referencedRegions, regionNames } from "./region";
+import { planSend, promptLanguage, referenceProblemsOf, type ReferenceProblems, type SendPlan } from "./sendPlan";
 import { modelAvailabilityIssue, type Discovery } from "./settings";
 import type { SizeSpec } from "./size";
 
@@ -150,38 +149,26 @@ export interface ConfirmItem {
   modelName: string;
   firstLine: string;
   negativePrompt: string;
-  /** 负向已拼进 sendText（模型无原生负向字段，如 Seedream）；否则走原生字段，弹窗另列。 */
-  negativeInlined: boolean;
-  /** 完整发送文本：有参考图时含数量顺序前缀；negativeInlined 时含「避免出现：」一行。 */
-  sendText: string;
-  referenceCount: number;
+  /** 当前会发给模型的内容；模型不在能力表内时为 null（任务本就标红、不可运行）。 */
+  send: SendPlan | null;
   /** 非空 = 标红，不可勾选。 */
   issues: string[];
   /** 仅提示，不阻断。 */
   warnings: string[];
 }
 
-/** 「图N」实时角标：红 = 引用越界（不可运行），黄 = 有线未被引用。任务节点与二次确认共用。 */
-export function imageRefProblems(board: Board, table: CapabilityTable, taskId: string): { issues: string[]; warnings: string[]; unreferenced: number[] } {
-  const prompt = promptText(board, taskId, "positive");
+/** 按画板当前内容的发送计划；模型不在能力表内时没有发送计划。 */
+export function sendPlanOf(board: Board, table: CapabilityTable, taskId: string): SendPlan | null {
   const task = findTask(board, taskId);
   const model = task && findModel(table, task.model);
-  // 按用户序号判断：区域叠加图不占「图N」；固定句按发送序号书写，换回用户序号再算引用。
-  const slots = imagePortSlots(board, table, taskId);
-  const map = imageRefMap(slots);
-  const count = map.length;
-  const check = checkImageRefs(prompt, count, {
-    injected: model ? overlayPhrases(model, slots, promptLanguage(prompt)) : [],
-    imageRefMap: map,
-  });
-  // 只有区域真的生效（叠加槽存在）时才校验「区域N」；没有框选时这两个字是普通文字。
-  const regions = regionNames(slots, promptLanguage(prompt)).length;
-  const regionIssues = regions > 0 ? referencedRegions(prompt).filter((n) => n < 1 || n > regions).map((n) => `提示词引用了区域${n}，但只框选了 ${regions} 个区域`) : [];
-  return {
-    issues: [...check.outOfRange.map((n) => `提示词引用了图${n}，但只接了 ${count} 张参考图`), ...regionIssues],
-    warnings: check.unreferenced.map((n) => `图${n} 已接线但提示词未引用`),
-    unreferenced: check.unreferenced,
-  };
+  if (!model) return null;
+  return planSend(model, imagePortSlots(board, table, taskId), promptText(board, taskId, "positive"), promptText(board, taskId, "negative"));
+}
+
+/** 「图N」「区域N」实时角标：红 = 引用越界（不可运行），黄 = 有线未被引用。任务节点与二次确认共用，取自发送计划。 */
+export function imageRefProblems(board: Board, table: CapabilityTable, taskId: string): ReferenceProblems {
+  const plan = sendPlanOf(board, table, taskId);
+  return plan ? plan.referenceProblems : referenceProblemsOf(undefined, imagePortSlots(board, table, taskId), promptText(board, taskId, "positive"));
 }
 
 export interface ConfirmContext {
@@ -206,7 +193,8 @@ export function buildConfirmItems(board: Board, table: CapabilityTable, taskIds:
     if (model && !isRequestShapeImplemented(model)) issues.push(`模型 ${model.display_name} 的请求形态尚未接入`);
     const unavailable = model && modelAvailabilityIssue(table, ctx.discovery, model.model_id);
     if (unavailable) issues.push(unavailable);
-    const refs = imageRefProblems(board, table, taskId);
+    const send = sendPlanOf(board, table, taskId);
+    const refs = send?.referenceProblems ?? imageRefProblems(board, table, taskId);
     issues.push(...refs.issues);
     const warnings = [...refs.warnings];
     if (model && images.length > 0 && promptLanguage(prompt) === "en" && model.reference_phrasing.en_verified === "untested") {
@@ -218,19 +206,13 @@ export function buildConfirmItems(board: Board, table: CapabilityTable, taskIds:
     const edges = imageEdges(board, taskId);
     const alphaIssue = transparentAlphaIssue(board, taskId, edges.length === 1 ? ctx.alphaByNode?.get(edges[0].from[0]) : undefined);
     if (alphaIssue) issues.push(alphaIssue);
-    const slots = imagePortSlots(board, table, taskId);
-    const regionPhrases = model ? overlayPhrases(model, slots, promptLanguage(prompt)) : [];
-    const names = regionNames(slots, promptLanguage(prompt));
-    const negativeInlined = model ? inlinesNegativePrompt(model, slots.length) : false;
     return [
       {
         taskId,
         modelName: model?.display_name ?? task.model,
         firstLine: prompt.split("\n").find((line) => line.trim())?.trim() ?? "",
         negativePrompt,
-        negativeInlined,
-        sendText: composeSendText({ prompt, negativePrompt, referenceCount: slots.length, inlineNegative: negativeInlined, regionPhrases, regionNames: names, imageRefMap: imageRefMap(slots) }),
-        referenceCount: slots.length,
+        send,
         issues: [...new Set(issues)],
         warnings,
       },
