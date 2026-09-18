@@ -137,6 +137,14 @@ describe("单任务端到端", () => {
     expect(requests.map((r) => r.url)).toEqual(["http://gw/v1/images/edits"]);
   });
 
+  it("重新生成：上次提交的任务编号不是本工具生成的，按没有可重新生成的提交报本地错误", async () => {
+    const { d } = deps(ok);
+    const b = board(true);
+    const bogus = { ...b, nodes: b.nodes.map((n) => (n.type === "task" ? { ...n, last_submitted: { task_id: "not-a-task", prompt: "一只橘猫", negative_prompt: "", images: [], size_spec: n.size_spec, layer_decomposition: false, transparent_background: false } } : n)) } as Board;
+    const err = await prepareRegenerate(d, { board: bogus, table: BUILTIN_TABLE, tableSha256: "y", outputRoot: "/root", taskNodeId: "t" }).catch((e) => e);
+    expect(err.message).toBe("任务节点没有可重新生成的提交");
+  });
+
   it("重新生成：任务节点当前是自动宽高比时按节点当前算出的值，手动时仍按上次提交；生成变体始终按那次提交", async () => {
     const { d, files } = deps(ok);
     const { job: first, board: b1 } = await prepare(d, { board: board(true), table: BUILTIN_TABLE, tableSha256: "x", outputRoot: "/root", taskNodeId: "t" });

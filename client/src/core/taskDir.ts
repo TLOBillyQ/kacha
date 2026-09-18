@@ -204,8 +204,16 @@ function parseTaskRecord(bytes: Uint8Array): TaskRecord {
     typeof raw.size.width === "number" &&
     typeof raw.size.height === "number" &&
     Array.isArray(raw.references) &&
-    raw.references.every((ref) => isObject(ref) && isPlainFileName(ref.file) && isObject(ref.source) && typeof ref.source.kind === "string");
+    raw.references.every(
+      (ref) =>
+        isObject(ref) &&
+        isPlainFileName(ref.file) &&
+        isObject(ref.source) &&
+        typeof ref.source.kind === "string" &&
+        (ref.region === undefined || (isObject(ref.region) && Array.isArray(ref.region.rects) && typeof ref.region.source_port === "number")),
+    );
   if (!valid) throw corrupt();
+  // 只校验重新生成读到的字段（model / prompt / size / references 的 file、source、region）；其余字段按写入口径信任，仅供追溯。
   return raw as unknown as TaskRecord;
 }
 
@@ -235,7 +243,7 @@ export async function readSubmission(fs: Pick<TaskFs, "readFile">, outputRoot: s
 }
 
 /** 写结果图 result.<ext>；返回文件名与相对输出根目录的路径（画板结果节点的主引用）。 */
-export async function saveResult(fs: TaskFs, outputRoot: string, relDir: string, bytes: Uint8Array): Promise<{ file: string; path: string }> {
+export async function saveResult(fs: Pick<TaskFs, "writeNewFile">, outputRoot: string, relDir: string, bytes: Uint8Array): Promise<{ file: string; path: string }> {
   const kind = sniffImage(bytes);
   if (!kind) throw new Error("结果不是可识别的图片");
   const file = `result.${kind.ext}`;
@@ -255,7 +263,7 @@ export function layerFileName(index: number, ext = "png"): string {
 }
 
 /** 拆分图层落盘：按 z_index 升序写 layers/01.<ext>…；返回写盘后的图层记录。 */
-export async function saveLayers(fs: TaskFs, outputRoot: string, relDir: string, layers: LayerImage[]): Promise<LayerRecord[]> {
+export async function saveLayers(fs: Pick<TaskFs, "writeNewFile">, outputRoot: string, relDir: string, layers: LayerImage[]): Promise<LayerRecord[]> {
   const ordered = [...layers].sort((a, b) => a.zIndex - b.zIndex);
   const out: LayerRecord[] = [];
   for (const [i, layer] of ordered.entries()) {
@@ -281,7 +289,7 @@ export const TASK_RECORD_FILE = "task.json";
 export const OUTCOME_FILE = "outcome.json";
 
 /** 写结局记录 outcome.json：只含脱敏的错误类别，不含提示词、密钥与网关原文。 */
-export async function writeOutcome(fs: TaskFs, outputRoot: string, relDir: string, outcome: TaskOutcome): Promise<void> {
+export async function writeOutcome(fs: Pick<TaskFs, "writeNewFile">, outputRoot: string, relDir: string, outcome: TaskOutcome): Promise<void> {
   const record = outcome.kind === "failed" ? { outcome: "failed", label: outcome.label } : { outcome: "cancelled", gateway_may_continue: outcome.gatewayMayContinue };
   await fs.writeNewFile(taskPath(outputRoot, relDir, OUTCOME_FILE), new TextEncoder().encode(`${JSON.stringify(record, null, 2)}\n`));
 }

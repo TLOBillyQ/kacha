@@ -233,6 +233,8 @@ describe("读回提交（与写提交对称）", () => {
       (r) => void delete r.references[2].source,
       (r) => void (r.references[0].source = "reference"),
       (r) => void (r.references[0].file = "../../evil.png"),
+      (r) => void (r.references[1].region = {}),
+      (r) => void (r.references[1].region = { rects: "x", render: "highlight_overlay", source_port: 1 }),
     ];
     for (const edit of broken) {
       const err = await readSubmission(await writtenThenEdited(edit), "/root", plan.taskId).catch((e) => e);

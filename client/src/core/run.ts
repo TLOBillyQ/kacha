@@ -10,7 +10,7 @@ import { firstRegionOf, slotsFromReferences } from "./region";
 import { planSend } from "./sendPlan";
 import { isAutoRatio, resolveSize } from "./size";
 import { imageSources, snapshotOf } from "./submission";
-import { LocalError, newTaskId, readSubmission, saveLayers, saveResult, sniffImage, writeSubmission, type LayerRecord, type ReferenceSource, type SubmissionPlan, type TaskFs } from "./taskDir";
+import { LocalError, newTaskId, readSubmission, taskDirOfTaskId, saveLayers, saveResult, sniffImage, writeSubmission, type LayerRecord, type ReferenceSource, type SubmissionPlan, type TaskFs } from "./taskDir";
 
 export type TaskStatus =
   | { kind: "queued" }
@@ -49,8 +49,6 @@ export interface PreparedJob {
 export interface WrittenJob extends PreparedJob {
   relDir: string;
 }
-
-export { LocalError };
 
 /** 执行中被取消：不存结果、不加结果节点。 */
 export class CancelledError extends Error {
@@ -179,7 +177,7 @@ export async function prepareRegenerate(
   const task = board.nodes.find((n) => n.id === taskNodeId);
   const last = task?.type === "task" ? task.last_submitted : null;
   const fromTaskId = args.fromTaskId ?? last?.task_id;
-  if (!last || typeof fromTaskId !== "string") throw new LocalError("任务节点没有可重新生成的提交");
+  if (!last || typeof fromTaskId !== "string" || !taskDirOfTaskId(fromTaskId)) throw new LocalError("任务节点没有可重新生成的提交");
 
   const { record: previous, references: snapshots } = await readSubmission(deps, outputRoot, fromTaskId);
   const model = findModel(args.table, previous.model);
