@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { BoardEdge, ReferenceNode, ResultNode } from "./board";
-import { actionHoverInfo, CANCELLED_HINT, edgeHoverInfo, PROMPT_CLAMP_LINES, referenceHoverInfo, resultHoverInfo, taskHoverInfo } from "./hoverInfo";
+import { actionHoverInfo, CANCELLED_HINT, edgeHoverInfo, PROMPT_CLAMP_LINES, referenceHoverInfo, resultHoverInfo, taskHoverInfo, taskSizeText } from "./hoverInfo";
 
 const time = (d: Date) => d.toISOString();
 
@@ -92,6 +92,8 @@ describe("任务节点悬浮信息", () => {
 
   it("给了宽高比显示文本（自动状态）时尺寸行用它", () => {
     expect(taskHoverInfo({ ...base, ratioNote: "自动（16:9 · 图1）" })[1]).toMatchObject({ label: "尺寸", text: "2K · 自动（16:9 · 图1）" });
+    expect(taskSizeText({ tier: "2K", ratio: "16:9", width: null, height: null }, null)).toBe("2K · 16:9");
+    expect(taskSizeText({ tier: null, ratio: null, width: 800, height: 600 }, null)).toBe("800×600");
   });
 
   it("模型、尺寸；不可运行原因标红，提示标黄", () => {

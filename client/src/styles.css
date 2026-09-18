@@ -1130,9 +1130,11 @@ button.primary[aria-disabled="true"] {
   width: 18px;
   padding: 0;
 }
-.task-model {
+.task-summary {
   margin-bottom: 6px;
   color: #57606a;
+}
+.task-summary > div {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

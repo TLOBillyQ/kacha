@@ -45,6 +45,7 @@ import {
 } from "../core/graph";
 import { menuItems, selectionForMenu, actionBarItems, type BoardAction, type MenuFacts, type MenuItem, type MenuTarget } from "../core/contextMenu";
 import { createPortal } from "react-dom";
+import { expandedTasks, forgetOnSelectionChange, toggleExpanded, type ExpandOverrides } from "../core/expand";
 import { attachReferences, cardDropConnection, dragCreateItems, newTask } from "../core/dragCreate";
 import { BoardToolbar } from "./BoardToolbar";
 import { edgeHoverInfo, type HoverInfo } from "../core/hoverInfo";
@@ -214,13 +215,20 @@ export function BoardCanvas({
   const dialogOpen = preview !== null || menu !== null || dragMenu !== null;
   const dialogOpenRef = useRef(false);
   dialogOpenRef.current = dialogOpen;
-  /** 设置原地展开的任务节点：只在本地，不存盘。 */
-  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
+  /** 任务节点参数的原地展开：默认跟随选中，手动切换只在本地、不存盘（见 core/expand）。 */
+  const [expandOverrides, setExpandOverrides] = useState<ExpandOverrides>(new Map());
+  const expanded = useMemo(() => expandedTasks(expandOverrides, selectedNodes, board.nodes.map((n) => n.id)), [expandOverrides, selectedNodes, board.nodes]);
+  const expandSelection = useRef(selectedNodes);
+  useEffect(() => {
+    const before = expandSelection.current;
+    expandSelection.current = selectedNodes;
+    setExpandOverrides((o) => forgetOnSelectionChange(o, before, selectedNodes));
+  }, [selectedNodes]);
   const hover = useHoverLayer();
   // 撤销 / 删除后不在画板上的任务不留展开状态。
   useEffect(() => {
     const present = new Set(board.nodes.map((n) => n.id));
-    setExpanded((s) => ([...s].every((id) => present.has(id)) ? s : new Set([...s].filter((id) => present.has(id)))));
+    setExpandOverrides((o) => ([...o.keys()].every((id) => present.has(id)) ? o : new Map([...o].filter(([id]) => present.has(id)))));
   }, [board.nodes]);
   const selection = useMemo<Selection>(() => ({ nodes: selectedRef, edges: selectedEdgesRef, setNodes: setSelectedNodes, setEdges: setSelectedEdges }), []);
   const nav = useCanvasInteraction({ wrapper, boardRef, selection, dialogOpen: dialogOpenRef, updateBoard });
@@ -321,6 +329,8 @@ export function BoardCanvas({
         const taskAt = at ? posOf(at) : null;
         if (!applyOutcome((b) => continueEditing(b, table, discovery, sources, nodeId, ids, sourceLayers, taskAt), { label: "以此继续编辑" })) return;
         setSelectedNodes(new Set([ids.promptId]));
+        // 选中的是新提示词；新建的任务节点也默认展开。
+        setExpandOverrides((o) => new Map([...o, [ids.taskId, true]]));
         setFocusPrompt(ids.promptId);
       },
       addAsReference: (resultId, sourceLayer = null) => {
@@ -883,7 +893,7 @@ export function BoardCanvas({
       else if (action === "cancel") onCancelTask(id);
       else if (action === "regenerate") onRegenerate(id);
       else if (action === "viewSendText") onViewSendText(id);
-      else if (action === "toggleSettings") setExpanded((s) => (s.has(id) ? new Set([...s].filter((x) => x !== id)) : new Set([...s, id])));
+      else if (action === "toggleSettings") setExpandOverrides((o) => toggleExpanded(o, selectedRef.current, id));
       else if (action === "delete") void flow.deleteElements({ nodes: [...selectionForMenu(selectedRef.current, id)].map((n) => ({ id: n })) });
     } else if (target.kind === "edge") {
       const { edge } = target;

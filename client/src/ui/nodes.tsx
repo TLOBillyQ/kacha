@@ -23,7 +23,7 @@ import {
 } from "../core/capabilities";
 import type { MenuItem } from "../core/contextMenu";
 import type { PortKind } from "../core/ports";
-import { actionHoverInfo, CANCELLED_HINT, portThumbHoverInfo, referenceHoverInfo, resultHoverInfo, taskHoverInfo, textHoverInfo } from "../core/hoverInfo";
+import { actionHoverInfo, CANCELLED_HINT, portThumbHoverInfo, referenceHoverInfo, resultHoverInfo, taskHoverInfo, taskSizeText, textHoverInfo } from "../core/hoverInfo";
 import type { TaskStatus } from "../core/run";
 import { inputImageAdviceAll } from "../core/fitImage";
 import { IMAGE_PORT_PREFIX, type TaskPorts } from "../core/graph";
@@ -561,7 +561,10 @@ export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskF
           )}
         </>
       ) : (
-        <div className="task-model">{modelLabel}</div>
+        <div className="task-summary">
+          <div>{modelLabel}</div>
+          <div>{taskSizeText(node.size_spec, ratioNote)}</div>
+        </div>
       )}
 
       <div className="ports">
