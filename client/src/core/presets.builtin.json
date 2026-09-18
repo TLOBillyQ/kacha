@@ -1,3 +1,53 @@
 {
-  "presets": []
+  "presets": [
+    {
+      "id": "egg-character-3d",
+      "name": "蛋仔角色（3D 卡通）",
+      "project": "egg_party",
+      "prompt": "蛋仔派对风格的圆润蛋形角色，3D 卡通渲染，糖果色，柔和光照，表面光滑带轻微次表面散射，大眼睛，表情可爱，全身正视图，纯色干净背景",
+      "negative_prompt": "写实，真人，恐怖，暗黑，低多边形，多余肢体，畸形，模糊，文字，水印"
+    },
+    {
+      "id": "egg-skin-concept",
+      "name": "蛋仔皮肤设定",
+      "project": "egg_party",
+      "prompt": "蛋仔派对角色皮肤设定图，主题服饰与配件贴合蛋形身体，鲜亮配色，三视图排版，细节清晰，可爱潮玩质感，浅灰底",
+      "negative_prompt": "写实，成人向，暴力，复杂背景，畸形，重复元素，模糊，文字，水印"
+    },
+    {
+      "id": "egg-map-scene",
+      "name": "蛋仔乐园场景",
+      "project": "egg_party",
+      "prompt": "蛋仔派对乐园风格游戏场景，等距视角，糖果色低饱和度渐变，圆润几何造型的平台与障碍物，明亮欢快氛围，干净的天空背景",
+      "negative_prompt": "写实，阴暗，破损，血腥，角色，人物，杂乱，模糊，文字，水印"
+    },
+    {
+      "id": "egg-prop-icon",
+      "name": "蛋仔道具图标",
+      "project": "egg_party",
+      "prompt": "蛋仔派对风格游戏道具图标，单个物品居中，3D 卡通质感，圆润高光，鲜明轮廓，糖果色，纯色背景，游戏 UI 图标",
+      "negative_prompt": "写实，多物品，场景，人物，暗色调，模糊，文字，水印"
+    },
+    {
+      "id": "stars-character-concept",
+      "name": "千星角色设定",
+      "project": "thousand_stars",
+      "prompt": "千星项目角色设定图，二次元风格，精致线条与赛璐璐上色，全身站姿，服装细节丰富，星光元素点缀，中性浅色背景",
+      "negative_prompt": "写实，3D，低质量，畸形，多余手指，模糊，裁切，文字，水印"
+    },
+    {
+      "id": "stars-scene-concept",
+      "name": "千星场景氛围",
+      "project": "thousand_stars",
+      "prompt": "千星项目场景概念图，星空与幻想建筑，宽幅构图，电影感光影，冷暖对比，细腻云雾与光晕，二次元背景美术风格",
+      "negative_prompt": "写实照片，人物，杂乱，低质量，模糊，过曝，文字，水印"
+    },
+    {
+      "id": "stars-item-icon",
+      "name": "千星物品图标",
+      "project": "thousand_stars",
+      "prompt": "千星项目游戏物品图标，单个物品居中，二次元厚涂质感，边缘清晰，星光反射高光，纯色背景，游戏 UI 图标",
+      "negative_prompt": "写实，多物品，场景，人物，模糊，文字，水印"
+    }
+  ]
 }
