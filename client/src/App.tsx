@@ -21,6 +21,7 @@ import { SettingsPanel } from "./ui/SettingsPanel";
 import { isActive, useRunner, type RunTarget } from "./ui/useRunner";
 import { useSettings } from "./ui/useSettings";
 import { TabBar } from "./ui/TabBar";
+import { useUpdateCheck } from "./ui/useUpdateCheck";
 import { useBoardPack } from "./ui/useBoardPack";
 import { useBoardSessions } from "./ui/useBoardSessions";
 
@@ -30,6 +31,7 @@ export function App() {
   const [outputRoot, setOutputRoot] = useState<string | null>(null);
   const [defaultRoot, setDefaultRoot] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const update = useUpdateCheck();
   const [toolbarSlot, setToolbarSlot] = useState<HTMLElement | null>(null);
   const [packMenu, setPackMenu] = useState<{ x: number; y: number } | null>(null);
   const [confirm, setConfirm] = useState<{ boardKey: string; board: Board; items: ConfirmItem[]; scope: "selection" | "board" } | null>(null);
@@ -365,6 +367,11 @@ export function App() {
           >
             画板包 ▾
           </button>
+          {update.available && (
+            <button className="topbar-button topbar-update" title="打开下载页" onClick={update.openDownload}>
+              ⬇ 新版本 {update.available.version}
+            </button>
+          )}
           <button className="topbar-button" onClick={() => setSettingsOpen(true)} disabled={!settings.loaded || !outputRoot}>
             ⚙ 高级设置
           </button>
@@ -478,6 +485,7 @@ export function App() {
           openBoards={sessions.map((s) => s.path)}
           busy={runner.busy}
           onOutputRootChange={switchOutputRoot}
+          update={update}
           onClose={() => setSettingsOpen(false)}
         />
       )}

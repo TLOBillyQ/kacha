@@ -226,6 +226,11 @@ textarea {
   cursor: pointer;
   white-space: nowrap;
 }
+.topbar-update {
+  color: #1a7f37;
+  border-color: #1a7f37;
+  background: #dafbe1;
+}
 .empty,
 .fatal {
   padding: 48px;

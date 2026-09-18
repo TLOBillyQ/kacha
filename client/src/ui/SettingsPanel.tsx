@@ -1,4 +1,4 @@
-// 高级设置模态面板：网关地址、API 密钥、连接测试、输出根目录、并发上限、诊断包导出。
+// 高级设置模态面板：网关地址、API 密钥、连接测试、输出根目录、并发上限、检查更新、诊断包导出。
 import { getVersion } from "@tauri-apps/api/app";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useEffect, useState } from "react";
@@ -13,6 +13,7 @@ import {
 } from "../core/settings";
 import { DiagnosticsSection } from "./DiagnosticsSection";
 import type { ConnectionResult, useSettings } from "./useSettings";
+import type { useUpdateCheck } from "./useUpdateCheck";
 
 interface Props {
   settings: ReturnType<typeof useSettings>;
@@ -25,10 +26,11 @@ interface Props {
   busy: boolean;
   /** 输出根目录变了：由调用方关闭标签页并切换。 */
   onOutputRootChange: (root: string) => Promise<void>;
+  update: ReturnType<typeof useUpdateCheck>;
   onClose: () => void;
 }
 
-export function SettingsPanel({ settings, outputRoot, defaultOutputRoot, openBoards, busy, onOutputRootChange, onClose }: Props) {
+export function SettingsPanel({ settings, outputRoot, defaultOutputRoot, openBoards, busy, onOutputRootChange, update, onClose }: Props) {
   const [baseUrl, setBaseUrl] = useState(settings.settings.base_url);
   const [apiKey, setApiKey] = useState(settings.apiKey);
   const [showKey, setShowKey] = useState(false);
@@ -162,6 +164,24 @@ export function SettingsPanel({ settings, outputRoot, defaultOutputRoot, openBoa
           <span className="muted small">1～{MAX_CONCURRENCY}，默认 {DEFAULT_SETTINGS.concurrency}</span>
         </label>
         {concurrency > 5 && <div className="muted small form-hint">qwen 模型曾在 6 个以上并发时触发网关限流；限流时整条队列会暂停等待。</div>}
+
+        <div className="form-row">
+          <span>检查更新</span>
+          <button onClick={() => void update.check().catch(() => undefined)} disabled={update.checking}>
+            {update.checking ? "检查中…" : "检查更新"}
+          </button>
+          {update.result?.status === "available" && (
+            <span className="ok-text">
+              有新版本 {update.result.release.version}，
+              <button className="link" onClick={update.openDownload}>
+                {update.result.release.downloadUrl ? "下载" : "打开发布页"}
+              </button>
+            </span>
+          )}
+          {update.result?.status === "latest" && <span className="muted small">已是最新版本</span>}
+          {update.result?.status === "error" && <span className="form-error">{update.result.message}</span>}
+        </div>
+        <div className="muted small form-hint">只提示不自动安装：下载后关闭本应用，解压覆盖即可，设置与画板不受影响。</div>
 
         <DiagnosticsSection outputRoot={outputRoot} openBoards={openBoards} />
 
