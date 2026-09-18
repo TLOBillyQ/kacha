@@ -1,5 +1,5 @@
-// 节点图规则：连线合法性、任务节点按能力露出的端口与开关、换模型后的标红原因。
-// 全部是 Board → 结果的纯函数；换模型绝不自动删线或改设置，只报告问题。
+// 节点图规则：连线合法性、任务节点按能力露出的端口与开关、提示词与图片来源。
+// 全部是 Board → 结果的纯函数；换模型绝不自动删线或改设置。不可运行原因见 taskView。
 import type { Board, BoardEdge, TaskNode } from "./board";
 import {
   findModel,
@@ -9,10 +9,8 @@ import {
   type InputImageRule,
   type WorkflowName,
 } from "./capabilities";
-import { MAX_REGIONS } from "./overlay";
 import { resolveFromRoot } from "./paths";
 import { effectiveRegionRender, expandImageEdges, type PortSlot } from "./region";
-import { ratioRangeText, ratioValue, resolveSize, withinRatioRange } from "./size";
 import { layerFileName } from "./taskDir";
 
 export const IMAGE_PORT_PREFIX = "image:";
@@ -241,57 +239,6 @@ export function taskPorts(board: Board, table: CapabilityTable, taskId: string):
     layerDecomposition: isSupported(wf.layer_decomposition) || task.layer_decomposition,
     transparentBackground: isSupported(model.transparent_background) || task.transparent_background,
   };
-}
-
-/** 任务节点不可运行的原因；空数组 = 可运行。 */
-export function taskIssues(board: Board, table: CapabilityTable, taskId: string): string[] {
-  const task = findTask(board, taskId);
-  if (!task) return [];
-  const issues: string[] = [];
-  const hasEdge = (port: string) => board.edges.some((e) => e.to[0] === taskId && e.to[1] === port);
-  if (!hasEdge("positive")) issues.push("正向提示词未连接");
-
-  const model = findModel(table, task.model);
-  if (!model) return [...issues, `模型 ${task.model} 不在能力表内`];
-  if (model.tier === null) issues.push(`模型 ${model.display_name} 未上架`);
-
-  const images = imageEdges(board, taskId).length;
-  const workflow = workflowOf(board, taskId);
-  const wf = model.workflows[workflow];
-  const max = model.workflows.image_edit.max_references;
-  const render = effectiveRegionRender(model);
-  const expanded = expandImageEdges(imageEdges(board, taskId), render).length;
-  if (images > 0 && max === 0) issues.push("模型不支持图片编辑");
-  else if (expanded > max) issues.push(`参考图 ${expanded} 张超出模型上限 ${max} 张`);
-  if (render === null && imageEdges(board, taskId).some((e) => (e.region?.rects.length ?? 0) > 0)) issues.push("模型不支持框选修改区域");
-  const regions = imageEdges(board, taskId).reduce((n, e) => n + (e.region?.rects.length ?? 0), 0);
-  if (render !== null && regions > MAX_REGIONS) issues.push(`框选了 ${regions} 个区域，最多 ${MAX_REGIONS} 个`);
-  if (hasEdge("negative") && !isSupported(wf.supports_negative_prompt)) issues.push("模型不支持负向提示词");
-  if (resolveSize(wf.size_rule, task.size_spec) === null) {
-    const s = task.size_spec;
-    const value = ratioValue(s.ratio);
-    // 只有宽高比本身越界才报范围；分辨率档不认识、或没有 custom 范围的模型仍按「不在尺寸表内」。
-    const range = s.tier !== null && s.tier in wf.size_rule.tiers && value !== null && !withinRatioRange(wf.size_rule, value) ? ratioRangeText(wf.size_rule) : null;
-    if (s.tier === null) issues.push(`自定义尺寸 ${s.width}×${s.height} 超出模型范围`);
-    else issues.push(range !== null ? `宽高比 ${s.ratio} 超出模型范围 ${range}` : `生成尺寸 ${s.tier} · ${s.ratio} 不在模型尺寸表内`);
-  }
-  if (task.layer_decomposition && !isSupported(wf.layer_decomposition)) issues.push("模型不支持拆分图层");
-  if (task.transparent_background) {
-    if (!isSupported(model.transparent_background)) issues.push("模型不支持透明背景");
-    else if (images !== 1) issues.push("透明背景需要恰好一条图片线");
-  }
-  return issues;
-}
-
-/**
- * 透明背景的图片来源不带透明通道时的标红原因（开关打开且恰好一条图片线；条件变坏保留 + 标红，绝不自动关）。
- * alpha 由界面注入（参考图导入时的一次性检测）；未知（未检测）时不拦。
- */
-export function transparentAlphaIssue(board: Board, taskId: string, alpha: boolean | null | undefined): string | null {
-  const task = findTask(board, taskId);
-  if (!task?.transparent_background) return null;
-  if (imageEdges(board, taskId).length !== 1) return null;
-  return alpha === false ? "该图不带透明通道" : null;
 }
 
 // ---- 编辑已提交过的提示词节点 ----

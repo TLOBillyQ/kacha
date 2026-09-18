@@ -202,6 +202,38 @@ describe("不可运行原因：种类与类别", () => {
   });
 });
 
+describe("不可运行原因：文案", () => {
+  const texts = (b: Board, table?: CapabilityTable) => view(b, table).reasons.map((r) => r.text);
+
+  it("尺寸：档位不在尺寸表 / 宽高比越界给出范围 / 同一宽高比在支持的模型上可运行", () => {
+    expect(texts(ready({ size_spec: { tier: "4K", ratio: "1:1", width: null, height: null } }, [], "猫"))).toEqual(["生成尺寸 4K · 1:1 不在模型尺寸表内"]);
+    const size_spec = { tier: "2K", ratio: "12:1", width: null, height: null };
+    expect(texts(ready({ size_spec }, [], "猫"))).toEqual(["宽高比 12:1 超出模型范围 1:8–8:1"]);
+    expect(texts(ready({ size_spec, model: "doubao-seedream-5-0-pro-260628" }, [], "猫"))).toEqual([]);
+  });
+
+  it("名额与模型：超上限（叠加图占名额）/ 不在能力表 / 未上架", () => {
+    const t = withModel((m) => (m.workflows.image_edit.max_references = 1));
+    expect(texts(ready({ model: "test-model" }, ["r1", "r2"], "@图1 @图2"), t)).toEqual(["参考图 2 张超出模型上限 1 张"]);
+    const b = ready({}, ["r1", "r2", "r3"], "@图1 @图2 @图3");
+    b.edges[3] = { ...b.edges[3], region: REGION };
+    expect(texts(b)).toContain("参考图 4 张超出模型上限 3 张");
+    expect(texts(ready({ model: "nope" }, [], "猫"))).toEqual(["模型 nope 不在能力表内"]);
+  });
+
+  it("换模型后开关不支持：原因按拆分图层、透明背景的顺序，开关与连线保留", () => {
+    const b = ready({ layer_decomposition: true, transparent_background: true }, [], "猫");
+    expect(texts(b)).toEqual(["模型不支持拆分图层", "模型不支持透明背景"]);
+    expect(b.nodes.find((n) => n.id === "t")).toMatchObject({ layer_decomposition: true, transparent_background: true });
+  });
+
+  it("带区域的线：叠加图不算未引用，未引用只报用户序号", () => {
+    const b = ready({}, ["r1", "r2"], "@图1 的区域1 改红");
+    b.edges[1] = { ...b.edges[1], region: REGION };
+    expect(view(b).unreferenced).toEqual([2]);
+  });
+});
+
 describe("节点标红 ≡ 运行被拦：二次确认与任务视图同一份", () => {
   it.each(CASES)("$name", ({ board: b, table = BUILTIN_TABLE, facts = UNKNOWN }) => {
     const [item] = buildConfirmItems(b, table, ["t"], facts);

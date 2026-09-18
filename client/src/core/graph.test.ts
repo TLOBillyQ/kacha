@@ -11,9 +11,7 @@ import {
   hasDownstreamRecords,
   imageRuleViolations,
   moveImagePort,
-  taskIssues,
   taskPorts,
-  transparentAlphaIssue,
 } from "./graph";
 
 const SEEDREAM_PRO = "doubao-seedream-5-0-pro-260628";
@@ -238,85 +236,6 @@ describe("任务节点露出", () => {
   });
 });
 
-describe("换模型标红：连线与设置保留、节点不可运行", () => {
-  it("正向端口必接", () => {
-    expect(taskIssues(board([task("t")]), table, "t")).toContain("正向提示词未连接");
-  });
-
-  it("合法任务无问题", () => {
-    const g = board([node("p", "prompt"), task("t")], [edge("p", "out", "t", "positive")]);
-    expect(taskIssues(g, table, "t")).toEqual([]);
-  });
-
-  it("参考图线超出新上限", () => {
-    const t = withModel((m) => (m.workflows.image_edit.max_references = 1));
-    const g = board([node("p", "prompt"), node("a", "reference"), node("b", "reference"), task("t", "test-model")], [
-      edge("p", "out", "t", "positive"),
-      edge("a", "out", "t", "image:0"),
-      edge("b", "out", "t", "image:1"),
-    ]);
-    expect(taskIssues(g, t, "t")).toEqual(["参考图 2 张超出模型上限 1 张"]);
-    expect(g.edges.length).toBe(3);
-  });
-
-  it("负向端口在新模型不存在", () => {
-    const g = board([node("p", "prompt"), node("n", "prompt"), task("t", SEEDREAM_PRO)], [
-      edge("p", "out", "t", "positive"),
-      edge("n", "out", "t", "negative"),
-    ]);
-    expect(taskIssues(g, table, "t")).toContain("模型不支持负向提示词");
-  });
-
-  it("图片线接到不支持编辑的模型", () => {
-    const t = withModel((m) => {
-      m.workflows.image_edit.min_references = 0;
-      m.workflows.image_edit.max_references = 0;
-    });
-    const g = board([node("p", "prompt"), node("a", "reference"), task("t", "test-model")], [
-      edge("p", "out", "t", "positive"),
-      edge("a", "out", "t", "image:0"),
-    ]);
-    expect(taskIssues(g, t, "t")).toEqual(["模型不支持图片编辑"]);
-  });
-
-  it("开关在新模型不支持", () => {
-    const g = board([node("p", "prompt"), task("t", "qwen-image-3.0-pro", { layer_decomposition: true, transparent_background: true })], [
-      edge("p", "out", "t", "positive"),
-    ]);
-    expect(taskIssues(g, table, "t")).toEqual(["模型不支持拆分图层", "模型不支持透明背景"]);
-  });
-
-  it("分辨率档在新模型不存在", () => {
-    const g = board([node("p", "prompt"), task("t", "qwen-image-3.0-pro", { size_spec: { tier: "4K", ratio: "1:1", width: null, height: null } })], [
-      edge("p", "out", "t", "positive"),
-    ]);
-    expect(taskIssues(g, table, "t")).toEqual(["生成尺寸 4K · 1:1 不在模型尺寸表内"]);
-  });
-
-  it("手填的宽高比在新模型越界：不可运行，值不改", () => {
-    const size_spec = { tier: "2K", ratio: "12:1", width: null, height: null };
-    const on = (model: string) => board([node("p", "prompt"), task("t", model, { size_spec })], [edge("p", "out", "t", "positive")]);
-    expect(taskIssues(on(SEEDREAM_PRO), table, "t")).toEqual([]);
-    expect(taskIssues(on("qwen-image-3.0-pro"), table, "t")).toEqual(["宽高比 12:1 超出模型范围 1:8–8:1"]);
-  });
-
-  it("模型不在能力表或未上架", () => {
-    const g = board([node("p", "prompt"), task("t", "nope")], [edge("p", "out", "t", "positive")]);
-    expect(taskIssues(g, table, "t")).toEqual(["模型 nope 不在能力表内"]);
-    const g2 = board([node("p", "prompt"), task("t", SEEDREAM_PRO, { size_spec: { tier: "2K", ratio: "1:1", width: null, height: null } })], [
-      edge("p", "out", "t", "positive"),
-    ]);
-    const unshelved = structuredClone(BUILTIN_TABLE);
-    unshelved.models.find((m) => m.model_id === SEEDREAM_PRO)!.tier = null;
-    expect(taskIssues(g2, unshelved, "t")).toEqual(["模型 Seedream 5.0 pro 未上架"]);
-  });
-
-  it("编辑工作流低于最少参考图数不算问题（文生图 0 张合法）", () => {
-    const g = board([node("p", "prompt"), task("t")], [edge("p", "out", "t", "positive")]);
-    expect(taskIssues(g, table, "t")).toEqual([]);
-  });
-});
-
 describe("参考图 input_image_rule 校验", () => {
   const rule = BUILTIN_TABLE.models[0].input_image_rule;
 
@@ -378,61 +297,5 @@ describe("区域指示", () => {
     expect(canConnect(b, table, conn("r3", "out", "t", "image:2"))).toEqual({ ok: false, reason: "参考图已达模型上限 3 张" });
     expect(taskPorts(b, table, "t").imageSlots).toBe(2);
   });
-
-  it("展开后超上限标红、连线保留", () => {
-    const b = board(
-      [node("p", "prompt"), node("r1", "reference"), node("r2", "reference"), node("r3", "reference"), task("t")],
-      [edge("p", "out", "t", "positive"), edge("r1", "out", "t", "image:0"), edge("r2", "out", "t", "image:1"), { ...edge("r3", "out", "t", "image:2"), region: REGION }],
-    );
-    expect(taskIssues(b, table, "t")).toContain("参考图 4 张超出模型上限 3 张");
-    expect(imageEdgesCount(b)).toBe(3);
-  });
-
-  it("模型不支持区域指示：有区域连线标红，区域数据保留", () => {
-    const b = board(
-      [node("p", "prompt"), node("r1", "reference"), task("t", "doubao-seedream-5-0-lite-260128")],
-      [edge("p", "out", "t", "positive"), { ...edge("r1", "out", "t", "image:0"), region: REGION }],
-    );
-    const t = structuredClone(table);
-    t.models.find((m) => m.model_id === "doubao-seedream-5-0-lite-260128")!.region_hint = { highlight_overlay: "unsupported", marked_image: "unsupported", bbox_tag: "untested" };
-    expect(taskIssues(b, t, "t")).toContain("模型不支持框选修改区域");
-    expect(b.edges[1].region).toEqual(REGION);
-  });
-
-  function imageEdgesCount(b: Board): number {
-    return b.edges.filter((e) => e.to[1].startsWith("image:")).length;
-  }
 });
 
-describe("透明背景：alpha 门控", () => {
-  function alphaBoard(): Board {
-    const t = { ...task("t"), transparent_background: true };
-    return board([node("p", "prompt"), node("r1", "reference"), t], [edge("p", "out", "t", "positive"), edge("r1", "out", "t", "image:0")]);
-  }
-
-  it("开关打开、恰好一条线、源图无 alpha → 标红；开关保留", () => {
-    const b = alphaBoard();
-    expect(transparentAlphaIssue(b, "t", false)).toBe("该图不带透明通道");
-    expect((b.nodes.find((n) => n.id === "t") as TaskNode).transparent_background).toBe(true);
-  });
-
-  it("带 alpha 或未知（未检测）不拦；开关关闭不拦", () => {
-    const b = alphaBoard();
-    expect(transparentAlphaIssue(b, "t", true)).toBeNull();
-    expect(transparentAlphaIssue(b, "t", undefined)).toBeNull();
-    const off = { ...b, nodes: b.nodes.map((n) => (n.type === "task" ? { ...n, transparent_background: false } : n)) };
-    expect(transparentAlphaIssue(off, "t", false)).toBeNull();
-  });
-
-  it("不是恰好一条线时不归它管（由 taskIssues 的「恰好一条」拦）", () => {
-    const supported = withModel((m) => {
-      m.transparent_background = "supported";
-    });
-    const t = { ...task("t", "test-model"), transparent_background: true };
-    const b = board([node("p", "prompt"), node("r1", "reference"), t], [edge("p", "out", "t", "positive"), edge("r1", "out", "t", "image:0")]);
-    expect(transparentAlphaIssue(b, "t", false)).toBe("该图不带透明通道");
-    b.edges = [...b.edges, edge("r1", "out", "t", "image:1")];
-    expect(transparentAlphaIssue(b, "t", false)).toBeNull();
-    expect(taskIssues(b, supported, "t")).toContain("透明背景需要恰好一条图片线");
-  });
-});
