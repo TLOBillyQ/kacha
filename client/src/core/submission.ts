@@ -148,7 +148,6 @@ export interface ConfirmItem {
   taskId: string;
   modelName: string;
   firstLine: string;
-  negativePrompt: string;
   /** 当前会发给模型的内容；模型不在能力表内时为 null（任务本就标红、不可运行）。 */
   send: SendPlan | null;
   /** 非空 = 标红，不可勾选。 */
@@ -185,7 +184,6 @@ export function buildConfirmItems(board: Board, table: CapabilityTable, taskIds:
     if (!task) return [];
     const model = findModel(table, task.model);
     const prompt = promptText(board, taskId, "positive");
-    const negativePrompt = promptText(board, taskId, "negative");
     const images = imageSources(board, taskId, "");
     const issues = taskIssues(board, table, taskId);
     const hasPositive = board.edges.some((e) => e.to[0] === taskId && e.to[1] === "positive");
@@ -194,7 +192,7 @@ export function buildConfirmItems(board: Board, table: CapabilityTable, taskIds:
     const unavailable = model && modelAvailabilityIssue(table, ctx.discovery, model.model_id);
     if (unavailable) issues.push(unavailable);
     const send = sendPlanOf(board, table, taskId);
-    const refs = send?.referenceProblems ?? imageRefProblems(board, table, taskId);
+    const refs = send?.referenceProblems ?? referenceProblemsOf(undefined, imagePortSlots(board, table, taskId), prompt);
     issues.push(...refs.issues);
     const warnings = [...refs.warnings];
     if (model && images.length > 0 && promptLanguage(prompt) === "en" && model.reference_phrasing.en_verified === "untested") {
@@ -211,7 +209,6 @@ export function buildConfirmItems(board: Board, table: CapabilityTable, taskIds:
         taskId,
         modelName: model?.display_name ?? task.model,
         firstLine: prompt.split("\n").find((line) => line.trim())?.trim() ?? "",
-        negativePrompt,
         send,
         issues: [...new Set(issues)],
         warnings,

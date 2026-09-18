@@ -163,14 +163,14 @@ describe("二次确认清单", () => {
     });
     expect(item.send?.text).toBe("本次提供 2 张参考图，按顺序为图1、图2。\n把图2的帽子戴到图1头上\n第二行");
     expect(item.send?.negativeInlined).toBe(false);
-    expect(item.negativePrompt).toBe("模糊");
+    expect(item.send?.nativeNegativePrompt).toBe("模糊");
   });
 
   it("qwen 支持原生负向：发送文本即提示词，负向另列", () => {
     const b = board([prompt("p", "一只橘猫"), prompt("n", "模糊"), task("t")], [edge("p", "t", "positive"), edge("n", "t", "negative")]);
     const [item] = buildConfirmItems(b, BUILTIN_TABLE, ["t"], ctx);
     expect(item.send?.text).toBe("一只橘猫");
-    expect(item.negativePrompt).toBe("模糊");
+    expect(item.send?.nativeNegativePrompt).toBe("模糊");
     expect(item.send?.negativeInlined).toBe(false);
   });
 
@@ -179,6 +179,7 @@ describe("二次确认清单", () => {
     const [item] = buildConfirmItems(b, BUILTIN_TABLE, ["t"], ctx);
     expect(item.send?.text).toBe("一只橘猫\n避免出现：模糊");
     expect(item.send?.negativeInlined).toBe(true);
+    expect(item.send?.nativeNegativePrompt).toBeNull();
   });
 
   it("标红任务列出原因：未连正向、提示词为空、请求形态未接入、网关未发现、缺图", () => {
@@ -217,7 +218,6 @@ describe("运行分派", () => {
     taskId,
     modelName: "m",
     firstLine: "",
-    negativePrompt: "",
     send: null,
     issues: [],
     warnings: [],
