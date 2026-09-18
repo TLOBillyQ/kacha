@@ -110,6 +110,7 @@ pub fn preview(src: &Sources) -> Vec<PackageEntry> {
         board_names.push(unique);
     }
     let Some(root) = &src.output_root else { return entries };
+    // 任务目录格式的真源是前端 client/src/core/taskDir.ts；这里只认日期目录与两个文件名（ADR 0010 例外）。
     let mut task_dirs: Vec<(String, String, PathBuf)> = sorted_dir(root)
         .into_iter()
         .filter(|(date, path)| is_date_dir(date) && path.is_dir())
