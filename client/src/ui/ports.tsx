@@ -1,4 +1,4 @@
-// 端口：按类型着色的 Handle；拖线中按画布给的拖线态加类名（合法发光 / 其余去强调，规格 4.1「端口与连线」）。
+// 端口：按类型着色的 Handle；拖线中按画布给的拖线态加类名（合法发光 / 其余去强调）。
 import { Handle, useNodeId, type HandleProps } from "@xyflow/react";
 import { createContext, useContext } from "react";
 import { portDragClassName, type DragState, type PortKind } from "../core/ports";

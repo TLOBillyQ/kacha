@@ -1,4 +1,4 @@
-// 自动落位（规格第 4 节「布局」）：任务右侧结果列自上而下累积；迭代动作新建的节点落在触发节点旁。
+// 自动落位：任务右侧结果列自上而下累积；迭代动作新建的节点落在触发节点旁。
 // 只找就近空位，不推开、不重排，用户摆过的位置永远不动。
 import type { Board, ResultNode, ResultRecord } from "./board";
 import { IMAGE_NODE_WIDTH, imageNodeSize, sizeSpecAspect } from "./nodeSize";

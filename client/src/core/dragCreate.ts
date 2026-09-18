@@ -1,4 +1,4 @@
-// 拖线建节点（规格 4.1「拖线建节点」）：从端口拖线落空白建节点并接上；拖线落在任务节点卡片上接到下一个空端口。
+// 拖线建节点：从端口拖线落空白建节点并接上；拖线落在任务节点卡片上接到下一个空端口。
 // 全部是纯函数；画布负责命中检测、文件对话框与写入画板（一次拖线 = 一个撤销步）。
 import type { Board, ReferenceNode, TaskNode } from "./board";
 import { findModel, type CapabilityTable } from "./capabilities";

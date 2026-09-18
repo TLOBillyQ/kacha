@@ -1,4 +1,4 @@
-// 重新定位（规格第 9.4 节）：画板引用的图片缺失时，在输出根目录内按身份找回；不扫全盘。
+// 重新定位：画板引用的图片缺失时，在输出根目录内按身份找回；不扫全盘。
 // 结果按 task_id 找任务目录，参考图按 sha256 找文件。文件系统由调用方注入。
 import { BOARDS_DIR_NAME, joinPath } from "./paths";
 import { taskDirOfTaskId } from "./taskDir";

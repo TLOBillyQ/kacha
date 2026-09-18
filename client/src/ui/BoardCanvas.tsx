@@ -187,7 +187,7 @@ export function BoardCanvas({
     setMenu(null);
     setDragMenu(null);
   }, []);
-  /** 拖线建节点多候选时弹的菜单（规格 4.1；目前三种起点均为单候选，此路径预留）。 */
+  /** 拖线建节点多候选时弹的菜单（目前三种起点均为单候选，此路径预留）。 */
   const [dragMenu, setDragMenu] = useState<{ from: DragFrom; items: MenuItem[]; client: { x: number; y: number }; at: { x: number; y: number } } | null>(null);
   // 预设 / 预览弹窗、上下文菜单开着时快捷键不作用于背后的画板（菜单自己处理 Esc）。
   const dialogOpen = presetsOpen || preview !== null || menu !== null || dragMenu !== null;
@@ -394,7 +394,7 @@ export function BoardCanvas({
     [board, table, locked],
   );
 
-  // 拖线态（规格 4.1）：起点来自 useConnection，合法落点与 isValidConnection 同一判定。
+  // 拖线态：起点来自 useConnection，合法落点与 isValidConnection 同一判定。
   const dragFrom = useConnection(dragFromOf);
   const drag = useMemo<DragState | null>(() => (dragFrom ? { from: dragFrom, ports: connectablePorts(board, dragFrom, isValidConnection) } : null), [dragFrom, board, isValidConnection]);
 
@@ -643,7 +643,7 @@ export function BoardCanvas({
       const gone = new Set(removeNodes(board, ids).removedIds);
       // 系统连线只能随节点一起消失，用户不能单独删。
       const userEdges = es.filter((e) => e.deletable !== false || gone.has(e.source) || gone.has(e.target));
-      // 锁定任务的输入连线不能动（规格第 8 节运行期锁定；任务本身一起删除除外），级联断开的也算。
+      // 锁定任务的输入连线不能动（运行期锁定；任务本身一起删除除外），级联断开的也算。
       const seversLocked = board.edges.some((e) => !e.system && gone.has(e.from[0]) && locked.has(e.to[0]) && !gone.has(e.to[0]));
       if (seversLocked || userEdges.some((e) => locked.has(e.target) && !gone.has(e.target))) {
         toast(LOCKED_HINT);

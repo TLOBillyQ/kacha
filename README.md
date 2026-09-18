@@ -2,7 +2,7 @@
 
 面向蛋仔派对与千星 UGC 美术团队的本地图片生成工作台。v2 以节点图画板为主界面（提示词、参考图、生成任务、结果皆为节点），只经团队网关提交生成，结果保存在本机。
 
-v2 正在开发中，规格见 [docs/v2-spec.md](docs/v2-spec.md)，领域语言见 [CONTEXT.md](CONTEXT.md)，决策见 [docs/adr/](docs/adr/)。
+v2 正在开发中，需求与行为变更见 [Gitea Issues](http://lzxsvn:3000/qinyuanj/ugc-image-tool/issues)，领域语言见 [CONTEXT.md](CONTEXT.md)，决策见 [docs/adr/](docs/adr/)。
 
 ## 开发
 

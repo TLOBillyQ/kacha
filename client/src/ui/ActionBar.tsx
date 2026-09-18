@@ -1,4 +1,4 @@
-// 悬浮动作条（规格 4.1「悬浮动作条」）：图片节点上方一排图标动作，条目由 core/contextMenu 的 actionBarItems 给出，
+// 悬浮动作条：图片节点上方一排图标动作，条目由 core/contextMenu 的 actionBarItems 给出，
 // 与上下文菜单同一组 action 与置灰原因；由画布放进 NodeToolbar，固定屏幕像素、不随缩放。
 import type { BoardAction, MenuItem } from "../core/contextMenu";
 import { actionHoverInfo } from "../core/hoverInfo";

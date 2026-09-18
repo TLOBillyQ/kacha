@@ -1,4 +1,4 @@
-// 高级设置模态面板（规格第 12 节）：网关地址、API 密钥、连接测试、输出根目录、并发上限、诊断包导出。
+// 高级设置模态面板：网关地址、API 密钥、连接测试、输出根目录、并发上限、诊断包导出。
 import { getVersion } from "@tauri-apps/api/app";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useEffect, useState } from "react";

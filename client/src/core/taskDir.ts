@@ -60,7 +60,7 @@ export type ReferenceSource =
   /** 区域叠加图：由第 of 张（1 起）参考图合成。 */
   | { kind: "overlay"; of: number };
 
-/** 叠加参考图记录的区域：矩形（归一化）、渲染方式、原图端口序号（规格第 6 节）。 */
+/** 叠加参考图记录的区域：矩形（归一化）、渲染方式、原图端口序号。 */
 export interface ReferenceRegion {
   rects: [number, number, number, number][];
   render: RegionRender;
@@ -143,7 +143,7 @@ export interface LayerImage {
   boundingBox: number[];
 }
 
-/** 拆分图层落盘：按 z_index 升序写 layers/01.<ext>…（规格第 7 节）；返回写盘后的图层记录。 */
+/** 拆分图层落盘：按 z_index 升序写 layers/01.<ext>…；返回写盘后的图层记录。 */
 export async function saveLayers(fs: TaskFs, outputRoot: string, relDir: string, layers: LayerImage[]): Promise<LayerRecord[]> {
   const ordered = [...layers].sort((a, b) => a.zIndex - b.zIndex);
   const out: LayerRecord[] = [];
@@ -157,7 +157,7 @@ export async function saveLayers(fs: TaskFs, outputRoot: string, relDir: string,
   return out;
 }
 
-/** 导出用 layers.json 内容：与结果记录里的 layers 一致（规格第 7 节）。 */
+/** 导出用 layers.json 内容：与结果记录里的 layers 一致。 */
 export function layersExportJson(layers: LayerRecord[]): string {
   return `${JSON.stringify({ layers }, null, 2)}\n`;
 }

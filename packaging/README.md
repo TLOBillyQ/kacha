@@ -2,7 +2,7 @@
 
 把 v2 Tauri 客户端构建为 Windows 10/11 x64 免安装包与 macOS（Apple Silicon）`.app`，
 经 `publish_release.py` 发布到 Gitea Release 供团队下载。分发决策见
-`docs/adr/0007-gitea-release-as-sole-distribution-channel.md`，规格见 `docs/v2-spec.md` §13。
+`docs/adr/0007-gitea-release-as-sole-distribution-channel.md`。
 脚本只依赖 Python 3.11+ 标准库。
 
 ## 发布产物

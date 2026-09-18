@@ -1,4 +1,4 @@
-"""把 v2 客户端发布物上传到 Gitea Release（ADR 0007，v2 规格 §13）。
+"""把 v2 客户端发布物上传到 Gitea Release（ADR 0007）。
 
 Gitea Release 是唯一分发渠道，只挂三个附件：
 

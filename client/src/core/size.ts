@@ -1,4 +1,4 @@
-// 生成尺寸：UI 统一「档位 + 比例」两个下拉，客户端按 size_rule 换算为像素（规格第 10.2 节）。
+// 生成尺寸：UI 统一「档位 + 比例」两个下拉，客户端按 size_rule 换算为像素。
 import type { PixelRange, SizeRule } from "./capabilities";
 
 export interface SizeSpec {

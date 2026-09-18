@@ -1,4 +1,4 @@
-"""在目标机器上构建 v2 Tauri 客户端发布压缩包（ADR 0007，v2 规格 §13）。
+"""在目标机器上构建 v2 Tauri 客户端发布压缩包（ADR 0007）。
 
 Tauri 不能交叉编译到另一平台，Windows 与 macOS 包必须各在对应机器上构建：
 
@@ -54,7 +54,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 CLIENT_DIR = REPO_ROOT / "client"
 PRODUCT_NAME = "UGC AI 生图工具"
 MAIN_BINARY = "ugc-image-tool"
-# 显式指定 MSVC 目标：规格要求 Windows 用 MSVC 工具链正式构建，避免误用 GNU 工具链。
+# 显式指定 MSVC 目标：Windows 用 MSVC 工具链正式构建，避免误用 GNU 工具链。
 WINDOWS_TARGET = "x86_64-pc-windows-msvc"
 MACOS_TARGET = "aarch64-apple-darwin"
 

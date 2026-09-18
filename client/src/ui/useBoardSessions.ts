@@ -1,4 +1,4 @@
-// 多画板标签页：打开 / 新建 / 关闭 / 重命名 / 去抖自动保存 / 另存到（规格第 9.1、9.5 节）。
+// 多画板标签页：打开 / 新建 / 关闭 / 重命名 / 去抖自动保存 / 另存到。
 import { save } from "@tauri-apps/plugin-dialog";
 import { useCallback, useRef, useState } from "react";
 import {

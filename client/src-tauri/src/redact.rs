@@ -41,7 +41,7 @@ pub fn is_sensitive_key(key: &str) -> bool {
         || ["authorization", "apikey", "accesstoken", "authtoken", "cookie"].iter().any(|f| k.contains(f))
 }
 
-/// 提示词类字段：日志里整体不写（规格第 12 节「提示词全文不进日志」）。
+/// 提示词类字段：日志里整体不写。
 pub fn is_prompt_key(key: &str) -> bool {
     let k = compact(key);
     k.contains("prompt") || k == "sendtext" || k == "text"

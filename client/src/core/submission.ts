@@ -1,4 +1,4 @@
-// 提交前的纯函数：脏判据快照、运行范围、二次确认清单（规格第 3.3 节「运行」）。
+// 提交前的纯函数：脏判据快照、运行范围、二次确认清单。
 import type { Board, Region, TaskNode } from "./board";
 import { findModel, type CapabilityTable } from "./capabilities";
 import { composeSendText, isRequestShapeImplemented } from "./gateway";

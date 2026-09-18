@@ -1,4 +1,4 @@
-// 精简图片节点的尺寸（规格 4.1「精简节点」）：只显示图片，按图片比例等比缩放；存盘的 size 只在新建与拖角缩放时写。
+// 精简图片节点的尺寸：只显示图片，按图片比例等比缩放；存盘的 size 只在新建与拖角缩放时写。
 import type { SizeSpec } from "./size";
 
 export const IMAGE_NODE_WIDTH = 240;

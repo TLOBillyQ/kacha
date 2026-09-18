@@ -105,7 +105,7 @@ export function useRunner(boards: RunnerBoards, concurrency: number) {
 
   const pumpRef = useRef<() => void>(() => undefined);
 
-  /** 任务迁移事件带画板文件名 + 任务节点 id（规格第 12 节）。 */
+  /** 任务迁移事件带画板文件名 + 任务节点 id。 */
   const taskFields = useCallback(
     (entry: QueuedSubmission) => ({
       task_id: entry.job.taskId,

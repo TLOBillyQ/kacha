@@ -1,4 +1,4 @@
-// 端口与连线的视觉推导（规格 4.1「端口与连线」）：拖线态合法端口集合、端口 / 连线的类型与类名。
+// 端口与连线的视觉推导：拖线态合法端口集合、端口 / 连线的类型与类名。
 import type { Board, BoardEdge } from "./board";
 import { imageEdges, imagePortIndex, IMAGE_PORT_PREFIX, type Connection } from "./graph";
 

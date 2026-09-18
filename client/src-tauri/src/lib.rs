@@ -1,4 +1,4 @@
-//! Tauri 壳：只承担日志器、凭据库、单实例、文件系统原子写与系统对话框等原生职责；业务逻辑在前端 TypeScript（规格第 2 节）。
+//! Tauri 壳：只承担日志器、凭据库、单实例、文件系统原子写与系统对话框等原生职责；业务逻辑在前端 TypeScript。
 
 mod board_pack;
 mod diagnostics;

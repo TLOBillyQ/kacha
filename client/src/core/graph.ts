@@ -1,4 +1,4 @@
-// 节点图规则：连线合法性、任务节点按能力露出的端口与开关、换模型后的标红原因（规格第 3、10.4 节）。
+// 节点图规则：连线合法性、任务节点按能力露出的端口与开关、换模型后的标红原因。
 // 全部是 Board → 结果的纯函数；换模型绝不自动删线或改设置，只报告问题。
 import type { Board, BoardEdge, TaskNode } from "./board";
 import {
@@ -159,7 +159,7 @@ export interface Removal {
 }
 
 /**
- * 删除节点（规格第 4 节「删除」）：不设禁删，删任务节点级联删除其结果列（系统连线指向的结果节点），
+ * 删除节点：不设禁删，删任务节点级联删除其结果列（系统连线指向的结果节点），
  * 连带删除相关连线（含系统连线），受影响任务的图片端口序号紧凑。删排队 / 执行中任务前的「先取消再删」确认由界面负责。
  */
 export function removeNodes(board: Board, ids: string[]): Removal {
@@ -246,7 +246,7 @@ export function taskIssues(board: Board, table: CapabilityTable, taskId: string)
 }
 
 /**
- * 透明背景的图片来源不带透明通道时的标红原因（开关打开且恰好一条图片线；规格第 7 节：条件变坏保留 + 标红，绝不自动关）。
+ * 透明背景的图片来源不带透明通道时的标红原因（开关打开且恰好一条图片线；条件变坏保留 + 标红，绝不自动关）。
  * alpha 由界面注入（参考图导入时的一次性检测）；未知（未检测）时不拦。
  */
 export function transparentAlphaIssue(board: Board, taskId: string, alpha: boolean | null | undefined): string | null {
@@ -256,7 +256,7 @@ export function transparentAlphaIssue(board: Board, taskId: string, alpha: boole
   return alpha === false ? "该图不带透明通道" : null;
 }
 
-// ---- 编辑已提交过的提示词节点（规格第 3.5 节） ----
+// ---- 编辑已提交过的提示词节点 ----
 
 /** 提示词节点直接下游的任务里有已提交过的（有 last_submitted）。 */
 function recordedTasks(board: Board, promptId: string): Set<string> {

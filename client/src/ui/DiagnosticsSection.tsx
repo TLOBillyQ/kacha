@@ -1,4 +1,4 @@
-// 诊断包导出（规格第 12 节）：默认含日志、清单、脱敏设置与能力覆盖文件；画板与任务目录 JSON 含提示词，需逐项勾选。
+// 诊断包导出：默认含日志、清单、脱敏设置与能力覆盖文件；画板与任务目录 JSON 含提示词，需逐项勾选。
 import { save } from "@tauri-apps/plugin-dialog";
 import { useEffect, useState } from "react";
 import { ipc, type PackageEntry } from "../shell/ipc";

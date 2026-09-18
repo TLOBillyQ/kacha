@@ -24,7 +24,7 @@ describe("内置能力表", () => {
     ]);
   });
 
-  it("help_url 按规格初值", () => {
+  it("help_url 按内置初值", () => {
     expect(qwenPro().help_url).toContain("platform.qianwenai.com");
     const seedream = BUILTIN_TABLE.models.find((m) => m.model_id.startsWith("doubao-seedream-5-0-pro"))!;
     expect(seedream.help_url).toBe("https://docs.volcengine.com/docs/82379/1829186?lang=zh");

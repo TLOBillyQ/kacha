@@ -347,7 +347,7 @@ body[data-port-drag="ok"] * {
   color: #8c959f;
 }
 
-/* ---- 端口与连线（规格 4.1「端口与连线」）：颜色见 :root 的 --port-* ---- */
+/* ---- 端口与连线：颜色见 :root 的 --port-* ---- */
 /*
  * 端口框保持 16px 不缩放（React Flow 按端口框测连线端点，缩放会让端点偏移）；
  * 可见圆点画在 ::after 上，放大 / 发光只作用于它。热区 24px 由 ::before 扩出。
@@ -752,7 +752,7 @@ button.primary[aria-disabled="true"] {
   gap: 4px;
   justify-content: center;
 }
-/* 选中 = 实线亮色描边（.selected）；谱系 = 柔和外发光，可叠加；有选中时非谱系降透明度（规格 4.1）。 */
+/* 选中 = 实线亮色描边（.selected）；谱系 = 柔和外发光，可叠加；有选中时非谱系降透明度。 */
 .react-flow__node.in-lineage .node {
   box-shadow: 0 0 14px 4px rgba(9, 105, 218, 0.35);
 }

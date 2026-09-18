@@ -1,4 +1,4 @@
-// 界面状态：可随时丢弃并静默重置，不迁移（规格第 12 节）。
+// 界面状态：可随时丢弃并静默重置，不迁移。
 
 export interface UiState {
   window: { width: number; height: number } | null;

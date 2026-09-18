@@ -1,4 +1,4 @@
-// 项目预设（规格第 11 节）：内置预设随客户端发布、只读；个人预设在 app-data 目录 presets.json，不进画板文件。
+// 项目预设：内置预设随客户端发布、只读；个人预设在 app-data 目录 presets.json，不进画板文件。
 // 预设不是节点：选取后正向、负向各落成一个提示词节点。
 import type { Board, PromptNode } from "./board";
 import builtinJson from "./presets.builtin.json";

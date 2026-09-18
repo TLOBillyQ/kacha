@@ -1,7 +1,7 @@
 # 发布验收清单（v2 Tauri 客户端）
 
-分发决策见 `docs/adr/0007-gitea-release-as-sole-distribution-channel.md`，规格见
-`docs/v2-spec.md` §13。Gitea Release 只挂三个附件：`ugc-image-tool-<版本>-win-x64.zip`、
+分发决策见 `docs/adr/0007-gitea-release-as-sole-distribution-channel.md`。
+Gitea Release 只挂三个附件：`ugc-image-tool-<版本>-win-x64.zip`、
 `ugc-image-tool-<版本>-macos-arm64.zip`、`SHA256SUMS`，tag 为 `v<版本>`。
 执行人逐条勾选，并在末尾「记录」表中留痕。
 

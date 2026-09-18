@@ -1,4 +1,4 @@
-//! 启动时 WebView2 运行时缺失的说明（规格第 13 节）：Win10 21H2+ / Win11 均预装，缺失时 Tauri 窗口无法创建，
+//! 启动时 WebView2 运行时缺失的说明：Win10 21H2+ / Win11 均预装，缺失时 Tauri 窗口无法创建，
 //! 只能用系统原生对话框解释，并可直接打开官方下载页。
 
 use windows_sys::Win32::UI::Shell::ShellExecuteW;

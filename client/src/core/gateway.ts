@@ -1,4 +1,4 @@
-// 团队网关适配器（规格第 5 节，契约 docs/contracts/team-gateway-contract.md）。
+// 团队网关适配器（契约 docs/contracts/team-gateway-contract.md）。
 // 路径、载荷与出图解析全部来自 contracts/fixtures 实测夹具；生成请求只发一次，不重发、不用幂等键、不查任务。
 // HTTP 由调用方注入（壳里是 tauri-plugin-http 的 fetch，测试里是夹具回放）。
 import { isSupported, type ModelCapability } from "./capabilities";

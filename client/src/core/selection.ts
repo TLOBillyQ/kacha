@@ -1,4 +1,4 @@
-// 画板选取、编辑键与导航的纯逻辑（规格 4.1「导航」「选取与编辑键」）：框选命中合并、方向键微移、原地复制与 Alt + 拖复制、滚轮 / 触控板判别。
+// 画板选取、编辑键与导航的纯逻辑：框选命中合并、方向键微移、原地复制与 Alt + 拖复制、滚轮 / 触控板判别。
 import type { Board } from "./board";
 import { copySelection, pasteClip } from "./iterate";
 

@@ -1,4 +1,4 @@
-// 高级设置的加载 / 保存、API 密钥（系统凭据库，不可用时只在会话内存）、模型发现（规格第 12 节）。
+// 高级设置的加载 / 保存、API 密钥（系统凭据库，不可用时只在会话内存）、模型发现。
 import { useCallback, useEffect, useRef, useState } from "react";
 import { GatewayError, listModels } from "../core/gateway";
 import {

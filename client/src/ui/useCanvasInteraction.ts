@@ -1,4 +1,4 @@
-// 画板选取、编辑键与导航（规格 4.1「导航」「选取与编辑键」）：左键拖框选 / Shift 加选、右键 / 中键拖平移、平移缩放、Esc 清选区、
+// 画板选取、编辑键与导航：左键拖框选 / Shift 加选、右键 / 中键拖平移、平移缩放、Esc 清选区、
 // 方向键微移、Ctrl+J 原地偏移复制、Alt + 拖复制。React Flow 的相关配置与这些键位收在这里，BoardCanvas 只接线。
 // 撤销 / 重做、复制粘贴的 Ctrl 键仍在 BoardCanvas（#105），两边键位不重叠。
 import { SelectionMode, useReactFlow, useStoreApi, type Node, type ReactFlowProps } from "@xyflow/react";

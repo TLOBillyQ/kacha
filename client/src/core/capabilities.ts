@@ -1,4 +1,4 @@
-// 模型能力表：模型决定能力，能力决定生成任务节点上露出的端口、开关与档位（规格第 10 节）。
+// 模型能力表：模型决定能力，能力决定生成任务节点上露出的端口、开关与档位。
 // 内置 JSON + 同 schema 覆盖文件，按 model_id 整条合并；不按模型名猜能力。
 import builtinJson from "./capabilities.builtin.json";
 

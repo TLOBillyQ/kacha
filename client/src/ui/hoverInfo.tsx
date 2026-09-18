@@ -1,4 +1,4 @@
-// 悬浮信息的弹出层（规格 4.1「悬浮信息」）：光标停留约 400ms 后在光标旁弹只读浮层，移出即消失；
+// 悬浮信息的弹出层：光标停留约 400ms 后在光标旁弹只读浮层，移出即消失；
 // 浮层在窗口坐标里渲染，不随画布缩放。内容由 core/hoverInfo 组装；嵌套时最内层的悬浮目标生效。
 import { createContext, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ButtonHTMLAttributes, type HTMLAttributes, type ReactElement } from "react";
 import { clampMenuPosition } from "../core/contextMenu";

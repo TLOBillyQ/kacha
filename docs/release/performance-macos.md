@@ -1,6 +1,6 @@
 # 性能与包体实测（v2 Tauri 客户端）
 
-v2 规格 §13 要求补测 macOS 性能与包体数字；Windows 包体一并记录，便于对比。
+发版前须补测 macOS 性能与包体数字；Windows 包体一并记录，便于对比。
 **以下表格全部「待在 Apple Silicon 机器上实测」（Windows 行待在 Windows x64 机器上实测），
 未实测前不得填写估计值。**
 

@@ -1,4 +1,4 @@
-// 项目预设（规格第 11 节）：内置预设只读，可复制为个人预设；个人预设可新建 / 编辑 / 删除，存 app-data 目录 presets.json。
+// 项目预设：内置预设只读，可复制为个人预设；个人预设可新建 / 编辑 / 删除，存 app-data 目录 presets.json。
 // 「使用」由调用方在画布中央落成正向、负向两个提示词节点。
 import { useEffect, useState } from "react";
 import {

@@ -1,4 +1,4 @@
-// 高级设置与模型发现（规格第 12 节）。settings.json 在 app-data 目录，只前向迁移；API 密钥不在这里（系统凭据库）。
+// 高级设置与模型发现。settings.json 在 app-data 目录，只前向迁移；API 密钥不在这里（系统凭据库）。
 import { type CapabilityTable, type ModelCapability, modelsByTier } from "./capabilities";
 
 export const SETTINGS_FORMAT_VERSION = 1;
