@@ -88,7 +88,7 @@ describe("参考图节点悬浮信息", () => {
 });
 
 describe("任务节点悬浮信息", () => {
-  const base = { modelName: "通义万相", sizeSpec: { tier: "2K", ratio: "1:1", width: null, height: null }, issues: [], warnings: [], status: null };
+  const base = { modelName: "通义万相", sizeSpec: { tier: "2K", ratio: "1:1", width: null, height: null }, reasons: [], warnings: [], status: null };
 
   it("给了宽高比显示文本（自动状态）时尺寸行用它", () => {
     expect(taskHoverInfo({ ...base, ratioNote: "自动（16:9 · 图1）" })[1]).toMatchObject({ label: "尺寸", text: "2K · 自动（16:9 · 图1）" });
@@ -96,11 +96,16 @@ describe("任务节点悬浮信息", () => {
     expect(taskSizeText({ tier: null, ratio: null, width: 800, height: 600 }, null)).toBe("800×600");
   });
 
-  it("模型、尺寸；不可运行原因标红，提示标黄", () => {
-    expect(taskHoverInfo({ ...base, issues: ["正向提示词未连接"], warnings: ["图2 已接线但提示词未引用"] })).toEqual([
+  it("模型、尺寸；不可运行原因两类都列，错误标红、未就绪不标红，提示标黄", () => {
+    const reasons = [
+      { kind: "positiveEmpty" as const, category: "notReady" as const, text: "正向提示词为空" },
+      { kind: "imageMissing" as const, category: "error" as const, text: "图1 图片缺失：a.png" },
+    ];
+    expect(taskHoverInfo({ ...base, reasons, warnings: ["图2 已接线但提示词未引用"] })).toEqual([
       { label: "模型", text: "通义万相" },
       { label: "尺寸", text: "2K · 1:1" },
-      { label: null, text: "正向提示词未连接", tone: "error" },
+      { label: null, text: "正向提示词为空" },
+      { label: null, text: "图1 图片缺失：a.png", tone: "error" },
       { label: null, text: "图2 已接线但提示词未引用", tone: "warn" },
     ]);
   });

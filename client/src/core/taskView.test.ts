@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Board, BoardEdge, BoardNode, TaskNode } from "./board";
 import { BUILTIN_TABLE, type CapabilityTable } from "./capabilities";
+import { buildConfirmItems } from "./submission";
 import { taskView, type TaskFacts } from "./taskView";
 
 const QWEN_PRO = "qwen-image-3.0-pro";
@@ -198,6 +199,15 @@ function seedreamPro(patch: Partial<TaskNode>, refs: string[]): Board {
 describe("不可运行原因：种类与类别", () => {
   it.each(CASES)("$name", ({ board: b, table, facts, expected }) => {
     expect(kinds(b, table, facts)).toEqual(expected);
+  });
+});
+
+describe("节点标红 ≡ 运行被拦：二次确认与任务视图同一份", () => {
+  it.each(CASES)("$name", ({ board: b, table = BUILTIN_TABLE, facts = UNKNOWN }) => {
+    const [item] = buildConfirmItems(b, table, ["t"], facts);
+    const v = view(b, table, facts);
+    expect(item.issues).toEqual(v.reasons);
+    expect(item.warnings).toEqual(v.warnings);
   });
 });
 

@@ -1,12 +1,11 @@
 // 提交前的纯函数：脏判据快照、运行范围、二次确认清单。
 import type { Board, Region, TaskNode } from "./board";
 import { findModel, type CapabilityTable } from "./capabilities";
-import { isRequestShapeImplemented } from "./gateway";
-import { imageEdges, imagePortSlots, imageSources, promptText, taskIssues, transparentAlphaIssue } from "./graph";
-import { planSend, promptLanguage, referenceProblemsOf, type ReferenceProblems, type SendPlan } from "./sendPlan";
-import { modelAvailabilityIssue, type Discovery } from "./settings";
+import { imageEdges, imageSources, promptText } from "./graph";
+import type { SendPlan } from "./sendPlan";
 import type { SizeSpec } from "./size";
 import { readOutcome, type TaskFs, type TaskOutcome } from "./taskDir";
+import { sendPlanOf, taskView, type TaskFacts, type UnrunnableReason } from "./taskView";
 
 export type SnapshotImage =
   | { kind: "reference"; path: string; sha256: string; region: Region | null }
@@ -161,32 +160,10 @@ export interface ConfirmItem {
   firstLine: string;
   /** 当前会发给模型的内容；模型不在能力表内时为 null（任务本就标红、不可运行）。 */
   send: SendPlan | null;
-  /** 非空 = 标红，不可勾选。 */
-  issues: string[];
-  /** 仅提示，不阻断。 */
+  /** 生成任务视图的不可运行原因（两类都拦）；非空 = 不可勾选。 */
+  issues: UnrunnableReason[];
+  /** 生成任务视图的警告：仅提示，不阻断。 */
   warnings: string[];
-}
-
-/** 按画板当前内容的发送计划；模型不在能力表内时没有发送计划。 */
-export function sendPlanOf(board: Board, table: CapabilityTable, taskId: string): SendPlan | null {
-  const task = findTask(board, taskId);
-  const model = task && findModel(table, task.model);
-  if (!model) return null;
-  return planSend(model, imagePortSlots(board, table, taskId), promptText(board, taskId, "positive"), promptText(board, taskId, "negative"));
-}
-
-/** 「图N」「区域N」实时角标：红 = 引用越界（不可运行），黄 = 有线未被引用。任务节点与二次确认共用，取自发送计划。 */
-export function imageRefProblems(board: Board, table: CapabilityTable, taskId: string): ReferenceProblems {
-  const plan = sendPlanOf(board, table, taskId);
-  return plan ? plan.referenceProblems : referenceProblemsOf(undefined, imagePortSlots(board, table, taskId), promptText(board, taskId, "positive"));
-}
-
-export interface ConfirmContext {
-  discovery: Discovery;
-  /** 图片文件缺失的参考图 / 结果节点 id。 */
-  missingNodes: ReadonlySet<string>;
-  /** 节点 id → 是否带透明通道（导入时检测；缺省 = 未知，不拦）。 */
-  alphaByNode?: ReadonlyMap<string, boolean>;
 }
 
 /** 运行前探测参考图的端口（壳层 inspectImage）。 */
@@ -219,40 +196,21 @@ export async function collectRunFacts(
   return { missingNodes, alphaByNode };
 }
 
-export function buildConfirmItems(board: Board, table: CapabilityTable, taskIds: string[], ctx: ConfirmContext): ConfirmItem[] {
+/** 任务视图 + 发送计划 → 二次确认项；原因与警告原样取自任务视图，节点上显示的与这里拦下的是同一份。 */
+export function buildConfirmItems(board: Board, table: CapabilityTable, taskIds: string[], facts: TaskFacts): ConfirmItem[] {
   return taskIds.flatMap((taskId) => {
     const task = findTask(board, taskId);
-    if (!task) return [];
-    const model = findModel(table, task.model);
+    const view = taskView(board, table, taskId, facts);
+    if (!task || !view) return [];
     const prompt = promptText(board, taskId, "positive");
-    const images = imageSources(board, taskId, "");
-    const issues = taskIssues(board, table, taskId);
-    const hasPositive = board.edges.some((e) => e.to[0] === taskId && e.to[1] === "positive");
-    if (hasPositive && !prompt.trim()) issues.push("正向提示词为空");
-    if (model && !isRequestShapeImplemented(model)) issues.push(`模型 ${model.display_name} 的请求形态尚未接入`);
-    const unavailable = model && modelAvailabilityIssue(table, ctx.discovery, model.model_id);
-    if (unavailable) issues.push(unavailable);
-    const send = sendPlanOf(board, table, taskId);
-    const refs = send?.referenceProblems ?? referenceProblemsOf(undefined, imagePortSlots(board, table, taskId), prompt);
-    issues.push(...refs.issues);
-    const warnings = [...refs.warnings];
-    if (model && images.length > 0 && promptLanguage(prompt) === "en" && model.reference_phrasing.en_verified === "untested") {
-      warnings.push("该模型英文序号未验证");
-    }
-    images.forEach((img, i) => {
-      if (ctx.missingNodes.has(img.nodeId)) issues.push(`图${i + 1} 图片缺失：${img.label}`);
-    });
-    const edges = imageEdges(board, taskId);
-    const alphaIssue = transparentAlphaIssue(board, taskId, edges.length === 1 ? ctx.alphaByNode?.get(edges[0].from[0]) : undefined);
-    if (alphaIssue) issues.push(alphaIssue);
     return [
       {
         taskId,
-        modelName: model?.display_name ?? task.model,
+        modelName: findModel(table, task.model)?.display_name ?? task.model,
         firstLine: prompt.split("\n").find((line) => line.trim())?.trim() ?? "",
-        send,
-        issues: [...new Set(issues)],
-        warnings,
+        send: sendPlanOf(board, table, taskId),
+        issues: view.reasons,
+        warnings: view.warnings,
       },
     ];
   });
@@ -267,7 +225,7 @@ export function runDispatch(items: ConfirmItem[]): RunDispatch {
   const [item] = items;
   if (item.issues.length > 0) {
     const more = item.issues.length > 1 ? ` 等另外 ${item.issues.length - 1} 项` : "";
-    return { kind: "toast", message: `无法运行：${item.issues[0]}${more}` };
+    return { kind: "toast", message: `无法运行：${item.issues[0].text}${more}` };
   }
   return item.warnings.length > 0 ? { kind: "confirm" } : { kind: "submit", taskId: item.taskId };
 }

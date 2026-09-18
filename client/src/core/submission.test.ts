@@ -2,9 +2,14 @@ import { describe, expect, it } from "vitest";
 import type { Board, BoardEdge, BoardNode, TaskNode } from "./board";
 import { BUILTIN_TABLE } from "./capabilities";
 import { imageSources } from "./graph";
-import { buildConfirmItems, collectRunFacts, imageRefProblems, isDirty, isInterrupted, runDispatch, runScope, snapshotOf, storedStatuses, withSubmitted, type ConfirmItem } from "./submission";
+import { buildConfirmItems, collectRunFacts, isDirty, isInterrupted, runDispatch, runScope, snapshotOf, storedStatuses, withSubmitted, type ConfirmItem } from "./submission";
 import { taskDirOfTaskId, writeOutcome } from "./taskDir";
+import type { UnrunnableReason } from "./taskView";
 import { memoryTaskFs } from "./testing/memoryTaskFs";
+
+/** 二次确认项的原因文案（种类与类别由 taskView.test 断言）。 */
+const texts = (item: ConfirmItem) => item.issues.map((r) => r.text);
+const issue = (text: string): UnrunnableReason => ({ kind: "imageMissing", category: "error", text });
 
 function prompt(id: string, text: string): BoardNode {
   return { id, type: "prompt", pos: [0, 0], size: [100, 100], extra: {}, text };
@@ -154,7 +159,7 @@ describe("运行范围", () => {
 });
 
 describe("二次确认清单", () => {
-  const ctx = { discovery: { source: "none" as const }, missingNodes: new Set<string>() };
+  const ctx = { discovery: { source: "none" as const }, missingNodes: new Set<string>(), alphaByNode: new Map<string, boolean>() };
 
   it("每项：模型名 + 提示词首行 + 完整发送文本；可运行的默认勾选", () => {
     const [item] = buildConfirmItems(editBoard(), BUILTIN_TABLE, ["t"], ctx);
@@ -195,10 +200,11 @@ describe("二次确认清单", () => {
     const items = buildConfirmItems(b, table, ["t1", "t2", "t3"], {
       discovery: { source: "cached", ids: ["qwen-image-3.0"], fetchedAt: "t" },
       missingNodes: new Set(["r1"]),
+      alphaByNode: new Map(),
     });
-    expect(items[0].issues).toContain("正向提示词未连接");
-    expect(items[1].issues).toEqual(expect.arrayContaining(["正向提示词为空", "模型 Seedream 5.0 pro 的请求形态尚未接入"]));
-    expect(items[2].issues).toEqual(expect.arrayContaining(["网关未提供模型 qwen-image-3.0-pro", "图1 图片缺失：r1.png"]));
+    expect(texts(items[0])).toContain("正向提示词未连接");
+    expect(texts(items[1])).toEqual(expect.arrayContaining(["正向提示词为空", "模型 Seedream 5.0 pro 的请求形态尚未接入"]));
+    expect(texts(items[2])).toEqual(expect.arrayContaining(["网关未提供模型 qwen-image-3.0-pro", "图1 图片缺失：r1.png"]));
   });
 
   it("模型不在能力表内：没有发送计划，任务标红", () => {
@@ -206,13 +212,13 @@ describe("二次确认清单", () => {
     const [item] = buildConfirmItems(b, BUILTIN_TABLE, ["t"], ctx);
     expect(item.send).toBeNull();
     expect(item.modelName).toBe("retired-model");
-    expect(item.issues).toContain("模型 retired-model 不在能力表内");
+    expect(texts(item)).toContain("模型 retired-model 不在能力表内");
   });
 
   it("Seedream 请求形态已接入，不因请求形态标红", () => {
     const b = board([prompt("p", "一只橘猫"), task("t", { model: "doubao-seedream-5-0-lite-260128" })], [edge("p", "t", "positive")]);
-    const [item] = buildConfirmItems(b, BUILTIN_TABLE, ["t"], { discovery: { source: "none" }, missingNodes: new Set() });
-    expect(item.issues.join()).not.toContain("请求形态");
+    const [item] = buildConfirmItems(b, BUILTIN_TABLE, ["t"], { discovery: { source: "none" }, missingNodes: new Set(), alphaByNode: new Map() });
+    expect(texts(item).join()).not.toContain("请求形态");
   });
 });
 
@@ -236,11 +242,11 @@ describe("运行分派", () => {
   });
 
   it("恰好一个标红任务：提示第一条原因", () => {
-    expect(runDispatch([confirmItem("t", { issues: ["正向提示词未连接"] })])).toEqual({ kind: "toast", message: "无法运行：正向提示词未连接" });
+    expect(runDispatch([confirmItem("t", { issues: [issue("正向提示词未连接")] })])).toEqual({ kind: "toast", message: "无法运行：正向提示词未连接" });
   });
 
   it("恰好一个标红任务、多条原因：追加「等另外 N 项」（N 不含第一条）", () => {
-    const item = confirmItem("t", { issues: ["正向提示词未连接", "图1 图片缺失：r1.png"], warnings: ["该模型英文序号未验证"] });
+    const item = confirmItem("t", { issues: [issue("正向提示词未连接"), issue("图1 图片缺失：r1.png")], warnings: ["该模型英文序号未验证"] });
     expect(runDispatch([item])).toEqual({ kind: "toast", message: "无法运行：正向提示词未连接 等另外 1 项" });
   });
 
@@ -250,18 +256,18 @@ describe("运行分派", () => {
 
   it("两个及以上任务：弹确认窗，即使全部干净", () => {
     expect(runDispatch([confirmItem("t1"), confirmItem("t2")])).toEqual({ kind: "confirm" });
-    expect(runDispatch([confirmItem("t1", { issues: ["x"] }), confirmItem("t2")])).toEqual({ kind: "confirm" });
+    expect(runDispatch([confirmItem("t1", { issues: [issue("x")] }), confirmItem("t2")])).toEqual({ kind: "confirm" });
   });
 });
 
 describe("二次确认：「图N」校验与提示", () => {
-  const ctx = { discovery: { source: "none" as const }, missingNodes: new Set<string>() };
+  const ctx = { discovery: { source: "none" as const }, missingNodes: new Set<string>(), alphaByNode: new Map<string, boolean>() };
 
   it("引用越界为红（硬阻断），有线未被引用为黄（仅警告）", () => {
     const b = editBoard();
     (b.nodes[0] as { text: string }).text = "把@图3 的颜色用到@图1 上";
     const [item] = buildConfirmItems(b, BUILTIN_TABLE, ["t"], ctx);
-    expect(item.issues).toEqual(["提示词引用了图3，但只接了 2 张参考图"]);
+    expect(texts(item)).toEqual(["提示词引用了图3，但只接了 2 张参考图"]);
     expect(item.warnings).toEqual(["图2 已接线但提示词未引用"]);
     expect(item.send?.text).toContain("把图3 的颜色用到图1 上");
   });
@@ -364,14 +370,14 @@ describe("已中断：重开时推导", () => {
 });
 
 describe("区域指示：图N 校验与发送文本", () => {
-  const ctx = { discovery: { source: "none" as const }, missingNodes: new Set<string>() };
+  const ctx = { discovery: { source: "none" as const }, missingNodes: new Set<string>(), alphaByNode: new Map<string, boolean>() };
   const REGION = { rects: [[0.1, 0.1, 0.5, 0.5] as [number, number, number, number]], render: "highlight_overlay" as const };
   const regionBoard = (text: string) =>
     board([prompt("p", text), reference("r1"), task("t")], [edge("p", "t", "positive"), { ...edge("r1", "t", "image:0"), region: REGION }]);
 
   it("叠加图紧随原图占序号：固定句算引用、叠加序号豁免黄检、固定句进发送文本", () => {
     const [item] = buildConfirmItems(regionBoard("把@图1 的帽子改成红色"), BUILTIN_TABLE, ["t"], ctx);
-    expect(item.issues).toEqual([]);
+    expect(texts(item)).toEqual([]);
     expect(item.warnings).toEqual([]);
     expect(item.send?.referenceCount).toBe(2);
     expect(item.send?.text).toBe(
@@ -387,23 +393,23 @@ describe("区域指示：图N 校验与发送文本", () => {
     );
     const [item] = buildConfirmItems(b, BUILTIN_TABLE, ["t"], ctx);
     // 两张图各带叠加图共 4 张，超出 qwen 上限另行标红；这里只看区域编号本身。
-    expect(item.issues.filter((i) => i.includes("区域"))).toEqual([]);
+    expect(texts(item).filter((i) => i.includes("区域"))).toEqual([]);
     expect(item.send?.text).toContain("紫色区域 放狐狸，洋红色区域 放礼物盒，黄色区域 放路牌");
     expect(item.send?.text).toContain("图2 是图1 的标注版，紫色、黄色半透明高亮");
     expect(item.send?.text).toContain("图4 是图3 的标注版，洋红色半透明高亮");
 
     const [over] = buildConfirmItems(regionBoard("区域2 改成红色"), BUILTIN_TABLE, ["t"], ctx);
-    expect(over.issues).toContain("提示词引用了区域2，但只框选了 1 个区域");
+    expect(texts(over)).toContain("提示词引用了区域2，但只框选了 1 个区域");
   });
 
   it("超过 3 个区域标红；没有框选时「区域N」是普通文字", () => {
     const four = { rects: Array.from({ length: 4 }, () => REGION.rects[0]), render: "highlight_overlay" as const };
     const b = board([prompt("p", "改"), reference("r1"), task("t")], [edge("p", "t", "positive"), { ...edge("r1", "t", "image:0"), region: four }]);
-    expect(buildConfirmItems(b, BUILTIN_TABLE, ["t"], ctx)[0].issues).toContain("框选了 4 个区域，最多 3 个");
+    expect(texts(buildConfirmItems(b, BUILTIN_TABLE, ["t"], ctx)[0])).toContain("框选了 4 个区域，最多 3 个");
 
     const plain = board([prompt("p", "把区域2 的草地加深"), reference("r1"), task("t")], [edge("p", "t", "positive"), edge("r1", "t", "image:0")]);
     const [item] = buildConfirmItems(plain, BUILTIN_TABLE, ["t"], ctx);
-    expect(item.issues).toEqual([]);
+    expect(texts(item)).toEqual([]);
     expect(item.send?.text).toContain("把区域2 的草地加深");
   });
 
@@ -415,7 +421,7 @@ describe("区域指示：图N 校验与发送文本", () => {
 
   it("区域端口不占用户序号：在图1 上框选后，提示词里的图2 仍指第二张用户图，发送时换算为图3", () => {
     const [item] = buildConfirmItems(twoImages("把@图2的少女放入图1的区域1", REGION), BUILTIN_TABLE, ["t"], ctx);
-    expect(item.issues).toEqual([]);
+    expect(texts(item)).toEqual([]);
     expect(item.warnings).toEqual([]);
     expect(item.send?.referenceCount).toBe(3);
     expect(item.send?.text).toBe(
@@ -435,7 +441,7 @@ describe("区域指示：图N 校验与发送文本", () => {
     );
     const [item] = buildConfirmItems(b, BUILTIN_TABLE, ["t"], ctx);
     expect(item.send?.referenceCount).toBe(5);
-    expect(item.issues).toEqual([]);
+    expect(texts(item)).toEqual([]);
     expect(item.send?.text).toContain("本次提供 5 张参考图，按顺序为图1、图2、图3、图4、图5。\n把图3 放进图1，照着地图2 摆，图4 当背景；Image 4\n");
     expect(item.send?.text).toContain("图2 是图1 的标注版，紫色、黄色半透明高亮");
     expect(item.send?.text).toContain("图5 是图4 的标注版，洋红色半透明高亮");
@@ -443,9 +449,8 @@ describe("区域指示：图N 校验与发送文本", () => {
 
   it("引用越界按用户连线数：两张用户图其中一张带区域时 @图3 标红；未引用的用户图标黄，叠加图从不标黄", () => {
     const [item] = buildConfirmItems(twoImages("把@图3 的颜色用到@图1 上", REGION), BUILTIN_TABLE, ["t"], ctx);
-    expect(item.issues).toEqual(["提示词引用了图3，但只接了 2 张参考图"]);
+    expect(texts(item)).toEqual(["提示词引用了图3，但只接了 2 张参考图"]);
     expect(item.warnings).toEqual(["图2 已接线但提示词未引用"]);
-    expect(imageRefProblems(twoImages("改", REGION), BUILTIN_TABLE, "t").unreferenced).toEqual([2]);
   });
 
   it("区域变更让任务变脏", () => {
@@ -476,14 +481,14 @@ describe("图层来源", () => {
 });
 
 describe("透明背景：二次确认标红", () => {
-  it("源图不带透明通道时标红（alpha 由界面注入；缺省未知不拦）", () => {
+  it("支持透明背景的模型、源图不带透明通道时标红（alpha 由界面注入；缺省未知不拦）", () => {
     const b = board(
-      [prompt("p", "抠出@图1 的主体"), reference("r1"), task("t", { transparent_background: true })],
+      [prompt("p", "抠出@图1 的主体"), reference("r1"), task("t", { transparent_background: true, model: "doubao-seedream-5-0-pro-260628", size_spec: { tier: "2K", ratio: "1:1", width: null, height: null } })],
       [edge("p", "t", "positive"), edge("r1", "t", "image:0")],
     );
     const [bad] = buildConfirmItems(b, BUILTIN_TABLE, ["t"], { discovery: { source: "none" }, missingNodes: new Set(), alphaByNode: new Map([["r1", false]]) });
-    expect(bad.issues).toContain("该图不带透明通道");
-    const [unknown] = buildConfirmItems(b, BUILTIN_TABLE, ["t"], { discovery: { source: "none" }, missingNodes: new Set() });
-    expect(unknown.issues).not.toContain("该图不带透明通道");
+    expect(texts(bad)).toContain("该图不带透明通道");
+    const [unknown] = buildConfirmItems(b, BUILTIN_TABLE, ["t"], { discovery: { source: "none" }, missingNodes: new Set(), alphaByNode: new Map() });
+    expect(texts(unknown)).not.toContain("该图不带透明通道");
   });
 });

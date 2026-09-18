@@ -7,6 +7,7 @@ import type { MenuItem } from "./contextMenu";
 import { imagePortIndex } from "./graph";
 import type { TaskStatus } from "./run";
 import type { SizeSpec } from "./size";
+import type { UnrunnableReason } from "./taskView";
 
 export interface HoverLine {
   /** 行首字段名；null = 整行是一句话（原因、提示）。 */
@@ -118,7 +119,7 @@ export function taskHoverInfo({
   modelName,
   sizeSpec,
   ratioNote = null,
-  issues,
+  reasons,
   warnings,
   status,
 }: {
@@ -126,8 +127,8 @@ export function taskHoverInfo({
   sizeSpec: SizeSpec;
   /** 宽高比的显示文本（自动状态为「自动（16:9 · 图1）」）；缺省按 size_spec 原样。 */
   ratioNote?: string | null;
-  /** 不可运行原因。 */
-  issues: string[];
+  /** 不可运行原因（取自生成任务视图）：错误标红，未就绪不标红。 */
+  reasons: UnrunnableReason[];
   warnings: string[];
   status: TaskStatus | null;
 }): HoverInfo {
@@ -135,7 +136,7 @@ export function taskHoverInfo({
     line("模型", modelName),
     line("尺寸", taskSizeText(sizeSpec, ratioNote)),
     ...(status ? [statusLine(status)] : []),
-    ...issues.map((i) => line(null, i, { tone: "error" })),
+    ...reasons.map((r) => line(null, r.text, r.category === "error" ? { tone: "error" } : {})),
     ...warnings.map((w) => line(null, w, { tone: "warn" })),
   ];
 }

@@ -22,7 +22,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as R
 import { BOARD_EXTENSION, type Board, type BoardEdge } from "../core/board";
 import { findModel, modelsByTier, type CapabilityTable, type InputImageRule } from "../core/capabilities";
 import type { TaskStatus } from "../core/run";
-import { availableModels, defaultTaskModel, modelAvailabilityIssue, type Discovery } from "../core/settings";
+import { availableModels, defaultTaskModel, type Discovery } from "../core/settings";
 import {
   canConnect,
   firstRegionOfEdge,
@@ -30,10 +30,7 @@ import {
   imageEdges,
   imagePortIndex,
   imagePortSlots,
-  imageSources,
-  taskIssues,
   taskPorts,
-  transparentAlphaIssue,
   workflowOf,
   type Connection,
 } from "../core/graph";
@@ -50,7 +47,8 @@ import { renderedImageSize } from "../core/nodeSize";
 import { basename, dirname, joinPath, resolveFromRoot, toRootRelative } from "../core/paths";
 import { effectiveRegionRender } from "../core/region";
 import { findReferenceFile, findResultFile, IMAGE_EXTENSIONS } from "../core/relocate";
-import { imageRefProblems, type SnapshotImage } from "../core/submission";
+import type { SnapshotImage } from "../core/submission";
+import { taskView } from "../core/taskView";
 import { relocateFs } from "../shell/adapters";
 import { ipc } from "../shell/ipc";
 import { logEvent } from "../shell/log";
@@ -407,8 +405,8 @@ export function BoardCanvas({
           return [{ ...base, ...imageBox(n.path), type: "reference", data: { node: n, rules, missing: missing.has(n.id) } }];
         }
         case "task": {
-          const refs = imageRefProblems(board, table, n.id);
-          const missingImages = imageSources(board, n.id, outputRoot).flatMap((src, i) => (missing.has(src.nodeId) ? [`图${i + 1} 图片缺失：${src.label}`] : []));
+          // 节点用缓存事实；运行前 App 逐张重新探测，同样的事实得出同样的原因。
+          const view = taskView(board, table, n.id, { missingNodes: missing, alphaByNode, discovery })!;
           const taskEdges = imageEdges(board, n.id);
           const render = effectiveRegionRender(findModel(table, n.model));
           const slots: ImageSlotInfo[] = imagePortSlots(board, table, n.id).map((s) => {
@@ -427,7 +425,6 @@ export function BoardCanvas({
                   edgeRef: { from: s.edge.from, to: s.edge.to },
                 };
           });
-          const alphaIssue = transparentAlphaIssue(board, n.id, taskEdges.length === 1 ? alphaByNode.get(taskEdges[0].from[0]) : undefined);
           return [
             {
               ...base,
@@ -435,14 +432,7 @@ export function BoardCanvas({
               data: {
                 node: n,
                 ports: taskPorts(board, table, n.id),
-                issues: [
-                  ...withAvailability(taskIssues(board, table, n.id), modelAvailabilityIssue(table, discovery, n.model)),
-                  ...(alphaIssue ? [alphaIssue] : []),
-                  ...refs.issues,
-                  ...missingImages,
-                ],
-                warnings: refs.warnings,
-                unreferenced: refs.unreferenced,
+                view,
                 locked: locked.has(n.id),
                 workflow: workflowOf(board, n.id),
                 images: taskEdges.map((e) => labelOf(e.from[0])),
@@ -950,10 +940,6 @@ function dropTargetAt(client: { x: number; y: number }): { kind: "node"; nodeId:
   if (nodeId) return { kind: "node", nodeId };
   if (!el?.closest(".react-flow") || el.closest(".react-flow__panel, .react-flow__node-toolbar")) return null;
   return { kind: "pane" };
-}
-
-function withAvailability(issues: string[], unavailable: string | null): string[] {
-  return unavailable ? [...issues, unavailable] : issues;
 }
 
 function posOf(p: { x: number; y: number }): [number, number] {

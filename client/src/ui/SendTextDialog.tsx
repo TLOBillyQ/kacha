@@ -36,7 +36,7 @@ export function ItemProblems({ item }: { item: ConfirmItem }) {
       {item.issues.length > 0 && (
         <ul className="error-list">
           {item.issues.map((issue) => (
-            <li key={issue}>{issue}</li>
+            <li key={`${issue.kind}:${issue.text}`}>{issue.text}</li>
           ))}
         </ul>
       )}

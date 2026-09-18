@@ -38,10 +38,10 @@ import {
   ratioRangeText,
   ratiosForSizeTier,
   ratioText,
-  resolveSize,
   sizeTiersOf,
   type SizeSpec,
 } from "../core/size";
+import type { TaskView } from "../core/taskView";
 import { fileUrl } from "../shell/ipc";
 import { useBoardActions, useImageInfo } from "./context";
 import { HoverButton, HoverSpan, useHover } from "./hoverInfo";
@@ -57,7 +57,7 @@ export type ReferenceFlowNode = Node<{ node: ReferenceModel; rules: InputImageRu
 export type ResultFlowNode = Node<{ node: ResultModel; rules: InputImageRule[]; missing: boolean }, "result">;
 export interface ImagePortInfo {
   label: string;
-  /** 源图片绝对路径，用于判断透明背景前提（是否带 alpha）。 */
+  /** 源图片绝对路径；源节点不存在时为 null。 */
   absPath: string | null;
 }
 /** 端口行按 imagePortSlots 展开口径：带区域的线在 highlight_overlay 下多出紧随的「叠加」锁定行（从属于原图，不占用户序号）。 */
@@ -81,11 +81,8 @@ export type TaskFlowNode = Node<
   {
     node: TaskModel;
     ports: TaskPorts;
-    issues: string[];
-    /** 黄色提示，不阻断。 */
-    warnings: string[];
-    /** 已接线但提示词没引用的图序号（从 1 起）。 */
-    unreferenced: number[];
+    /** 生成任务视图：不可运行原因、警告、模型标签、生成尺寸、开关可用性（与运行时二次确认同一份）。 */
+    view: TaskView;
     /** 排队 / 执行中：参数与连线锁定。 */
     locked: boolean;
     workflow: WorkflowName;
@@ -537,16 +534,15 @@ function RatioCombo({
 
 export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskFlowNode>) {
   const { table, apply, availableModels, editRegion, previewNode, perform } = useBoardActions();
-  const { node, ports, issues, warnings, unreferenced, locked, workflow, images, slots, regionRender, hasPositive, status, expanded, run } = data;
+  const { node, ports, view, locked, workflow, images, slots, regionRender, hasPositive, status, expanded, run } = data;
+  const { reasons, warnings, unreferenced, toggles } = view;
   const [infoOpen, setInfoOpen] = useState(false);
   const [dragFrom, setDragFrom] = useState<number | null>(null);
   const updateInternals = useUpdateNodeInternals();
   const model = findModel(table, node.model);
   const rule = model?.workflows[workflow].size_rule;
-  const availableIds = new Set(availableModels.map((m) => m.model_id));
-  const listed = availableIds.has(node.model);
-  const shelved = modelsByTier(table).some((g) => g.models.some((m) => m.model_id === node.model));
-  const modelLabel = !model ? `${node.model}（未知模型）` : listed ? model.display_name : shelved ? `${model.display_name}（网关未提供）` : `${model.display_name}（未上架）`;
+  const modelLabel = view.model.label;
+  const listed = view.model.state === "ok";
 
   // 端口重排用 pointer 事件：窗口开启了文件拖入（dragDropEnabled），Windows 上收不到 HTML5 drop。
   // 拖动中全局换成 grabbing 指针，悬停在可放的行上高亮该行，其余位置显示 no-drop。
@@ -592,23 +588,19 @@ export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskF
   const isAuto = isAutoRatio(node.size_spec);
   const setTier = (next: string) => apply({ kind: "setTier", taskId: node.id, tier: next });
   /** 最终发送的像素（与提交时同一换算）；不可运行时为 null。 */
-  const pixels = rule ? resolveSize(rule, node.size_spec) : null;
+  const pixels = view.size;
   /** 手动的宽高比在当前模型 / 分辨率档下发不出去：标「（不支持）」，值不动。 */
-  const ratioUnsupported = !isAuto && tier !== null && tiers.includes(tier) && node.size_spec.ratio !== null && pixels === null;
-
-  const singleImage = images.length === 1 ? images[0].absPath : null;
-  const singleInfo = useImageInfo(singleImage);
-  const transparentReady = images.length === 1 && !!singleInfo?.has_alpha;
-  const transparentHint = images.length !== 1 ? "需要恰好一条图片线" : singleInfo?.has_alpha ? "" : "该图不带透明通道";
-  const blocking = issues.filter((i) => i !== "正向提示词未连接");
+  const ratioUnsupported = view.ratioUnsupported;
+  /** 节点标红只看错误；未就绪（如正向提示词未连接）不标红，但运行时同样被拦。 */
+  const hasError = reasons.some((r) => r.category === "error");
   /** 宽高比：选「自动」转为跟随参考图（当场重算），选具体值转为手动；两者都是一个撤销步。 */
   const setRatio = (next: string) => apply({ kind: "setRatio", taskId: node.id, ratio: next === AUTO_RATIO ? null : next });
   const ratioNote = rule && node.size_spec.ratio !== null ? (isAuto ? autoRatioLabel(rule, node.size_spec) : ratioText(rule, node.size_spec.ratio)) : null;
-  const hover = useHover(taskHoverInfo({ modelName: modelLabel, sizeSpec: node.size_spec, ratioNote, issues, warnings, status }));
+  const hover = useHover(taskHoverInfo({ modelName: modelLabel, sizeSpec: node.size_spec, ratioNote, reasons, warnings, status }));
   const target = { kind: "node", nodeId: node.id } as const;
 
   return (
-    <div className={`node node-task ${blocking.length ? "node-error" : ""}`} {...hover}>
+    <div className={`node node-task ${hasError ? "node-error" : ""}`} {...hover}>
       <div className="node-title task-title">
         <HoverButton
           className="icon nodrag expand-toggle"
@@ -653,14 +645,14 @@ export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskF
                 </label>
               )}
               {ports.transparentBackground && (
-                <label className={!transparentReady && !node.transparent_background ? "disabled" : ""}>
+                <label className={!toggles.transparentBackground.canEnable && !node.transparent_background ? "disabled" : ""}>
                   <input
                     type="checkbox"
                     checked={node.transparent_background}
-                    disabled={locked || (!transparentReady && !node.transparent_background)}
+                    disabled={locked || (!toggles.transparentBackground.canEnable && !node.transparent_background)}
                     onChange={(e) => apply({ kind: "setTaskFlag", taskId: node.id, flag: "transparent_background", value: e.target.checked })}
                   />
-                  透明背景{transparentHint && <span className="muted">（{transparentHint}）</span>}
+                  透明背景{toggles.transparentBackground.hint && <span className="muted">（{toggles.transparentBackground.hint}）</span>}
                 </label>
               )}
             </div>
@@ -796,10 +788,10 @@ export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskF
         )}
       </div>
 
-      {expanded && issues.length > 0 && (
-        <ul className={blocking.length ? "error-list" : "hint-list"}>
-          {issues.map((i) => (
-            <li key={i}>{i}</li>
+      {expanded && reasons.length > 0 && (
+        <ul className={hasError ? "error-list" : "hint-list"}>
+          {reasons.map((r) => (
+            <li key={`${r.kind}:${r.text}`}>{r.text}</li>
           ))}
         </ul>
       )}
