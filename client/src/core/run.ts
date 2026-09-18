@@ -1,6 +1,6 @@
-// 单个任务从提交到出结果：读参考图（提交）→ 写任务目录（派发，不可变）→ 调网关 → 存结果图 → 画板加结果节点。
-// 副作用全部由调用方注入，状态与队列在界面层。
-import type { Board, ResultRecord } from "./board";
+// 单个任务从提交到出结果的内部件：读参考图（提交）→ 写任务目录（派发，不可变）→ 调网关 → 存结果图。
+// 副作用全部由调用方注入；调用顺序与状态由任务运行器（runner.ts）负责，界面不直接调用。
+import type { Board, ResultRecord, TaskNode } from "./board";
 import { findModel, type CapabilityTable, type InputImageRule, type ModelCapability } from "./capabilities";
 import { fitImage, type FittedBytes, type FittedRecord, type ImageCodec } from "./fitImage";
 import { composeSendText, ERROR_CATEGORY_LABELS, fetchResultImage, GatewayError, generate, inlinesNegativePrompt, type FetchLike, type GenerationInput } from "./gateway";
@@ -9,7 +9,7 @@ import { promptLanguage } from "./imageRefs";
 import type { RunResult } from "./layout";
 import { firstRegionOf, imageRefMap, overlayPhrases, regionNames, type SlotRef } from "./region";
 import { isAutoRatio, resolveSize } from "./size";
-import { imageSources, snapshotOf, withSubmitted } from "./submission";
+import { imageSources, snapshotOf } from "./submission";
 import { joinPath } from "./paths";
 import type { SizeSpec } from "./size";
 import { newTaskId, saveLayers, saveResult, sniffImage, taskDirOf, taskDirOfTaskId, writeSubmission, type LayerRecord, type ReferenceRegion, type ReferenceSource, type SubmissionPlan, type TaskFs } from "./taskDir";
@@ -43,6 +43,8 @@ export interface RunDeps extends TaskFs {
   readBytes(absPath: string): Promise<Uint8Array>;
   fetch: FetchLike;
   now(): Date;
+  /** 定时：ms 毫秒后调 fn，返回取消函数。运行器不直接调 setTimeout。 */
+  schedule(ms: number, fn: () => void): () => void;
   /** 把区域矩形以高亮叠加画到源图上，返回编码后的图片（壳层 canvas 实现）；有区域任务时必须注入。 */
   composeOverlay?(image: Uint8Array, rects: [number, number, number, number][], firstRegion: number): Promise<Uint8Array>;
   /** 按模型输入规则缩放 / 转码参考图快照用的解码 / 编码（壳层 canvas 实现）；未注入时原样发送。 */
@@ -84,14 +86,20 @@ function readError(label: string, e: unknown): LocalError {
   return new LocalError(`读取${label}失败：${e instanceof Error ? e.message : String(e)}`);
 }
 
+/** 准备好的任务与派发时要写到任务节点上的 last_submitted；undefined = 不改（生成变体）。 */
+export interface Prepared {
+  job: PreparedJob;
+  lastSubmitted: TaskNode["last_submitted"] | undefined;
+}
+
 /**
- * 提交：读参考图、组装任务目录内容（快照在此固化于内存，与上游节点脱钩），返回写好 last_submitted 的画板。调用前应已通过二次确认（任务无标红）。
+ * 提交：读参考图、组装任务目录内容（快照在此固化于内存，与上游节点脱钩），返回派发时要写的 last_submitted。调用前应已通过二次确认（任务无标红）。
  * 不写盘：任务目录与画板上的 last_submitted 都在派发时落地，排队中取消不留痕迹。
  */
 export async function prepareJob(
   deps: RunDeps,
   args: { board: Board; table: CapabilityTable; tableSha256: string; outputRoot: string; taskNodeId: string },
-): Promise<{ job: PreparedJob; board: Board }> {
+): Promise<Prepared> {
   const { board, table, outputRoot, taskNodeId } = args;
   const task = board.nodes.find((n) => n.id === taskNodeId);
   const snapshot = snapshotOf(board, taskNodeId);
@@ -159,7 +167,7 @@ export async function prepareJob(
     capabilityTableSha256: args.tableSha256,
     references,
   };
-  return { job: jobOf(taskNodeId, plan, model), board: withSubmitted(board, taskNodeId, taskId) };
+  return { job: jobOf(taskNodeId, plan, model), lastSubmitted: { task_id: taskId, ...snapshot } };
 }
 
 function jobOf(taskNodeId: string, plan: SubmissionPlan, model: ModelCapability): PreparedJob {
@@ -189,7 +197,7 @@ function jobOf(taskNodeId: string, plan: SubmissionPlan, model: ModelCapability)
 export async function prepareRegenerate(
   deps: RunDeps,
   args: { board: Board; table: CapabilityTable; tableSha256: string; outputRoot: string; taskNodeId: string; fromTaskId?: string },
-): Promise<{ job: PreparedJob; board: Board }> {
+): Promise<Prepared> {
   const { board, outputRoot, taskNodeId } = args;
   const task = board.nodes.find((n) => n.id === taskNodeId);
   const last = task?.type === "task" ? task.last_submitted : null;
@@ -255,12 +263,8 @@ export async function prepareRegenerate(
     capabilityTableSha256: args.tableSha256,
     references,
   };
-  if (args.fromTaskId !== undefined) return { job: jobOf(taskNodeId, plan, model), board };
-  const nextBoard: Board = {
-    ...board,
-    nodes: board.nodes.map((n) => (n.id === taskNodeId && n.type === "task" ? { ...n, last_submitted: { ...last, task_id: taskId, size_spec: sized.sizeSpec } } : n)),
-  };
-  return { job: jobOf(taskNodeId, plan, model), board: nextBoard };
+  const lastSubmitted = args.fromTaskId !== undefined ? undefined : { ...last, task_id: taskId, size_spec: sized.sizeSpec };
+  return { job: jobOf(taskNodeId, plan, model), lastSubmitted };
 }
 
 /** 派发时写任务目录（不可变）；返回带参考图的任务。429 重试不重写。 */

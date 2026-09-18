@@ -35,8 +35,8 @@ interface Saver {
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const samePath = (a: string, b: string) => a.replace(/\\/g, "/").toLowerCase() === b.replace(/\\/g, "/").toLowerCase();
 
-/** 编辑环境里随应用状态变化的部分：能力表、网关发现、锁定集（排队 / 执行中的任务节点）。 */
-export type EnvSource = () => Pick<EditEnv, "table" | "discovery" | "locked">;
+/** 编辑环境里随应用状态变化的部分：能力表、网关发现、该画板的锁定集（排队 / 执行中的任务节点）。 */
+export type EnvSource = (key: string) => Pick<EditEnv, "table" | "discovery" | "locked">;
 
 export function useBoardSessions(outputRoot: string | null, envSource: EnvSource) {
   const [sessions, setSessionsState] = useState<Session[]>([]);
@@ -100,10 +100,10 @@ export function useBoardSessions(outputRoot: string | null, envSource: EnvSource
   envSourceRef.current = envSource;
   const outputRootRef = useRef(outputRoot);
   outputRootRef.current = outputRoot;
-  /** 组装编辑环境：图片宽高只取已读到的；锁定集暂为全局（任务状态不分画板，见 ADR 0014）。 */
+  /** 按画板组装编辑环境：图片宽高只取已读到的；锁定集取该画板的（ADR 0015）。 */
   const envOf = useCallback(
-    (): EditEnv => ({
-      ...envSourceRef.current(),
+    (key: string): EditEnv => ({
+      ...envSourceRef.current(key),
       imageSize: (path) => {
         const root = outputRootRef.current;
         const info = root ? knownImageInfo(resolveFromRoot(root, path)) : undefined;
@@ -118,7 +118,7 @@ export function useBoardSessions(outputRoot: string | null, envSource: EnvSource
   const check = useCallback(
     (key: string, change: BoardChange): EditResult | null => {
       const s = sessionsRef.current.find((x) => x.key === key);
-      return s?.status === "ok" ? editBoard(s.board, change, envOf()) : null;
+      return s?.status === "ok" ? editBoard(s.board, change, envOf(key)) : null;
     },
     [envOf],
   );
@@ -128,7 +128,7 @@ export function useBoardSessions(outputRoot: string | null, envSource: EnvSource
     (key: string, change: BoardChange): EditResult | null => {
       const s = sessionsRef.current.find((x) => x.key === key);
       if (!s || s.status !== "ok") return null;
-      const r = editBoard(s.board, change, envOf());
+      const r = editBoard(s.board, change, envOf(key));
       if (r.board === s.board) return r;
       patch(key, (x) => ({ ...x, board: r.board, history: r.step ? recordChange(x.history, s.board, r.step, Date.now()) : x.history }));
       scheduleSave(key);
@@ -142,7 +142,7 @@ export function useBoardSessions(outputRoot: string | null, envSource: EnvSource
     (key: string, direction: typeof undo) => {
       const s = sessionsRef.current.find((x) => x.key === key);
       if (!s || s.status !== "ok") return;
-      const r = direction(s.history, s.board, envSourceRef.current().locked);
+      const r = direction(s.history, s.board, envSourceRef.current(key).locked);
       if (!r) return;
       patch(key, (x) => ({ ...x, board: r.board, history: r.history }));
       scheduleSave(key);

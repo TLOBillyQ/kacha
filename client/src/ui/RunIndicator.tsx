@@ -1,9 +1,9 @@
 // 顶栏运行指示「执行 n · 排队 m」：点开小列表，可跳到对应画板与节点，或取消全部排队。不是任务中心。
 import { useState } from "react";
-import type { ActiveTask } from "./useRunner";
+import type { ActiveTask } from "../core/runner";
 
 interface Props {
-  active: ActiveTask[];
+  active: readonly ActiveTask[];
   titleOf: (boardKey: string) => string;
   onJump: (task: ActiveTask) => void;
   onCancelWaiting: () => void;

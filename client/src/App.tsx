@@ -2,12 +2,13 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { ReactFlowProvider } from "@xyflow/react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { BOARD_EXTENSION, type Board } from "./core/board";
 import { BUILTIN_TABLE, effectiveTable, type CapabilityTable } from "./core/capabilities";
 import type { BoardChange } from "./core/edit";
 import { redoLabel, undoLabel } from "./core/history";
 import { basename } from "./core/paths";
+import type { Runner, RunTarget } from "./core/runner";
 import { runDispatch, runScope, buildConfirmItems, imageSources, type ConfirmItem } from "./core/submission";
 import { parseUiState, serializeUiState, type UiState } from "./core/uiState";
 import { ipc } from "./shell/ipc";
@@ -19,7 +20,7 @@ import { RunConfirmDialog } from "./ui/RunConfirmDialog";
 import { RunIndicator } from "./ui/RunIndicator";
 import { SendTextDialog } from "./ui/SendTextDialog";
 import { SettingsPanel } from "./ui/SettingsPanel";
-import { isActive, useRunner, type RunTarget } from "./ui/useRunner";
+import { useRunner } from "./ui/useRunner";
 import { useSettings } from "./ui/useSettings";
 import { TabBar } from "./ui/TabBar";
 import { useUpdateCheck } from "./ui/useUpdateCheck";
@@ -46,21 +47,19 @@ export function App() {
   const started = useRef(false);
   const initialUi = useRef<UiState | null>(null);
   const windowSize = useRef<UiState["window"]>(null);
-  // 编辑环境随渲染更新（能力表、网关发现、锁定集），sessions 在每次画板变更时取最新一份。
-  const envRef = useRef({ table, discovery: settings.discovery, locked: new Set<string>() as ReadonlySet<string> });
+  // 编辑环境随渲染更新（能力表、网关发现），锁定集按画板现取运行器的最新快照；sessions 在每次画板变更时取。
+  const envRef = useRef({ table, discovery: settings.discovery });
+  envRef.current = { table, discovery: settings.discovery };
+  const runnerRef = useRef<Runner | null>(null);
   const boards = useBoardSessions(
     outputRoot,
-    useCallback(() => envRef.current, []),
+    useCallback((key: string) => ({ ...envRef.current, locked: runnerRef.current!.getSnapshot().board(key).locked }), []),
   );
   const { sessions, activeKey, openPath, createBoard, flushAll } = boards;
 
   const { apply, check, undoBoard, redoBoard } = boards;
-  const runner = useRunner(boards, settings.settings.concurrency);
-  const runnerRef = useRef(runner);
+  const { runner, snapshot: runState } = useRunner(apply, settings.settings.concurrency);
   runnerRef.current = runner;
-  // 排队 / 执行中的任务节点：参数与连线锁定，上游提示词仍可编辑（经三选）。
-  const locked = useMemo<ReadonlySet<string>>(() => new Set([...runner.statuses].filter(([, st]) => isActive(st)).map(([id]) => id)), [runner.statuses]);
-  envRef.current = { table, discovery: settings.discovery, locked };
   const [focus, setFocus] = useState<{ boardKey: string; nodeId: string; nonce: number } | null>(null);
   const applyActive = useCallback((change: BoardChange) => (activeKey ? apply(activeKey, change) : null), [activeKey, apply]);
   const checkActive = useCallback((change: BoardChange) => (activeKey ? check(activeKey, change) : null), [activeKey, check]);
@@ -117,11 +116,12 @@ export function App() {
   // 切换输出根目录：不搬文件，关掉全部标签页；新目录的画板列表为空。
   const switchOutputRoot = useCallback(
     async (root: string) => {
+      boards.sessions.forEach((s) => runner.closeBoard(s.key));
       await boards.closeAll();
       setOutputRoot(root);
       toast("已切换输出根目录：旧目录的画板与任务目录原样保留，新目录的画板列表为空");
     },
-    [boards, toast],
+    [boards, runner, toast],
   );
 
   /** 与运行时相同的上下文算确认项：逐张检测参考图（缺失 / 透明通道）。运行与查看发送文本共用。 */
@@ -149,18 +149,11 @@ export function App() {
     async (boardKey: string, board: Board, taskIds: string[]) => {
       setConfirm(null);
       if (!outputRoot) return;
-      const problems = await runner.run({
-        boardKey,
-        board,
-        taskIds,
-        table,
-        outputRoot,
-        baseUrl: settings.settings.base_url,
-        apiKey: settings.apiKey,
-      });
+      const target: RunTarget = { boardKey, boardFile: boards.boardFileName(boardKey), table, outputRoot, baseUrl: settings.settings.base_url, apiKey: settings.apiKey };
+      const problems = await runner.submit(target, board, taskIds);
       if (problems.length) toast(`${problems.length} 个任务提交失败：${problems[0]}`);
     },
-    [outputRoot, runner, table, settings.settings.base_url, settings.apiKey, toast],
+    [outputRoot, runner, boards, table, settings.settings.base_url, settings.apiKey, toast],
   );
 
   // 单个干净任务直接提交，单个标红 / 没有任务只提示；其余弹二次确认（分派规则见 runDispatch）。
@@ -170,7 +163,7 @@ export function App() {
       await boards.flushAll();
       const board = boards.getBoard(activeKey);
       if (!board) return;
-      const busy = new Set([...runner.statuses].filter(([, st]) => isActive(st)).map(([id]) => id));
+      const busy = runner.getSnapshot().board(activeKey).locked;
       const items = await confirmItemsOf(board, runScope(board, selectedIds, busy), outputRoot);
       const dispatch = runDispatch(items);
       // 没有可提交的任务时先说明原因；真要提交或弹确认窗才需要密钥。
@@ -183,7 +176,7 @@ export function App() {
       if (dispatch.kind === "submit") void startRun(activeKey, board, [dispatch.taskId]);
       else setConfirm({ boardKey: activeKey, board, items, scope: selectedIds.length ? "selection" : "board" });
     },
-    [activeKey, outputRoot, settings.apiKey, boards, runner.statuses, confirmItemsOf, startRun, toast],
+    [activeKey, outputRoot, settings.apiKey, boards, runner, confirmItemsOf, startRun, toast],
   );
 
   const viewSendText = useCallback(
@@ -214,14 +207,16 @@ export function App() {
         setSettingsOpen(true);
         return;
       }
-      const target: RunTarget = { boardKey: activeKey, table, outputRoot, baseUrl: settings.settings.base_url, apiKey: settings.apiKey };
-      const problem = await runnerRef.current.regenerate(target, taskNodeId, fromTaskId);
+      const board = boards.getBoard(activeKey);
+      if (!board) return;
+      const target: RunTarget = { boardKey: activeKey, boardFile: boards.boardFileName(activeKey), table, outputRoot, baseUrl: settings.settings.base_url, apiKey: settings.apiKey };
+      const problem = await runner.regenerate(target, board, taskNodeId, fromTaskId);
       if (problem) toast(`${fromTaskId ? "生成变体" : "重新生成"}失败：${problem}`);
     },
-    [activeKey, outputRoot, settings.apiKey, settings.settings.base_url, table, toast],
+    [activeKey, outputRoot, boards, runner, settings.apiKey, settings.settings.base_url, table, toast],
   );
 
-  const cancelTask = useCallback((taskNodeId: string) => activeKey && runnerRef.current.cancelTask(activeKey, taskNodeId), [activeKey]);
+  const cancelTask = useCallback((taskNodeId: string) => activeKey && runner.cancel({ kind: "task", boardKey: activeKey, taskNodeId }), [activeKey, runner]);
 
   /** 画板还有排队 / 执行中的任务时，关闭前阻断式二选一；不后台续跑。 */
   const confirmStopTasks = (count: number) =>
@@ -234,14 +229,13 @@ export function App() {
 
   const closeBoard = useCallback(
     async (key: string) => {
-      const count = runnerRef.current.pendingCount(key);
-      if (count > 0) {
-        if (!(await confirmStopTasks(count))) return;
-        runnerRef.current.cancelBoard(key);
-      }
+      const count = runner.getSnapshot().pending(key);
+      if (count > 0 && !(await confirmStopTasks(count))) return;
+      // 取消并遗忘：重开后失败 / 已取消由任务目录的 outcome.json 给出。
+      runner.closeBoard(key);
       await boards.closeBoard(key);
     },
-    [boards],
+    [boards, runner],
   );
 
   // 第二阶段：恢复标签页，再打开启动参数里的画板；一个都没有就新建。
@@ -301,14 +295,14 @@ export function App() {
     // 有未完成任务时先阻断式确认，全局只弹一次。
     let asking = false;
     const closing = win.onCloseRequested(async (event) => {
-      const count = runnerRef.current.pendingCount();
+      const count = runner.getSnapshot().pending();
       if (count > 0) {
         event.preventDefault();
         if (asking) return;
         asking = true;
         const confirmed = await confirmStopTasks(count).finally(() => (asking = false));
         if (!confirmed) return;
-        runnerRef.current.cancelAll();
+        runner.cancel({ kind: "all" });
       }
       try {
         await flushAll();
@@ -323,7 +317,7 @@ export function App() {
       void resized.then((fn) => fn());
       void closing.then((fn) => fn());
     };
-  }, [flushAll]);
+  }, [flushAll, runner]);
 
   if (fatal) return <div className="fatal">启动失败：{fatal}</div>;
 
@@ -354,7 +348,7 @@ export function App() {
         </div>
         <div className="board-toolbar-right">
           <RunIndicator
-            active={runner.active}
+            active={runState.active}
             titleOf={(key) => {
               const s = sessions.find((x) => x.key === key);
               return s?.status === "ok" ? s.board.title : "（已关闭的画板）";
@@ -363,7 +357,7 @@ export function App() {
               boards.setActiveKey(t.boardKey);
               setFocus((f) => ({ boardKey: t.boardKey, nodeId: t.taskNodeId, nonce: (f?.nonce ?? 0) + 1 }));
             }}
-            onCancelWaiting={runner.cancelWaiting}
+            onCancelWaiting={() => runner.cancel({ kind: "waiting" })}
           />
           <button
             className="topbar-button"
@@ -469,7 +463,7 @@ export function App() {
               outputRoot={outputRoot}
               apply={applyActive}
               check={checkActive}
-              locked={locked}
+              locked={runState.board(active.key).locked}
               onUndo={undoActive}
               onRedo={redoActive}
               undoLabel={undoLabel(active.history)}
@@ -477,8 +471,8 @@ export function App() {
               openBoardPath={openFromCanvas}
               toast={toast}
               discovery={settings.discovery}
-              statuses={runner.statuses}
-              handled={runner.handled}
+              statuses={runState.board(active.key).statuses}
+              handled={runState.board(active.key).handled}
               onRun={(ids) => void openRunConfirm(ids)}
               onCancelTask={cancelTask}
               onRegenerate={regenerate}
@@ -495,7 +489,7 @@ export function App() {
           outputRoot={outputRoot}
           defaultOutputRoot={defaultRoot}
           openBoards={sessions.map((s) => s.path)}
-          busy={runner.busy}
+          busy={runState.pending() > 0}
           onOutputRootChange={switchOutputRoot}
           update={update}
           onClose={() => setSettingsOpen(false)}
