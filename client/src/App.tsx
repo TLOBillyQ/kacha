@@ -11,6 +11,8 @@ import { runDispatch, runScope, buildConfirmItems, imageSources, type ConfirmIte
 import { parseUiState, serializeUiState, type UiState } from "./core/uiState";
 import { ipc } from "./shell/ipc";
 import { BoardPackDialog } from "./ui/BoardPackDialog";
+import { BoardToolbar } from "./ui/BoardToolbar";
+import { ContextMenu } from "./ui/ContextMenu";
 import { BoardCanvas } from "./ui/BoardCanvas";
 import { RunConfirmDialog } from "./ui/RunConfirmDialog";
 import { RunIndicator } from "./ui/RunIndicator";
@@ -28,6 +30,8 @@ export function App() {
   const [outputRoot, setOutputRoot] = useState<string | null>(null);
   const [defaultRoot, setDefaultRoot] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [toolbarSlot, setToolbarSlot] = useState<HTMLElement | null>(null);
+  const [packMenu, setPackMenu] = useState<{ x: number; y: number } | null>(null);
   const [confirm, setConfirm] = useState<{ boardKey: string; board: Board; items: ConfirmItem[]; scope: "selection" | "board" } | null>(null);
   const [sendText, setSendText] = useState<ConfirmItem | null>(null);
   const settings = useSettings();
@@ -314,8 +318,73 @@ export function App() {
   const active = sessions.find((s) => s.key === activeKey);
   const failing = sessions.filter((s) => s.status === "ok" && s.saveError);
 
+  const canvasReady = active?.status === "ok" && !!outputRoot;
   return (
     <div className="app">
+      <div className="topbar">
+        <TabBar
+          sessions={sessions}
+          activeKey={activeKey}
+          onActivate={(key) => {
+            setFocus(null);
+            boards.setActiveKey(key);
+          }}
+          onClose={(key) => void closeBoard(key)}
+          onRename={(key, title) => void boards.renameBoard(key, title)}
+          onCreate={() => void createBoard()}
+          onExportPack={(key) => void pack.prepareExport(key)}
+        />
+      </div>
+      <div className="board-toolbar">
+        {/* 有画板时画布把工具栏 portal 进这个容器；没有时放置灰占位，布局不跳。 */}
+        <div ref={setToolbarSlot} className="board-toolbar-slot">
+          {!canvasReady && <BoardToolbar disabled />}
+        </div>
+        <div className="board-toolbar-right">
+          <RunIndicator
+            active={runner.active}
+            titleOf={(key) => {
+              const s = sessions.find((x) => x.key === key);
+              return s?.status === "ok" ? s.board.title : "（已关闭的画板）";
+            }}
+            onJump={(t) => {
+              boards.setActiveKey(t.boardKey);
+              setFocus((f) => ({ boardKey: t.boardKey, nodeId: t.taskNodeId, nonce: (f?.nonce ?? 0) + 1 }));
+            }}
+            onCancelWaiting={runner.cancelWaiting}
+          />
+          <button
+            className="topbar-button"
+            aria-haspopup="menu"
+            aria-expanded={packMenu !== null}
+            disabled={!outputRoot}
+            onClick={(e) => {
+              const r = e.currentTarget.getBoundingClientRect();
+              setPackMenu((m) => (m ? null : { x: r.left, y: r.bottom + 2 }));
+            }}
+          >
+            画板包 ▾
+          </button>
+          <button className="topbar-button" onClick={() => setSettingsOpen(true)} disabled={!settings.loaded || !outputRoot}>
+            ⚙ 高级设置
+          </button>
+        </div>
+      </div>
+      {packMenu && (
+        <ContextMenu
+          at={packMenu}
+          items={[
+            { action: "importPack", label: "导入画板包…", disabledReason: null },
+            { action: "exportPack", label: "导出画板包…", disabledReason: active?.status === "ok" ? null : active ? "画板无法打开，不能导出" : "没有打开的画板" },
+          ]}
+          onPick={(action) => {
+            setPackMenu(null);
+            if (action === "importPack") void pack.importPack();
+            else if (action === "exportPack" && active) void pack.prepareExport(active.key);
+          }}
+          onClose={() => setPackMenu(null)}
+        />
+      )}
       {failing.map(
         (s) =>
           s.status === "ok" && (
@@ -333,36 +402,6 @@ export function App() {
           <button onClick={() => setTableError(null)}>知道了</button>
         </div>
       )}
-      <div className="topbar">
-        <TabBar
-          sessions={sessions}
-          activeKey={activeKey}
-          onActivate={(key) => {
-            setFocus(null);
-            boards.setActiveKey(key);
-          }}
-          onClose={(key) => void closeBoard(key)}
-          onRename={(key, title) => void boards.renameBoard(key, title)}
-          onCreate={() => void createBoard()}
-          onExportPack={(key) => void pack.prepareExport(key)}
-          onImportPack={() => void pack.importPack()}
-        />
-        <RunIndicator
-          active={runner.active}
-          titleOf={(key) => {
-            const s = sessions.find((x) => x.key === key);
-            return s?.status === "ok" ? s.board.title : "（已关闭的画板）";
-          }}
-          onJump={(t) => {
-            boards.setActiveKey(t.boardKey);
-            setFocus((f) => ({ boardKey: t.boardKey, nodeId: t.taskNodeId, nonce: (f?.nonce ?? 0) + 1 }));
-          }}
-          onCancelWaiting={runner.cancelWaiting}
-        />
-        <button className="settings-button" onClick={() => setSettingsOpen(true)} disabled={!settings.loaded || !outputRoot}>
-          ⚙ 高级设置
-        </button>
-      </div>
       {settings.fileProblem && !settingsOpen && (
         <div className="bar bar-warn">
           <span>{settings.fileProblem}</span>
@@ -377,7 +416,23 @@ export function App() {
       )}
       <main className="workspace">
         {!active || !outputRoot ? (
-          <div className="empty">{ready ? "没有打开的画板" : "正在加载…"}</div>
+          <div className="empty">
+            {ready ? (
+              <>
+                <div>没有打开的画板</div>
+                <div className="empty-actions">
+                  <button className="primary" onClick={() => void createBoard()} disabled={!outputRoot}>
+                    新建画板
+                  </button>
+                  <button onClick={() => void pack.importPack()} disabled={!outputRoot}>
+                    导入画板包…
+                  </button>
+                </div>
+              </>
+            ) : (
+              "正在加载…"
+            )}
+          </div>
         ) : active.status === "newer" ? (
           <div className="empty">
             该画板由更新版本的工具保存（format_version {active.version}），本版本无法打开；文件未做任何改动。
@@ -409,7 +464,7 @@ export function App() {
               onCancelTask={cancelTask}
               onRegenerate={regenerate}
               onViewSendText={(id) => void viewSendText(id)}
-              onExportPack={() => void pack.prepareExport(active.key)}
+              toolbarSlot={toolbarSlot}
               focus={focus?.boardKey === active.key ? focus : null}
             />
           </ReactFlowProvider>

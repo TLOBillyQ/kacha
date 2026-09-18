@@ -23,7 +23,7 @@ import {
 } from "../core/capabilities";
 import type { MenuItem } from "../core/contextMenu";
 import type { PortKind } from "../core/ports";
-import { actionHoverInfo, CANCELLED_HINT, referenceHoverInfo, resultHoverInfo, taskHoverInfo, textHoverInfo } from "../core/hoverInfo";
+import { actionHoverInfo, CANCELLED_HINT, portThumbHoverInfo, referenceHoverInfo, resultHoverInfo, taskHoverInfo, textHoverInfo } from "../core/hoverInfo";
 import type { TaskStatus } from "../core/run";
 import { inputImageAdviceAll } from "../core/fitImage";
 import { IMAGE_PORT_PREFIX, type TaskPorts } from "../core/graph";
@@ -199,7 +199,7 @@ export const PromptNodeView = memo(function PromptNodeView({ data }: NodeProps<P
   };
   const holdFocus = (e: React.MouseEvent) => e.preventDefault();
   return (
-    <Shell kind="prompt" title="提示词">
+    <Shell kind="prompt" title={portKind === "negative" ? "负向提示词" : "提示词"}>
       <textarea
         ref={textarea}
         className="nodrag nowheel prompt-text"
@@ -397,7 +397,7 @@ function PortRow({
 }
 
 export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskFlowNode>) {
-  const { table, updateNode, moveImagePort, availableModels, setTaskModel, editRegion, perform } = useBoardActions();
+  const { table, updateNode, moveImagePort, availableModels, setTaskModel, editRegion, previewNode, perform } = useBoardActions();
   const { node, ports, issues, warnings, unreferenced, locked, workflow, images, slots, regionRender, hasPositive, status, expanded, run } = data;
   const [infoOpen, setInfoOpen] = useState(false);
   const [dragFrom, setDragFrom] = useState<number | null>(null);
@@ -470,8 +470,8 @@ export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskF
         <HoverButton
           className="icon nodrag expand-toggle"
           aria-expanded={expanded}
-          aria-label={expanded ? "收起设置" : "展开设置"}
-          info={textHoverInfo(expanded ? "收起设置" : "展开设置")}
+          aria-label={expanded ? "收起" : "展开"}
+          info={textHoverInfo(expanded ? "收起参数" : "展开参数")}
           onClick={() => perform("toggleSettings", target)}
         >
           {expanded ? "▾" : "▸"}
@@ -485,6 +485,7 @@ export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskF
       {expanded ? (
         <>
           <div className="field nodrag">
+            <span className="field-label">模型</span>
             <select value={node.model} onChange={(e) => setTaskModel(node.id, e.target.value)} disabled={locked} aria-label="模型">
               {!listed && <option value={node.model}>{modelLabel}</option>}
               <ModelOptions table={table} available={availableModels} />
@@ -496,6 +497,7 @@ export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskF
           {infoOpen && <ModelInfo modelId={node.model} onClose={() => setInfoOpen(false)} />}
 
           <div className="field nodrag">
+            <span className="field-label">尺寸</span>
             <select value={tier ?? ""} onChange={(e) => setTier(e.target.value)} aria-label="尺寸档" disabled={locked}>
               {tier !== null && !tiers.includes(tier) && <option value={tier}>{tier}（不支持）</option>}
               {tier === null && <option value="">自定义</option>}
@@ -563,15 +565,16 @@ export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskF
                 kind="image"
                 connectable={false}
                 className="nodrag port-overlay"
-                label={`图${slot.userPort} · 叠加`}
+                label={`↳ 图${slot.userPort} 的叠加图`}
               >
-                <HoverSpan className="muted small" info={textHoverInfo(`区域叠加图由系统按图${slot.userPort} 自动生成，发送时紧随原图，不占「图N」序号；不可重排、不可断开`)}>
-                  锁定
+                <HoverSpan className="muted small" info={textHoverInfo(`叠加图由系统按图${slot.userPort} 的区域指示自动生成，发送时紧随原图；不占「图N」序号，但占 1 个参考图名额；不可重排、不可断开`)}>
+                  自动生成 · 占 1 个名额
                 </HoverSpan>
               </PortRow>
             );
           }
           const i = slot.handleIndex!;
+          const canRegion = !!slot.edgeRef && regionRender !== null && !locked;
           return (
             <PortRow
               key={`image-${i}`}
@@ -579,7 +582,8 @@ export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskF
               kind="image"
               connectable={!locked}
               className={`nodrag port-filled ${unreferenced.includes(slot.userPort) ? "port-unreferenced" : ""} ${dragFrom === i ? "port-dragging" : ""} ${dropTo === i ? "port-drop" : ""}`}
-              label={`图${slot.userPort} · ${slot.label}`}
+              label={`图${slot.userPort}`}
+              title={slot.label}
               data-port-index={i}
               onPointerDown={(e) => {
                 if (locked || e.button !== 0 || (e.target as HTMLElement).closest(".react-flow__handle, button")) return;
@@ -588,7 +592,13 @@ export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskF
               }}
             >
               {slot.absPath && (
-                <span className="port-thumb">
+                <HoverButton
+                  className="port-thumb nodrag"
+                  aria-label={canRegion ? "框选修改区域" : "放大预览"}
+                  info={portThumbHoverInfo(slot.label, canRegion ? "在放大预览里框出希望模型修改的位置" : "放大预览")}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={() => (canRegion ? editRegion(node.id, slot.edgeRef!) : slot.edgeRef && previewNode(slot.edgeRef.from[0]))}
+                >
                   <img src={fileUrl(slot.absPath)} alt={slot.label} draggable={false} />
                   {slot.rects.map((r, k) => (
                     <span
@@ -598,16 +608,18 @@ export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskF
                       title={`区域${slot.firstRegion + k + 1}`}
                     />
                   ))}
-                </span>
+                </HoverButton>
               )}
-              {slot.edgeRef && regionRender !== null && !locked && (
+              {slot.edgeRef && regionRender !== null && (
                 <HoverButton
-                  className="link small"
-                  info={textHoverInfo("在放大预览里框出希望模型修改的位置")}
+                  className="icon port-region"
+                  aria-label="框选修改区域"
+                  disabled={locked}
+                  info={textHoverInfo(locked ? "任务排队 / 执行中，不能改区域" : slot.rects.length > 0 ? `已框选 ${slot.rects.length} 个修改区域，点击修改` : "在放大预览里框出希望模型修改的位置")}
                   onPointerDown={(e) => e.stopPropagation()}
                   onClick={() => editRegion(node.id, slot.edgeRef!)}
                 >
-                  框选修改区域{slot.rects.length > 0 ? `（${slot.rects.length}）` : ""}
+                  ▭{slot.rects.length > 0 && <span className="port-region-count">{slot.rects.length}</span>}
                 </HoverButton>
               )}
               {!locked && (

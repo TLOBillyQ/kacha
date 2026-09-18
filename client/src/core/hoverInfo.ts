@@ -146,3 +146,6 @@ export function actionHoverInfo(item: MenuItem): HoverInfo {
 
 /** 单句说明（替换画布上原生 title 的说明文字）。 */
 export const textHoverInfo = (text: string): HoverInfo => [line(null, text)];
+
+/** 任务端口行缩略图：文件名 + 点击行为。 */
+export const portThumbHoverInfo = (fileName: string, click: string): HoverInfo => [line("文件", fileName), line(null, `点击：${click}`)];

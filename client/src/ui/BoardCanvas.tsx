@@ -43,8 +43,10 @@ import {
   type Connection,
 } from "../core/graph";
 import { menuItems, selectionForMenu, actionBarItems, type BoardAction, type MenuFacts, type MenuItem, type MenuTarget } from "../core/contextMenu";
+import { createPortal } from "react-dom";
 import { attachReferences, cardDropConnection, dragCreateItems, newTask } from "../core/dragCreate";
-import { edgeHoverInfo, textHoverInfo, type HoverInfo } from "../core/hoverInfo";
+import { BoardToolbar } from "./BoardToolbar";
+import { edgeHoverInfo, type HoverInfo } from "../core/hoverInfo";
 import { connectablePorts, dragKind, edgeClassName, nodeClassName, promptPortKind, type DragFrom, type DragState } from "../core/ports";
 import { countLabel, nodeEditChange, type Change, type UserChange } from "../core/history";
 import { addAsReference, addAsReferenceTarget, continueEditing, copySelection, lineage, LOCKED_HINT, pasteClip, PASTE_OFFSET, producerOf, type Clip, type Outcome } from "../core/iterate";
@@ -61,7 +63,7 @@ import { ActionBar } from "./ActionBar";
 import { ContextMenu } from "./ContextMenu";
 import { BoardContext, primeImageInfo, useImageInfos, useMissingImages, useStoredStatuses, type BoardActions } from "./context";
 import { edgeTypes } from "./edges";
-import { HoverButton, HoverProvider, useHoverLayer } from "./hoverInfo";
+import { HoverProvider, useHoverLayer } from "./hoverInfo";
 import { ModelOptions, nodeTypes, type ImagePortInfo, type ImageSlotInfo } from "./nodes";
 import { DragContext } from "./ports";
 import { PreviewDialog, type PreviewRequest, type RegionTarget } from "./PreviewDialog";
@@ -104,8 +106,8 @@ interface Props {
   onRegenerate: (taskId: string, fromTaskId?: string) => void;
   /** 任务节点「查看发送文本」。 */
   onViewSendText: (taskId: string) => void;
-  /** 导出本画板为画板包。 */
-  onExportPack: () => void;
+  /** 顶部第二行左侧的工具栏容器：画布把 BoardToolbar 经 portal 渲染进去。 */
+  toolbarSlot: HTMLElement | null;
   /** 运行指示跳转：居中并选中该节点；nonce 变化即再跳一次。 */
   focus: { nodeId: string; nonce: number } | null;
 }
@@ -136,7 +138,7 @@ export function BoardCanvas({
   onCancelTask,
   onRegenerate,
   onViewSendText,
-  onExportPack,
+  toolbarSlot,
   focus,
 }: Props) {
   const flow = useReactFlow();
@@ -848,7 +850,6 @@ export function BoardCanvas({
     else if (action === "addReferences") void pickReferences(at);
     else if (action === "undo") undo();
     else if (action === "redo") redo();
-    else if (action === "exportPack") onExportPack();
     else if (target.kind === "node") {
       const id = target.nodeId;
       if (action === "preview") actions.previewNode(id);
@@ -940,29 +941,35 @@ export function BoardCanvas({
         onPointerDownCapture={nav.onPointerDownCapture}
         onPointerUpCapture={nav.onPointerUpCapture}
       >
-        <div className="toolbar">
-          {/* 新建生成任务用的模型（board.last_model）：是偏好不是画板编辑，不进撤销。 */}
-          <select
-            className="toolbar-model"
-            value={defaultTaskModel(table, discovery, board.last_model) ?? ""}
-            onChange={(e) => {
-              const modelId = e.target.value;
-              update((b) => ({ ...b, last_model: modelId }), "view");
-            }}
-            aria-label="新建任务模型"
-          >
-            <ModelOptions table={table} available={actions.availableModels} />
-          </select>
-          <HoverButton onClick={undo} disabled={!undoLabel} info={textHoverInfo(undoLabel ? `撤销 ${undoLabel}（Ctrl+Z）` : "没有可撤销的操作")} aria-label="撤销">
-            ↶
-          </HoverButton>
-          <HoverButton onClick={redo} disabled={!redoLabel} info={textHoverInfo(redoLabel ? `重做 ${redoLabel}（Ctrl+Shift+Z）` : "没有可重做的操作")} aria-label="重做">
-            ↷
-          </HoverButton>
-          <HoverButton className="primary" onClick={() => onRun([...selectedNodes])} info={textHoverInfo("有选中时只运行选中子图，否则运行整个画板中需要运行的任务")}>
-            ▶ 运行{selectedNodes.size > 0 ? "选中" : ""}
-          </HoverButton>
-        </div>
+        {toolbarSlot &&
+          createPortal(
+            <BoardToolbar
+              modelSelect={
+                // 新建生成任务用的模型（board.last_model）：是偏好不是画板编辑，不进撤销。
+                <select
+                  className="toolbar-model"
+                  value={defaultTaskModel(table, discovery, board.last_model) ?? ""}
+                  onChange={(e) => {
+                    const modelId = e.target.value;
+                    update((b) => ({ ...b, last_model: modelId }), "view");
+                  }}
+                  aria-label="新建任务模型"
+                >
+                  <ModelOptions table={table} available={actions.availableModels} />
+                </select>
+              }
+              onNewPrompt={() => addPrompt()}
+              onAddReferences={() => void pickReferences()}
+              onNewTask={() => addTask()}
+              onUndo={undo}
+              onRedo={redo}
+              undoLabel={undoLabel}
+              redoLabel={redoLabel}
+              selectedCount={selectedNodes.size}
+              onRun={() => onRun([...selectedNodes])}
+            />,
+            toolbarSlot,
+          )}
         <ReactFlow
           nodes={nodes}
           edges={edges}

@@ -28,7 +28,8 @@ export type BoardAction =
   | "viewSendText"
   | "disconnect"
   | "editRegion"
-  | "exportPack";
+  | "exportPack"
+  | "importPack";
 
 export interface MenuItem {
   action: BoardAction;
@@ -67,7 +68,6 @@ export function menuItems(target: MenuTarget, facts: MenuFacts): MenuItem[] {
           facts.undoLabel ? item("undo", `撤销 ${facts.undoLabel}`) : item("undo", "撤销", "没有可撤销的操作"),
           facts.redoLabel ? item("redo", `重做 ${facts.redoLabel}`) : item("redo", "重做", "没有可重做的操作"),
         ],
-        [item("exportPack", "导出画板包…")],
       );
     case "node": {
       const { board, selected, locked } = facts;
@@ -103,7 +103,7 @@ export function menuItems(target: MenuTarget, facts: MenuFacts): MenuItem[] {
               item("regenerate", "重新生成", busy ? TASK_BUSY : regenerateBlocker(node)),
               item("cancel", "取消", busy ? null : "任务不在排队 / 执行中"),
             ],
-            [item("toggleSettings", facts.expanded.has(node.id) ? "收起设置" : "展开设置"), item("viewSendText", "查看发送文本", busy ? TASK_BUSY : null)],
+            [item("toggleSettings", facts.expanded.has(node.id) ? "收起" : "展开"), item("viewSendText", "查看发送文本", busy ? TASK_BUSY : null)],
             [item("delete", "删除")],
           );
         }

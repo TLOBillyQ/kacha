@@ -18,7 +18,7 @@ function facts(patch: Partial<MenuFacts> = {}): MenuFacts {
 const summary = (items: ReturnType<typeof menuItems>) => items.flatMap((i) => [...(i.separatorBefore ? ["---"] : []), [i.action, i.label, i.disabledReason]]);
 
 describe("空白处菜单", () => {
-  it("给出新建三项、撤销 / 重做与导出画板包，撤销文案带上一步描述", () => {
+  it("给出新建三项与撤销 / 重做，撤销文案带上一步描述；导出画板包不在这里（属于标签页）", () => {
     const items = menuItems({ kind: "pane" }, facts({ undoLabel: "移动 2 个节点", redoLabel: "新建提示词" }));
     expect(summary(items)).toEqual([
       ["newPrompt", "新建提示词", null],
@@ -27,8 +27,6 @@ describe("空白处菜单", () => {
       "---",
       ["undo", "撤销 移动 2 个节点", null],
       ["redo", "重做 新建提示词", null],
-      "---",
-      ["exportPack", "导出画板包…", null],
     ]);
   });
 
@@ -118,14 +116,14 @@ describe("图片节点菜单", () => {
 describe("任务 / 提示词节点菜单", () => {
   const submitted = { task_id: "20260917-0001" };
 
-  it("空闲任务：展开设置在首；运行可用，取消置灰；没提交过时重新生成置灰", () => {
+  it("空闲任务：展开在首；运行可用，取消置灰；没提交过时重新生成置灰", () => {
     const b = board([task("t")]);
     expect(summary(menuItems({ kind: "node", nodeId: "t" }, facts({ board: b, selected: new Set(["t"]) })))).toEqual([
       ["run", "运行", null],
       ["regenerate", "重新生成", "还没有提交过"],
       ["cancel", "取消", "任务不在排队 / 执行中"],
       "---",
-      ["toggleSettings", "展开设置", null],
+      ["toggleSettings", "展开", null],
       ["viewSendText", "查看发送文本", null],
       "---",
       ["delete", "删除", null],
@@ -139,7 +137,7 @@ describe("任务 / 提示词节点菜单", () => {
       ["regenerate", "重新生成", "任务正在排队 / 执行"],
       ["cancel", "取消", null],
       "---",
-      ["toggleSettings", "展开设置", null],
+      ["toggleSettings", "展开", null],
       ["viewSendText", "查看发送文本", "任务正在排队 / 执行"],
       "---",
       ["delete", "删除", null],
@@ -153,10 +151,10 @@ describe("任务 / 提示词节点菜单", () => {
     expect(items.find((i) => i.action === "viewSendText")?.disabledReason).toBeNull();
   });
 
-  it("已展开的任务：该项为收起设置", () => {
+  it("已展开的任务：该项为收起", () => {
     const b = board([task("t")]);
     const items = menuItems({ kind: "node", nodeId: "t" }, facts({ board: b, selected: new Set(["t"]), expanded: new Set(["t"]) }));
-    expect(items.find((i) => i.action === "toggleSettings")?.label).toBe("收起设置");
+    expect(items.find((i) => i.action === "toggleSettings")?.label).toBe("收起");
   });
 
   it("提交过的空闲任务可重新生成", () => {

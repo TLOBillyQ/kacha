@@ -11,12 +11,11 @@ interface Props {
   onRename: (key: string, title: string) => void;
   onCreate: () => void;
   onExportPack: (key: string) => void;
-  onImportPack: () => void;
 }
 
 const titleOf = (s: Session) => (s.status === "ok" ? s.board.title : basename(s.path));
 
-export function TabBar({ sessions, activeKey, onActivate, onClose, onRename, onCreate, onExportPack, onImportPack }: Props) {
+export function TabBar({ sessions, activeKey, onActivate, onClose, onRename, onCreate, onExportPack }: Props) {
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [menu, setMenu] = useState<{ key: string; at: { x: number; y: number } } | null>(null);
@@ -74,9 +73,6 @@ export function TabBar({ sessions, activeKey, onActivate, onClose, onRename, onC
       ))}
       <button className="tab-new" title="新建画板" onClick={onCreate}>
         ＋
-      </button>
-      <button className="tab-import" title="导入画板包…" onClick={onImportPack}>
-        导入画板包…
       </button>
       {menuSession && menu && (
         <ContextMenu

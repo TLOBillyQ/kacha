@@ -91,7 +91,6 @@ textarea {
 }
 .tab-close,
 .tab-new,
-.tab-import,
 .icon,
 .link {
   border: none;
@@ -101,11 +100,6 @@ textarea {
 }
 .link {
   color: #0969da;
-}
-.tab-import {
-  font-size: 12px;
-  color: #57606a;
-  white-space: nowrap;
 }
 .pack-progress {
   width: 100%;
@@ -122,18 +116,126 @@ textarea {
   position: absolute;
   inset: 0;
 }
-.toolbar {
-  position: absolute;
-  z-index: 10;
-  top: 8px;
-  left: 8px;
+/* 顶部第二行：左侧画板工具栏（画布 portal 进来或置灰占位），右侧运行指示 / 画板包 / 高级设置。
+ * 行内所有按钮 / 下拉统一 28px 高、1px 边框、6px 圆角；组之间用细竖线分隔。 */
+.board-toolbar {
   display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: #f6f8fa;
+  border-bottom: 1px solid var(--border);
+}
+.board-toolbar button,
+.board-toolbar select {
+  appearance: none;
+  -webkit-appearance: none;
+  box-sizing: border-box;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #fff;
+  color: #1f2328;
+  line-height: 26px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.board-toolbar button:hover:not(:disabled):not([aria-disabled="true"]) {
+  background: #f3f4f6;
+  border-color: #b6bec7;
+}
+.board-toolbar button:active:not(:disabled):not([aria-disabled="true"]) {
+  background: #e9ecef;
+}
+.board-toolbar button:disabled,
+.board-toolbar button[aria-disabled="true"],
+.board-toolbar select:disabled {
+  color: #8c959f;
+  background: #f6f8fa;
+  cursor: default;
+}
+.board-toolbar button.primary {
+  background: #1f883d;
+  border-color: #1a7f37;
+  color: #fff;
+}
+.board-toolbar button.primary:hover:not([aria-disabled="true"]) {
+  background: #1a7f37;
+  border-color: #176f2f;
+}
+.board-toolbar select {
+  padding-right: 26px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%2357606a' stroke-width='1.5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 9px center;
+}
+.board-toolbar-slot {
+  flex: 1;
+  min-width: 0;
+}
+.board-toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+/* 组分隔线 */
+.toolbar-group + .toolbar-group {
+  margin-left: 4px;
+  padding-left: 12px;
+  border-left: 1px solid var(--border);
+}
+/* 撤销 / 重做：方形图标按钮 */
+.toolbar-group > button[aria-label="撤销"],
+.toolbar-group > button[aria-label="重做"] {
+  width: 28px;
+  padding: 0;
+  font-size: 15px;
+  text-align: center;
+}
+/* 「＋ 生成任务」与模型下拉拼成一体 */
+.toolbar-pair {
+  display: inline-flex;
+  align-items: stretch;
+}
+.toolbar-pair > button {
+  border-radius: 6px 0 0 6px;
+}
+.toolbar-pair > .toolbar-model {
+  max-width: 200px;
+  margin-left: -1px;
+  border-radius: 0 6px 6px 0;
+}
+.board-toolbar-right {
+  display: flex;
+  align-items: center;
   gap: 6px;
+}
+.board-toolbar-right .run-indicator {
+  margin: 0;
+}
+.topbar-button {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+  white-space: nowrap;
 }
 .empty,
 .fatal {
   padding: 48px;
   text-align: center;
+}
+.empty-actions {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 16px;
 }
 .toast {
   position: fixed;
@@ -260,8 +362,14 @@ textarea {
 
 .field {
   display: flex;
+  align-items: center;
   gap: 4px;
   margin-bottom: 6px;
+}
+.field-label {
+  flex-shrink: 0;
+  width: 28px;
+  color: #57606a;
 }
 .field select {
   flex: 1;
@@ -488,14 +596,6 @@ body[data-port-drag="ok"] * {
 .topbar .tabs {
   flex: 1;
   border-bottom: none;
-}
-.settings-button {
-  margin: 4px 8px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: #fff;
-  cursor: pointer;
-  white-space: nowrap;
 }
 button.primary {
   background: #1f883d;
@@ -901,7 +1001,34 @@ button.primary[aria-disabled="true"] {
   flex-shrink: 0;
   width: 28px;
   height: 28px;
+  padding: 0;
+  border: none;
+  background: none;
   line-height: 0;
+  cursor: pointer;
+}
+/* 区域指示入口：贴在拖动柄旁；有区域时右上角角标显示数量。 */
+.port-region {
+  position: relative;
+  flex-shrink: 0;
+  color: #0969da;
+}
+.port-region[aria-disabled="true"] {
+  color: #8c959f;
+  cursor: default;
+}
+.port-region-count {
+  position: absolute;
+  top: -4px;
+  right: -2px;
+  min-width: 12px;
+  padding: 0 3px;
+  border-radius: 6px;
+  background: #0969da;
+  color: #fff;
+  font-size: 9px;
+  line-height: 12px;
+  text-align: center;
 }
 .port-thumb img {
   width: 100%;
@@ -982,10 +1109,6 @@ button.primary[aria-disabled="true"] {
 .context-menu button[aria-disabled="true"] {
   color: #8c959f;
   cursor: default;
-}
-.toolbar button.active {
-  background: #ddf4ff;
-  border-color: #1f8fff;
 }
 
 /* ---- 精简任务节点 ---- */
