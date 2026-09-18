@@ -2,7 +2,7 @@
 // 副作用全部由调用方注入；调用顺序与状态由任务运行器（runner.ts）负责，界面不直接调用。
 import type { Board, ResultRecord, TaskNode } from "./board";
 import { findModel, type CapabilityTable, type InputImageRule, type ModelCapability } from "./capabilities";
-import { fitImage, type FittedBytes, type FittedRecord, type ImageCodec } from "./fitImage";
+import { fitImage, type FittedBytes, type ImageCodec } from "./fitImage";
 import { ERROR_CATEGORY_LABELS, fetchResultImage, GatewayError, generate, type FetchLike, type GenerationInput } from "./gateway";
 import { imagePortSlots, workflowOf } from "./graph";
 import type { RunResult } from "./layout";
@@ -10,23 +10,7 @@ import { firstRegionOf, slotsFromReferences } from "./region";
 import { planSend } from "./sendPlan";
 import { isAutoRatio, resolveSize } from "./size";
 import { imageSources, snapshotOf } from "./submission";
-import { joinPath } from "./paths";
-import type { SizeSpec } from "./size";
-import { LocalError, newTaskId, saveLayers, saveResult, sniffImage, taskDirOf, taskDirOfTaskId, writeSubmission, type LayerRecord, type ReferenceRegion, type ReferenceSource, type SubmissionPlan, type TaskFs } from "./taskDir";
-
-/** 任务目录 task.json 里重新生成要用的字段。 */
-interface TaskJson {
-  model: string;
-  prompt: string;
-  negative_prompt: string;
-  send_text: string;
-  size_spec: SizeSpec;
-  size: { width: number; height: number };
-  layer_decomposition: boolean;
-  transparent_background: boolean;
-  /** fitted：发送前按模型规则处理过（#116）；旧任务目录没有。 */
-  references: { file: string; source: ReferenceSource; region?: ReferenceRegion; fitted?: FittedRecord }[];
-}
+import { LocalError, newTaskId, readSubmission, saveLayers, saveResult, sniffImage, writeSubmission, type LayerRecord, type ReferenceSource, type SubmissionPlan, type TaskFs } from "./taskDir";
 
 export type TaskStatus =
   | { kind: "queued" }
@@ -39,8 +23,8 @@ export type TaskStatus =
   /** 上次程序非正常退出时仍在排队 / 执行；重开时推导，不持久化。 */
   | { kind: "interrupted" };
 
+/** readFile 兼读画板上的源图与任务目录。 */
 export interface RunDeps extends TaskFs {
-  readBytes(absPath: string): Promise<Uint8Array>;
   fetch: FetchLike;
   now(): Date;
   /** 定时：ms 毫秒后调 fn，返回取消函数。运行器不直接调 setTimeout。 */
@@ -54,12 +38,16 @@ export interface RunDeps extends TaskFs {
 export interface PreparedJob {
   taskNodeId: string;
   taskId: string;
-  relDir: string;
   /** 派发时写入任务目录的内容；排队中取消不留痕迹。 */
   plan: SubmissionPlan;
   /** writeJob 之后 references 才填上。 */
   input: GenerationInput;
   record: ResultRecord;
+}
+
+/** 任务目录已写的任务；relDir 由写提交带出（相对输出根目录）。 */
+export interface WrittenJob extends PreparedJob {
+  relDir: string;
 }
 
 export { LocalError };
@@ -113,7 +101,7 @@ export async function prepareJob(
   for (const [i, src] of sources.entries()) {
     let bytes: Uint8Array;
     try {
-      bytes = await deps.readBytes(src.absPath);
+      bytes = await deps.readFile(src.absPath);
     } catch (e) {
       throw readError(`图${i + 1}（${src.label}）`, e);
     }
@@ -164,7 +152,6 @@ function jobOf(taskNodeId: string, plan: SubmissionPlan, model: ModelCapability)
   return {
     taskNodeId,
     taskId: plan.taskId,
-    relDir: taskDirOf(plan.submittedAt, plan.taskId),
     plan,
     input: { model, text: plan.send.text, nativeNegativePrompt: plan.send.nativeNegativePrompt, size: plan.size, references: [], transparentBackground: plan.transparentBackground },
     record: {
@@ -192,27 +179,13 @@ export async function prepareRegenerate(
   const task = board.nodes.find((n) => n.id === taskNodeId);
   const last = task?.type === "task" ? task.last_submitted : null;
   const fromTaskId = args.fromTaskId ?? last?.task_id;
-  const oldDir = typeof fromTaskId === "string" ? taskDirOfTaskId(fromTaskId) : null;
-  if (!last || !oldDir) throw new LocalError("任务节点没有可重新生成的提交");
-  const path = (file: string) => joinPath(outputRoot, ...oldDir.split("/"), file);
+  if (!last || typeof fromTaskId !== "string") throw new LocalError("任务节点没有可重新生成的提交");
 
-  let previous: TaskJson;
-  try {
-    previous = JSON.parse(new TextDecoder().decode(await deps.readBytes(path("task.json"))));
-  } catch (e) {
-    throw readError("上次任务的 task.json", e);
-  }
+  const { record: previous, references: snapshots } = await readSubmission(deps, outputRoot, fromTaskId);
   const model = findModel(args.table, previous.model);
   if (!model) throw new LocalError(`模型 ${previous.model} 已不在能力表内`);
-  const references: SubmissionPlan["references"] = [];
-  for (const [i, ref] of previous.references.entries()) {
-    try {
-      // 快照已按规则处理过，原样重发，不再处理；本次没处理，新 task.json 不带 fitted。
-      references.push({ bytes: await deps.readBytes(path(ref.file)), source: ref.source, ...(ref.region ? { region: ref.region } : {}) });
-    } catch (e) {
-      throw readError(`上次任务的图${i + 1}`, e);
-    }
-  }
+  // 快照已按规则处理过，原样重发，不再处理；本次没处理，新任务记录不带 fitted。
+  const references: SubmissionPlan["references"] = previous.references.map((ref, i) => ({ bytes: snapshots[i], source: ref.source, ...(ref.region ? { region: ref.region } : {}) }));
   // 按当前规则重算发送计划，不重放 task.json 里的 send_text：旧任务可能按「叠加图占用户序号」的旧口径存（#113），
   // 固定句也要按当前能力表模板重建。
   const send = planSend(model, slotsFromReferences(previous.references), previous.prompt, previous.negative_prompt);
@@ -245,11 +218,11 @@ export async function prepareRegenerate(
   return { job: jobOf(taskNodeId, plan, model), lastSubmitted };
 }
 
-/** 派发时写任务目录（不可变）；返回带参考图的任务。429 重试不重写。 */
-export async function writeJob(deps: RunDeps, outputRoot: string, job: PreparedJob): Promise<PreparedJob> {
+/** 派发时写任务目录（不可变）；返回带任务目录与参考图的任务。429 重试不重写。 */
+export async function writeJob(deps: RunDeps, outputRoot: string, job: PreparedJob): Promise<WrittenJob> {
   try {
-    const references = await writeSubmission(deps, outputRoot, job.plan);
-    return { ...job, input: { ...job.input, references } };
+    const { relDir, references } = await writeSubmission(deps, outputRoot, job.plan);
+    return { ...job, relDir, input: { ...job.input, references } };
   } catch (e) {
     throw new LocalError(`写任务目录失败：${e instanceof Error ? e.message : String(e)}`);
   }
@@ -259,7 +232,7 @@ export async function writeJob(deps: RunDeps, outputRoot: string, job: PreparedJ
 export async function executeJob(
   deps: RunDeps,
   args: {
-    job: PreparedJob;
+    job: WrittenJob;
     outputRoot: string;
     baseUrl: string;
     apiKey: string;

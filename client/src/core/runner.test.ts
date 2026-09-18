@@ -4,6 +4,7 @@ import { BUILTIN_TABLE } from "./capabilities";
 import type { RunDeps } from "./run";
 import { parseOutcome } from "./taskDir";
 import { createRunner, type RunTarget, type RunnerChange } from "./runner";
+import { memoryTaskFs } from "./testing/memoryTaskFs";
 
 const PNG = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="), (c) => c.charCodeAt(0));
 const PNG_B64 = btoa(String.fromCharCode(...PNG));
@@ -47,7 +48,8 @@ type Reply = { status: number; body: string };
 
 /** 内存 RunDeps + 手摇假时钟 + 记录式画板写入 / 日志；网关按 replies 依次应答（用完后一律成功）。 */
 function harness(opts: { concurrency?: number } = {}) {
-  const files = new Map<string, Uint8Array>();
+  const fs = memoryTaskFs();
+  const files = fs.files;
   const requests: string[] = [];
   const replies: Reply[] = [];
   const read = gate();
@@ -56,17 +58,13 @@ function harness(opts: { concurrency?: number } = {}) {
   let now = Date.parse("2026-09-16T09:15:00Z");
   let timers: { at: number; fn: () => void }[] = [];
   const deps: RunDeps = {
-    readBytes: async (path) => {
+    readFile: async (path) => {
       await read.pass();
-      if (path === "/root/refs/cat.png") return PNG;
-      const f = files.get(path);
-      if (f) return f;
-      throw new Error("not found");
+      return path === "/root/refs/cat.png" ? PNG : fs.readFile(path);
     },
     writeNewFile: async (path, bytes) => {
       await write.pass();
-      if (files.has(path)) throw new Error("exists");
-      files.set(path, bytes);
+      return fs.writeNewFile(path, bytes);
     },
     fetch: async (url) => {
       requests.push(url);

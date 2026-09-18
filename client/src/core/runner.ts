@@ -5,7 +5,7 @@ import type { Board, TaskNode } from "./board";
 import type { CapabilityTable } from "./capabilities";
 import type { BoardChange } from "./edit";
 import { GatewayError } from "./gateway";
-import { CancelledError, executeJob, failureLabel, prepareJob, prepareRegenerate, writeJob, type Prepared, type PreparedJob, type RunDeps, type TaskStatus } from "./run";
+import { CancelledError, executeJob, failureLabel, prepareJob, prepareRegenerate, writeJob, type Prepared, type PreparedJob, type RunDeps, type TaskStatus, type WrittenJob } from "./run";
 import { tableDigest, writeOutcome, type TaskOutcome } from "./taskDir";
 
 /** 第 1、2、3 次 429 后的等待；第 4 次按失败。 */
@@ -93,8 +93,8 @@ interface Job {
   prepared?: PreparedJob;
   /** 派发时写到任务节点上；undefined = 不改（生成变体）。 */
   lastSubmitted?: TaskNode["last_submitted"];
-  /** 任务目录已写、提交记录已落地（429 重试不再写）。 */
-  written: boolean;
+  /** 任务目录已写、提交记录已落地后的任务（429 重试不再写）。 */
+  written?: WrittenJob;
   /** 已自动重试的次数（仅 429）。 */
   retries: number;
   startedAt: number;
@@ -189,7 +189,7 @@ export function createRunner(ports: RunnerPorts): Runner {
 
   /** 任务目录已写的任务没有结果时记下结局，重开时据此区分失败 / 已取消 / 已中断；写不了就算了。 */
   function recordOutcome(job: Job, outcome: TaskOutcome) {
-    if (job.written) void writeOutcome(deps, job.target.outputRoot, job.prepared!.relDir, outcome).catch(() => undefined);
+    if (job.written) void writeOutcome(deps, job.target.outputRoot, job.written.relDir, outcome).catch(() => undefined);
   }
 
   function remove(job: Job) {
@@ -231,21 +231,20 @@ export function createRunner(ports: RunnerPorts): Runner {
     const aborted = () => controller.signal.aborted;
     try {
       if (!job.written) {
-        job.prepared = await writeJob(deps, target.outputRoot, job.prepared!);
-        job.written = true;
+        job.written = await writeJob(deps, target.outputRoot, job.prepared!);
         if (job.lastSubmitted !== undefined) ports.apply(target.boardKey, { kind: "submitted", taskId: job.taskNodeId, lastSubmitted: job.lastSubmitted });
         // 写目录期间被取消：取消时目录还没写，这里补记结局。
         if (aborted()) recordOutcome(job, { kind: "cancelled", gatewayMayContinue: false });
       }
       if (aborted()) return;
-      const prepared = job.prepared!;
+      const written = job.written;
       const result = await executeJob(deps, {
-        job: prepared,
+        job: written,
         outputRoot: target.outputRoot,
         baseUrl: target.baseUrl,
         apiKey: target.apiKey,
         signal: controller.signal,
-        onDownload: (r) => ports.log("download", { task_id: prepared.taskId, model: prepared.plan.model, ...(r.ok ? { ok: true, images: r.images } : { ok: false, ...errorFields(r.error) }) }),
+        onDownload: (r) => ports.log("download", { task_id: written.taskId, model: written.plan.model, ...(r.ok ? { ok: true, images: r.images } : { ok: false, ...errorFields(r.error) }) }),
       });
       if (aborted()) return;
       remove(job);
@@ -289,7 +288,7 @@ export function createRunner(ports: RunnerPorts): Runner {
   /** 读参考图并入队；读的期间被取消则不入队。返回本地失败说明。 */
   async function enqueue(target: RunTarget, taskNodeId: string, submission: Job["submission"], prepare: () => Promise<Prepared>): Promise<string | null> {
     if (closed.has(target.boardKey)) return null;
-    const job: Job = { target, taskNodeId, phase: "reading", submission, written: false, retries: 0, startedAt: 0, controller: new AbortController() };
+    const job: Job = { target, taskNodeId, phase: "reading", submission, retries: 0, startedAt: 0, controller: new AbortController() };
     jobs.add(job);
     setFinished(job, null);
     publish();
@@ -330,7 +329,7 @@ export function createRunner(ports: RunnerPorts): Runner {
       return;
     }
     // 执行中：请求可能已发出；限流退避中：网关没接这次请求。
-    const cancelled = { kind: "cancelled" as const, gatewayMayContinue: was === "running" && job.written };
+    const cancelled = { kind: "cancelled" as const, gatewayMayContinue: was === "running" && job.written !== undefined };
     logTransition(job, was, "cancelled", { gateway_may_continue: cancelled.gatewayMayContinue });
     setFinished(job, cancelled);
     recordOutcome(job, cancelled);

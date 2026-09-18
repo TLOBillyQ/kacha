@@ -70,14 +70,17 @@ describe("提交时写任务目录", () => {
 
   it("reference-N.ext 快照 + task.json 完整记录，返回可发送的参考图", async () => {
     const fs = memoryTaskFs();
-    const refs = await writeSubmission(fs, "/root", plan());
+    const written = await writeSubmission(fs, "/root", plan());
     const dir = "/root/2026-09-16/20260916T091500Z-3f9c2a1b";
     expect([...fs.files.keys()]).toEqual([`${dir}/reference-1.png`, `${dir}/reference-2.jpg`, `${dir}/task.json`]);
     expect(fs.files.get(`${dir}/reference-1.png`)).toEqual(PNG);
-    expect(refs).toEqual([
-      { mediaType: "image/png", bytes: PNG },
-      { mediaType: "image/jpeg", bytes: JPEG },
-    ]);
+    expect(written).toEqual({
+      relDir: "2026-09-16/20260916T091500Z-3f9c2a1b",
+      references: [
+        { mediaType: "image/png", bytes: PNG },
+        { mediaType: "image/jpeg", bytes: JPEG },
+      ],
+    });
     const record = JSON.parse(fs.text(`${dir}/task.json`));
     expect(record).toEqual({
       task_id: "20260916T091500Z-3f9c2a1b",

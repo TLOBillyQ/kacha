@@ -11,11 +11,11 @@ import { composeOverlay } from "./overlay";
 
 export const taskFs: TaskFs = {
   writeNewFile: ipc.writeNewFile,
+  readFile: ipc.readFileBytes,
 };
 
 export const runDeps: RunDeps = {
   ...taskFs,
-  readBytes: ipc.readFileBytes,
   fetch: httpFetch,
   now: () => new Date(),
   schedule: (ms, fn) => {

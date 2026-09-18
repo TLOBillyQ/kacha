@@ -13,6 +13,8 @@ import type { SizeSpec } from "./size";
 export interface TaskFs {
   /** 原子写新文件；目标已存在时失败。 */
   writeNewFile(absPath: string, bytes: Uint8Array): Promise<void>;
+  /** 读整个文件；不存在或读不了时失败。 */
+  readFile(absPath: string): Promise<Uint8Array>;
 }
 
 /** 本地准备阶段的失败（读图、读写任务目录）。 */
@@ -135,8 +137,8 @@ export interface TaskRecord {
   references: TaskRecordReference[];
 }
 
-/** 写参考图快照 reference-N.ext 与 task.json；返回发给网关的参考图。 */
-export async function writeSubmission(fs: TaskFs, outputRoot: string, plan: SubmissionPlan): Promise<ReferenceImage[]> {
+/** 写参考图快照 reference-N.ext 与 task.json；返回任务目录（相对输出根目录，正斜杠）与发给网关的参考图。 */
+export async function writeSubmission(fs: Pick<TaskFs, "writeNewFile">, outputRoot: string, plan: SubmissionPlan): Promise<{ relDir: string; references: ReferenceImage[] }> {
   const kinds = plan.references.map((ref, i) => {
     const kind = sniffImage(ref.bytes);
     if (!kind) throw new Error(`图${i + 1} 不是可识别的图片格式`);
@@ -166,7 +168,7 @@ export async function writeSubmission(fs: TaskFs, outputRoot: string, plan: Subm
     references,
   };
   await fs.writeNewFile(taskPath(outputRoot, dir, TASK_RECORD_FILE), new TextEncoder().encode(`${JSON.stringify(record, null, 2)}\n`));
-  return plan.references.map((ref, i) => ({ mediaType: kinds[i].mediaType, bytes: ref.bytes }));
+  return { relDir: dir, references: plan.references.map((ref, i) => ({ mediaType: kinds[i].mediaType, bytes: ref.bytes })) };
 }
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -199,7 +201,7 @@ function parseTaskRecord(bytes: Uint8Array): TaskRecord {
  * 读回一次提交：任务记录与全部参考图快照（references 与 record.references 同序），与 writeSubmission 对称。
  * 只校验重新生成必需的字段；未知字段忽略，fitted / region 缺省即旧口径。
  */
-export async function readSubmission(fs: { readFile(absPath: string): Promise<Uint8Array> }, outputRoot: string, taskId: string): Promise<{ record: TaskRecord; references: Uint8Array[] }> {
+export async function readSubmission(fs: Pick<TaskFs, "readFile">, outputRoot: string, taskId: string): Promise<{ record: TaskRecord; references: Uint8Array[] }> {
   const dir = taskDirOfTaskId(taskId);
   if (!dir) throw new LocalError(`上次任务的任务编号无效：${taskId}`);
   let bytes: Uint8Array;

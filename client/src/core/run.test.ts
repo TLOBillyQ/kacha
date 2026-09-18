@@ -3,6 +3,7 @@ import type { Board, BoardEdge, BoardNode, ResultNode, TaskNode } from "./board"
 import { BUILTIN_TABLE } from "./capabilities";
 import type { FetchLike } from "./gateway";
 import { addResultNode } from "./layout";
+import { memoryTaskFs } from "./testing/memoryTaskFs";
 import { CancelledError, executeJob, failureLabel, prepareJob, prepareRegenerate, writeJob, type Prepared, type PreparedJob, type RunDeps } from "./run";
 
 const PNG = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="), (c) => c.charCodeAt(0));
@@ -22,19 +23,13 @@ function board(withReference: boolean): Board {
 }
 
 function deps(respond: (url: string, init: Parameters<FetchLike>[1]) => { status: number; body: string }) {
-  const files = new Map<string, Uint8Array>();
+  const fs = memoryTaskFs();
+  const files = fs.files;
   const requests: { url: string; init: Parameters<FetchLike>[1] }[] = [];
   const d: RunDeps = {
-    writeNewFile: async (path, bytes) => {
-      if (files.has(path)) throw new Error("exists");
-      files.set(path, bytes);
-    },
-    readBytes: async (path) => {
-      if (path === "/root/refs/cat.png") return PNG;
-      const written = files.get(path);
-      if (written) return written;
-      throw new Error("not found");
-    },
+    writeNewFile: fs.writeNewFile,
+    // 画板上的参考图不在任务目录里，单独应答。
+    readFile: async (path) => (path === "/root/refs/cat.png" ? PNG : fs.readFile(path)),
     fetch: async (url, init) => {
       requests.push({ url, init });
       const r = respond(url, init);
@@ -61,11 +56,11 @@ describe("单任务端到端", () => {
     const { d, files, requests } = deps(ok);
     const b0 = board(true);
     const { job: prepared, board: b1 } = await prepare(d, { board: b0, table: BUILTIN_TABLE, tableSha256: "f".repeat(64), outputRoot: "/root", taskNodeId: "t" });
-    expect(prepared.relDir).toMatch(/^2026-09-16\/20260916T091500Z-[0-9a-f]{8}$/);
     expect((b1.nodes.find((n) => n.id === "t") as TaskNode).last_submitted?.task_id).toBe(prepared.taskId);
     expect(files.size).toBe(0);
 
     const job = await writeJob(d, "/root", prepared);
+    expect(job.relDir).toMatch(/^2026-09-16\/20260916T091500Z-[0-9a-f]{8}$/);
     const dir = `/root/${job.relDir}`;
     expect(files.get(`${dir}/reference-1.png`)).toEqual(PNG);
     const taskJson = JSON.parse(new TextDecoder().decode(files.get(`${dir}/task.json`)));
@@ -130,11 +125,11 @@ describe("单任务端到端", () => {
     d.now = () => new Date("2026-09-17T01:00:00Z");
     const { job: again, board: b2 } = await regen(d, { board: edited, table: BUILTIN_TABLE, tableSha256: "y", outputRoot: "/root", taskNodeId: "t" });
     expect(again.taskId).not.toBe(first.taskId);
-    expect(again.relDir.startsWith("2026-09-17/")).toBe(true);
     const task = b2.nodes.find((n) => n.id === "t") as TaskNode;
     expect(task.last_submitted).toMatchObject({ task_id: again.taskId, prompt: "一只橘猫" });
 
     const job = await writeJob(d, "/root", again);
+    expect(job.relDir.startsWith("2026-09-17/")).toBe(true);
     const taskJson = JSON.parse(new TextDecoder().decode(files.get(`/root/${job.relDir}/task.json`)));
     expect(taskJson).toMatchObject({ prompt: "一只橘猫", send_text: "本次提供 1 张参考图。\n一只橘猫", capability_table_sha256: "y" });
     expect(files.get(`/root/${job.relDir}/reference-1.png`)).toEqual(PNG);
@@ -497,8 +492,8 @@ describe("参考图快照按模型规则缩放 / 转码（#116）", () => {
   it("重新生成：直接用已处理的快照，不再解码；本次没处理，不带 fitted", async () => {
     const { d, files } = deps(ok);
     const { decoded } = withCodec(d);
-    const { job: first, board: b1 } = await prepare(d, { board: board(true), table: BUILTIN_TABLE, tableSha256: "x", outputRoot: "/root", taskNodeId: "t" });
-    await writeJob(d, "/root", first);
+    const { job: prepared, board: b1 } = await prepare(d, { board: board(true), table: BUILTIN_TABLE, tableSha256: "x", outputRoot: "/root", taskNodeId: "t" });
+    const first = await writeJob(d, "/root", prepared);
     decoded.length = 0;
     d.now = () => new Date("2026-09-17T01:00:00Z");
     const job = await writeJob(d, "/root", (await regen(d, { board: b1, table: BUILTIN_TABLE, tableSha256: "y", outputRoot: "/root", taskNodeId: "t" })).job);
