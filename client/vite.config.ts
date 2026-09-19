@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
@@ -8,4 +9,6 @@ export default defineConfig({
   clearScreen: false,
   server: { port: 1420, strictPort: true, watch: { ignored: ["**/src-tauri/**"] } },
   build: { target: "es2022" },
+  // e2e/ 下是 Playwright 用例（npm run test:e2e），不归 vitest。
+  test: { include: ["src/**/*.test.ts"] },
 });

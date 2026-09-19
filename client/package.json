@@ -7,6 +7,7 @@
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit -p .",
     "test": "vitest run",
+    "test:e2e": "playwright test",
     "tauri": "tauri"
   },
   "dependencies": {
@@ -19,6 +20,7 @@
     "react-dom": "^19.3.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "@tauri-apps/cli": "^2.11.4",
     "@types/node": "^22.20.3",
     "@types/react": "^19.3.0",
