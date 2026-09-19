@@ -1,6 +1,6 @@
 // 高级设置与模型发现。settings.json 在 app-data 目录，只前向迁移；API 密钥不在这里（系统凭据库）。
 import { type CapabilityTable, type ModelCapability, modelsByTier } from "./capabilities";
-import { GatewayError, listModels, type FetchLike } from "./gateway";
+import { ERROR_CATEGORY_LABELS, GatewayError, listModels, type FetchLike } from "./gateway";
 
 export const SETTINGS_FORMAT_VERSION = 1;
 export const MIN_CONCURRENCY = 1;
@@ -236,7 +236,7 @@ export async function saveSettings(ports: SettingsPorts, current: SaveBaseline, 
 
 export type RefreshResult =
   | { ok: true; cache: ModelsCache; discovery: Discovery }
-  /** message：网关错误的可展示说明；非网关错误为 null（由 ui 给兜底文案）。 */
+  /** message：网关错误的可展示说明（「类别文案：网关原文」，类别与失败徽标同口径）；非网关错误为 null（由 ui 给兜底文案）。 */
   | { ok: false; message: string | null; discovery: Discovery };
 
 /** 模型发现：成功写缓存（写失败不影响结果）；失败回落到同 base_url 的缓存。两种结局都记一条 connection 日志。 */
@@ -250,6 +250,7 @@ export async function refreshModels(ports: SettingsPorts, baseUrl: string, apiKe
   } catch (e) {
     const gateway = e instanceof GatewayError ? e : null;
     ports.log("connection", { stage: "list_models", ok: false, category: gateway?.category ?? "unknown", status_code: gateway?.status, message: gateway?.message ?? String(e) });
-    return { ok: false, message: gateway?.message ?? null, discovery: discoveryFromCache(cache, baseUrl) };
+    const message = gateway ? `${ERROR_CATEGORY_LABELS[gateway.category]}：${gateway.message}` : null;
+    return { ok: false, message, discovery: discoveryFromCache(cache, baseUrl) };
   }
 }

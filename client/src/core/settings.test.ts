@@ -271,10 +271,24 @@ describe("刷新模型列表", () => {
     const { ports, writes, logs } = memoryPorts({ fetch: modelsFetch(401, { error: { message: "bad key" } }) });
     const result = await refreshModels(ports, BASE, "sk", cached);
     expect(result).toMatchObject({ ok: false, discovery: { source: "cached", ids: ["old"], fetchedAt: cached.fetched_at } });
-    expect(result.ok || result.message).toBeTruthy();
     expect(writes.cache).toEqual([]);
     expect(logs).toHaveLength(1);
     expect(logs[0]).toMatchObject({ kind: "connection", fields: { stage: "list_models", ok: false, category: "auth", status_code: 401 } });
+  });
+
+  it("网关错误：说明为「类别文案：网关原文」", async () => {
+    const { ports } = memoryPorts({ fetch: modelsFetch(401, { error: { message: "invalid key" } }) });
+    expect(await refreshModels(ports, BASE, "sk", null)).toMatchObject({ ok: false, message: "鉴权失败：HTTP 401：invalid key" });
+  });
+
+  it("网络不可达：说明以「网络不可达：」开头", async () => {
+    const { ports } = memoryPorts({
+      fetch: async () => {
+        throw new TypeError("Failed to fetch");
+      },
+    });
+    const result = await refreshModels(ports, BASE, "sk", null);
+    expect(result).toMatchObject({ ok: false, message: expect.stringMatching(/^网络不可达：/) });
   });
 
   it("失败且缓存属于别的 base_url：视为无缓存", async () => {

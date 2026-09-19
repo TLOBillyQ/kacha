@@ -147,7 +147,7 @@ test.describe("#21–#24 高级设置", () => {
     await testButton.click();
     const error = dialog.locator(".form-row", { hasText: "连接测试" }).locator(".form-error");
     await expect(error).toBeVisible();
-    await expect(error).toContainText("401");
+    await expect(error).toHaveText(/^鉴权失败：HTTP 401：invalid key/);
     await expect(dialog).toContainText("模型列表：离线，使用缓存");
   });
 
