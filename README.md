@@ -1,4 +1,6 @@
-# UGC AI 生图工具
+# Kacha（咔嚓）
+
+📸 咔嚓一下，图就来了。
 
 面向蛋仔派对与千星 UGC 美术团队的本地图片生成工作台。以节点图画板为主界面：提示词、参考图、生成任务、结果都是画板上的节点，连线表达「这次输入从哪儿来」。生成只经团队网关提交，结果保存在本机。
 
@@ -8,8 +10,8 @@
 
 | 附件 | 适用平台 |
 | --- | --- |
-| `ugc-image-tool-<版本>-win-x64.zip` | Windows 10 21H2+ / Windows 11（x64），依赖预装的 WebView2 |
-| `ugc-image-tool-<版本>-macos-arm64.zip` | macOS，仅 Apple Silicon |
+| `kacha-<版本>-win-x64.zip` | Windows 10 21H2+ / Windows 11（x64），依赖预装的 WebView2 |
+| `kacha-<版本>-macos-arm64.zip` | macOS，仅 Apple Silicon |
 
 两个平台的包都未做正式签名：Windows 首次运行在 SmartScreen 点「更多信息 → 仍要运行」；macOS 首次右键应用「打开」。
 校验、放行与画板打开方式详见对应版本的发布说明。

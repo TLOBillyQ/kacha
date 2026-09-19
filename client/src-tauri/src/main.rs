@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    ugc_image_tool_lib::run()
+    kacha_lib::run()
 }

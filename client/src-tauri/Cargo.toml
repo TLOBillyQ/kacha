@@ -1,10 +1,10 @@
 [package]
-name = "ugc-image-tool"
+name = "kacha"
 version = "0.2.1"
 edition = "2021"
 
 [lib]
-name = "ugc_image_tool_lib"
+name = "kacha_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

@@ -4633,7 +4633,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "ugc-image-tool"
+name = "kacha"
 version = "0.2.1"
 dependencies = [
  "imagesize",

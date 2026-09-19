@@ -3,15 +3,15 @@
 Tauri 不能交叉编译到另一平台，Windows 与 macOS 包必须各在对应机器上构建：
 
 - Windows x64：`npx tauri build --no-bundle --target x86_64-pc-windows-msvc`，产物为单个
-  client/src-tauri/target/x86_64-pc-windows-msvc/release/ugc-image-tool.exe；压缩包里只有这一个
-  exe（ugc-image-tool.exe），不做安装器。
+  client/src-tauri/target/x86_64-pc-windows-msvc/release/kacha.exe；压缩包里只有这一个
+  exe（kacha.exe），不做安装器。
 - macOS Apple Silicon：`npx tauri build --bundles app --target aarch64-apple-darwin`，
-  产物为 `UGC AI 生图工具.app`；ad-hoc 签名（codesign --sign -）并严格校验后，
+  产物为 `Kacha.app`；ad-hoc 签名（codesign --sign -）并严格校验后，
   用 ditto 压缩（保留签名与扩展属性，zipfile 会破坏 .app）。
 
 输出到仓库根目录 release/：
 
-    ugc-image-tool-<版本>-win-x64.zip / ugc-image-tool-<版本>-macos-arm64.zip
+    kacha-<版本>-win-x64.zip / kacha-<版本>-macos-arm64.zip
     SHA256SUMS
 
 版本号唯一来源是 client/src-tauri/Cargo.toml（见 release_meta.py）。
@@ -52,8 +52,8 @@ from release_meta import (  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CLIENT_DIR = REPO_ROOT / "client"
-PRODUCT_NAME = "UGC AI 生图工具"
-MAIN_BINARY = "ugc-image-tool"
+PRODUCT_NAME = "Kacha"
+MAIN_BINARY = "kacha"
 # 显式指定 MSVC 目标：Windows 用 MSVC 工具链正式构建，避免误用 GNU 工具链。
 WINDOWS_TARGET = "x86_64-pc-windows-msvc"
 MACOS_TARGET = "aarch64-apple-darwin"
@@ -108,7 +108,7 @@ def ensure_no_foreign_zips(release_dir: Path, version: str) -> None:
 
 
 def make_windows_zip(exe_path: Path, out_zip: Path) -> None:
-    """把单个 exe 压成 zip，包内文件名固定为 ugc-image-tool.exe（无顶层目录）。"""
+    """把单个 exe 压成 zip，包内文件名固定为 kacha.exe（无顶层目录）。"""
     if not exe_path.is_file():
         raise SystemExit(f"构建产物缺失：{exe_path}")
     if out_zip.exists():

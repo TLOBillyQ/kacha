@@ -31,7 +31,7 @@ class CommandAndPathTest(unittest.TestCase):
         self.assertEqual(build_release.tauri_build_args("win-x64"), ["tauri", "build", "--no-bundle", "--target", "x86_64-pc-windows-msvc"])
         self.assertEqual(
             build_release.product_path(Path("/repo"), "win-x64"),
-            Path("/repo/client/src-tauri/target/x86_64-pc-windows-msvc/release/ugc-image-tool.exe"),
+            Path("/repo/client/src-tauri/target/x86_64-pc-windows-msvc/release/kacha.exe"),
         )
 
     def test_macos_builds_app_bundle_for_apple_silicon(self) -> None:
@@ -40,7 +40,7 @@ class CommandAndPathTest(unittest.TestCase):
         self.assertEqual(
             build_release.product_path(Path("/repo"), "macos-arm64"),
             Path(
-                "/repo/client/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/UGC AI 生图工具.app"
+                "/repo/client/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Kacha.app"
             ),
         )
 
@@ -62,8 +62,8 @@ class ReleaseDirTest(unittest.TestCase):
             out_zip.write_bytes(b"old")
             build_release.make_windows_zip(exe, out_zip)
             with zipfile.ZipFile(out_zip) as archive:
-                self.assertEqual(archive.namelist(), ["ugc-image-tool.exe"])
-                self.assertEqual(archive.read("ugc-image-tool.exe"), b"MZ fake exe")
+                self.assertEqual(archive.namelist(), ["kacha.exe"])
+                self.assertEqual(archive.read("kacha.exe"), b"MZ fake exe")
 
     def test_windows_zip_requires_product(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -73,11 +73,11 @@ class ReleaseDirTest(unittest.TestCase):
     def test_checksums_keep_other_platform_zip_and_drop_stale_entries(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             release_dir = make_release_dir(Path(temp), "0.2.0", "macos-arm64")
-            mac = "ugc-image-tool-0.2.0-macos-arm64.zip"
-            win = "ugc-image-tool-0.2.0-win-x64.zip"
+            mac = "kacha-0.2.0-macos-arm64.zip"
+            win = "kacha-0.2.0-win-x64.zip"
             # 旧 SHA256SUMS 里还有一个已不存在的条目，应被丢弃。
             with (release_dir / "SHA256SUMS").open("a", encoding="utf-8") as stream:
-                stream.write(f"{'c' * 64}  ugc-image-tool-0.1.0-win-x64.zip\n")
+                stream.write(f"{'c' * 64}  kacha-0.1.0-win-x64.zip\n")
             (release_dir / win).write_bytes(b"new win build")
             checksums = build_release.update_checksums(release_dir, "0.2.0")
             expected = {
@@ -90,7 +90,7 @@ class ReleaseDirTest(unittest.TestCase):
     def test_checksums_rewritten_after_rebuild(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             release_dir = make_release_dir(Path(temp), "0.2.0", "win-x64")
-            win = release_dir / "ugc-image-tool-0.2.0-win-x64.zip"
+            win = release_dir / "kacha-0.2.0-win-x64.zip"
             win.write_bytes(b"rebuilt")
             build_release.update_checksums(release_dir, "0.2.0")
             self.assertEqual(

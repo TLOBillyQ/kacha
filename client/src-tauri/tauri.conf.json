@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "UGC AI 生图工具",
-  "mainBinaryName": "ugc-image-tool",
+  "productName": "Kacha",
+  "mainBinaryName": "kacha",
   "identifier": "local.ugc.image-tool.v2",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "UGC AI 生图工具",
+        "title": "Kacha",
         "width": 1400,
         "height": 900,
         "dragDropEnabled": true

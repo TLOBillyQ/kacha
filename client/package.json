@@ -1,5 +1,5 @@
 {
-  "name": "ugc-image-tool-client",
+  "name": "kacha-client",
   "private": true,
   "type": "module",
   "scripts": {

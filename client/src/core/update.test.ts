@@ -9,8 +9,8 @@ const release = (tag: string, extra: Record<string, unknown> = {}) => ({
   prerelease: false,
   assets: [
     { name: "SHA256SUMS", browser_download_url: `http://x/${tag}/SHA256SUMS` },
-    { name: `ugc-image-tool-${tag.slice(1)}-win-x64.zip`, browser_download_url: `http://x/${tag}/win.zip` },
-    { name: `ugc-image-tool-${tag.slice(1)}-macos-arm64.zip`, browser_download_url: `http://x/${tag}/mac.zip` },
+    { name: `kacha-${tag.slice(1)}-win-x64.zip`, browser_download_url: `http://x/${tag}/win.zip` },
+    { name: `kacha-${tag.slice(1)}-macos-arm64.zip`, browser_download_url: `http://x/${tag}/mac.zip` },
   ],
   ...extra,
 });
@@ -63,7 +63,7 @@ describe("解析 Gitea 最新 Release", () => {
   });
 
   it("本平台附件缺失或平台未知时只给页面", () => {
-    const noWin = release("v0.3.0", { assets: [{ name: "ugc-image-tool-0.3.0-macos-arm64.zip", browser_download_url: "http://x/mac.zip" }] });
+    const noWin = release("v0.3.0", { assets: [{ name: "kacha-0.3.0-macos-arm64.zip", browser_download_url: "http://x/mac.zip" }] });
     expect(parseLatestRelease(noWin, "win-x64")?.downloadUrl).toBeNull();
     expect(parseLatestRelease(release("v0.3.0"), "other")?.downloadUrl).toBeNull();
   });

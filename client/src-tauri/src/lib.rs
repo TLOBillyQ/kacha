@@ -21,7 +21,7 @@ const UI_STATE_FILE: &str = "ui-state.json";
 pub(crate) const CAPABILITY_OVERRIDE_FILE: &str = "capabilities.override.json";
 pub(crate) const SETTINGS_FILE: &str = "settings.json";
 const MODELS_CACHE_FILE: &str = "models-cache.json";
-/// 与 v1 保持一致的默认输出根目录名（图片目录下）。
+/// 与 v1 保持一致的默认输出根目录名（图片目录下）；产品更名 Kacha 后仍沿用，避免已有用户的输出根目录换位置。
 const DEFAULT_OUTPUT_DIR_NAME: &str = "UGC AI 生图工具";
 
 fn err(e: impl std::fmt::Display) -> String {

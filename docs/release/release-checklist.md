@@ -1,8 +1,8 @@
 # 发布验收清单（v2 Tauri 客户端）
 
 分发决策见 `docs/adr/0007-gitea-release-as-sole-distribution-channel.md`。
-Gitea Release 只挂三个附件：`ugc-image-tool-<版本>-win-x64.zip`、
-`ugc-image-tool-<版本>-macos-arm64.zip`、`SHA256SUMS`，tag 为 `v<版本>`。
+Gitea Release 只挂三个附件：`kacha-<版本>-win-x64.zip`、
+`kacha-<版本>-macos-arm64.zip`、`SHA256SUMS`，tag 为 `v<版本>`。
 执行人逐条勾选，并在末尾「记录」表中留痕。
 
 ## 1. 定版本
@@ -33,9 +33,9 @@ Tauri 不能交叉构建，Windows 包在 Windows x64 机器上构建，macOS �
     python3 packaging/build_release.py --skip-npm-ci  # 已装好依赖时
 
 - [ ] 构建前 `release/` 中没有旧版本压缩包（脚本会拒绝）。
-- [ ] Windows：`release/ugc-image-tool-<版本>-win-x64.zip` 内只有 `ugc-image-tool.exe`。
-- [ ] macOS：`codesign --verify --deep --strict` 通过；`release/ugc-image-tool-<版本>-macos-arm64.zip`
-      由 `ditto` 生成，访达双击解压后得到 `UGC AI 生图工具.app`。
+- [ ] Windows：`release/kacha-<版本>-win-x64.zip` 内只有 `kacha.exe`。
+- [ ] macOS：`codesign --verify --deep --strict` 通过；`release/kacha-<版本>-macos-arm64.zip`
+      由 `ditto` 生成，访达双击解压后得到 `Kacha.app`。
 - [ ] `release/SHA256SUMS` 列出本机压缩包。
 
 ## 4. 发布说明
@@ -59,7 +59,7 @@ Tauri 不能交叉构建，Windows 包在 Windows x64 机器上构建，macOS �
 
 在一台干净的机器上从 Gitea Release 页面下载全部附件：
 
-- [ ] Windows：`Get-FileHash -Algorithm SHA256 -Path .\ugc-image-tool-<版本>-win-x64.zip` 与 `SHA256SUMS` 一致。
+- [ ] Windows：`Get-FileHash -Algorithm SHA256 -Path .\kacha-<版本>-win-x64.zip` 与 `SHA256SUMS` 一致。
 - [ ] macOS：`shasum -a 256 -c SHA256SUMS --ignore-missing` 显示 `OK`。
 - [ ] `SHA256SUMS` 同时包含两个平台的压缩包条目。
 - [ ] Release 正文与 `release-notes-<版本>.md` 一致。
@@ -80,7 +80,7 @@ Tauri 不能交叉构建，Windows 包在 Windows x64 机器上构建，macOS �
 ### macOS（Apple Silicon）
 
 - [ ] 访达解压并拖入「应用程序」；右键「打开」或「隐私与安全性 → 仍要打开」可放行。
-- [ ] `xattr -dr com.apple.quarantine "/Applications/UGC AI 生图工具.app"` 方式同样有效。
+- [ ] `xattr -dr com.apple.quarantine "/Applications/Kacha.app"` 方式同样有效。
 - [ ] **打开画板**：把 `.ugcboard.json` 拖到窗口可打开；拖到程序坞图标上时应用启动并打开该画板
       （走 `RunEvent::Opened`，前端就绪前到达的路径不丢）。
 - [ ] 文生图、图片编辑、画板保存/重新打开各跑通一次。

@@ -40,7 +40,7 @@ export function DiagnosticsSection({ outputRoot, openBoards }: { outputRoot: str
     });
 
   const exportPackage = async () => {
-    const picked = await save({ defaultPath: `ugc-image-tool-diagnostics-${stamp(new Date())}.zip`, filters: [{ name: "诊断包", extensions: ["zip"] }] });
+    const picked = await save({ defaultPath: `kacha-diagnostics-${stamp(new Date())}.zip`, filters: [{ name: "诊断包", extensions: ["zip"] }] });
     if (!picked) return;
     const target = picked.toLowerCase().endsWith(".zip") ? picked : `${picked}.zip`;
     setExporting(true);

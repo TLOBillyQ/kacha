@@ -58,8 +58,8 @@ class TauriVersionTest(unittest.TestCase):
 
 class NamingTest(unittest.TestCase):
     def test_zip_names(self) -> None:
-        self.assertEqual(zip_name("0.2.0", "win-x64"), "ugc-image-tool-0.2.0-win-x64.zip")
-        self.assertEqual(zip_name("0.2.0", "macos-arm64"), "ugc-image-tool-0.2.0-macos-arm64.zip")
+        self.assertEqual(zip_name("0.2.0", "win-x64"), "kacha-0.2.0-win-x64.zip")
+        self.assertEqual(zip_name("0.2.0", "macos-arm64"), "kacha-0.2.0-macos-arm64.zip")
         self.assertEqual(release_meta.CHECKSUMS_NAME, "SHA256SUMS")
         with self.assertRaises(ValueError):
             zip_name("0.2.0", "linux-x64")
@@ -68,14 +68,14 @@ class NamingTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             release_dir = Path(temp)
             for name in (
-                "ugc-image-tool-0.2.0-win-x64.zip",
-                "ugc-image-tool-0.1.0-win-x64.zip",
+                "kacha-0.2.0-win-x64.zip",
+                "kacha-0.1.0-win-x64.zip",
                 "random.zip",
             ):
                 (release_dir / name).write_bytes(b"x")
             self.assertEqual(
                 foreign_zips(release_dir, "0.2.0"),
-                ["random.zip", "ugc-image-tool-0.1.0-win-x64.zip"],
+                ["kacha-0.1.0-win-x64.zip", "random.zip"],
             )
             self.assertEqual(foreign_zips(release_dir / "missing", "0.2.0"), [])
 

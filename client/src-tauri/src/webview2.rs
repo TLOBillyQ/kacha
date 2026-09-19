@@ -12,11 +12,11 @@ fn wide(s: &str) -> Vec<u16> {
 
 pub fn explain_missing() {
     let text = wide(&format!(
-        "本机缺少 Microsoft Edge WebView2 运行时，UGC AI 生图工具无法启动。\n\n\
+        "本机缺少 Microsoft Edge WebView2 运行时，Kacha 无法启动。\n\n\
          请从微软官方下载并安装「Evergreen Bootstrapper」后重新打开本工具：\n{DOWNLOAD_URL}\n\n\
          现在打开下载页吗？"
     ));
-    let caption = wide("UGC AI 生图工具：缺少 WebView2");
+    let caption = wide("Kacha：缺少 WebView2");
     // SAFETY：两个字符串都以 NUL 结尾且在调用期间存活；无父窗口。
     let answer = unsafe { MessageBoxW(std::ptr::null_mut(), text.as_ptr(), caption.as_ptr(), MB_YESNO | MB_ICONERROR) };
     if answer == IDYES {

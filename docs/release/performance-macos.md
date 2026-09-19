@@ -14,13 +14,13 @@
 2. **空闲内存（RSS）**：启动后打开空画板，静置 60 秒，记录应用全部相关进程 RSS 之和：
    macOS 用「活动监视器」（“内存”列，含 WebKit `WebContent` 等子进程），或
    `ps -axo rss,comm | grep -i -E 'ugc|WebKit'`（单位 KB）；
-   Windows 用任务管理器「详细信息」页中 `ugc-image-tool.exe` 与其 `msedgewebview2.exe` 子进程的「内存（专用工作集）」之和。
+   Windows 用任务管理器「详细信息」页中 `kacha.exe` 与其 `msedgewebview2.exe` 子进程的「内存（专用工作集）」之和。
 3. **50 节点画板内存（RSS）**：打开含 50 个图片节点的 `.ugcboard.json`（图片分辨率记录在备注中），
    等缩略图全部加载完成后静置 60 秒，按第 2 步方法记录。
-4. **`.app` 大小**：`du -sh "/Applications/UGC AI 生图工具.app"`。
-5. **zip 大小**：`ls -l release/ugc-image-tool-<版本>-macos-arm64.zip`；
-   Windows：`(Get-Item release\ugc-image-tool-<版本>-win-x64.zip).Length` 与
-   `(Get-Item client\src-tauri\target\release\ugc-image-tool.exe).Length`。
+4. **`.app` 大小**：`du -sh "/Applications/Kacha.app"`。
+5. **zip 大小**：`ls -l release/kacha-<版本>-macos-arm64.zip`；
+   Windows：`(Get-Item release\kacha-<版本>-win-x64.zip).Length` 与
+   `(Get-Item client\src-tauri\target\release\kacha.exe).Length`。
 
 ## 结果
 

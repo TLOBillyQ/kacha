@@ -66,7 +66,7 @@ export function parseLatestRelease(json: unknown, platform: Platform): ReleaseIn
   if (r.draft === true || r.prerelease === true) return null;
   const version = r.tag_name.trim().replace(/^v/, "");
   const pageUrl = typeof r.html_url === "string" && r.html_url ? r.html_url : RELEASES_PAGE_URL;
-  const expected = `ugc-image-tool-${version}-${platform}.zip`;
+  const expected = `kacha-${version}-${platform}.zip`;
   const assets = Array.isArray(r.assets) ? (r.assets as GiteaAsset[]) : [];
   const hit = platform === "other" ? undefined : assets.find((a) => a.name === expected && typeof a.browser_download_url === "string");
   return { version, pageUrl, downloadUrl: hit ? (hit.browser_download_url as string) : null };

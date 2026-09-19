@@ -9,8 +9,8 @@
 
 Gitea Release（tag `v<版本>`）只挂三个附件：
 
-    ugc-image-tool-<版本>-win-x64.zip      # 内含单个 ugc-image-tool.exe
-    ugc-image-tool-<版本>-macos-arm64.zip  # 内含 UGC AI 生图工具.app（ad-hoc 签名）
+    kacha-<版本>-win-x64.zip      # 内含单个 kacha.exe
+    kacha-<版本>-macos-arm64.zip  # 内含 Kacha.app（ad-hoc 签名）
     SHA256SUMS
 
 本地输出在仓库根目录 `release/`（已被 .gitignore 忽略）。

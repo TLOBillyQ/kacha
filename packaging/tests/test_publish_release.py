@@ -17,8 +17,8 @@ import publish_release
 
 VERSION = "1.2.3"
 TOKEN = "test-token"
-WIN_ZIP = f"ugc-image-tool-{VERSION}-win-x64.zip"
-MAC_ZIP = f"ugc-image-tool-{VERSION}-macos-arm64.zip"
+WIN_ZIP = f"kacha-{VERSION}-win-x64.zip"
+MAC_ZIP = f"kacha-{VERSION}-macos-arm64.zip"
 
 
 class FakeGitea:
@@ -166,7 +166,7 @@ class PublishTest(unittest.TestCase):
 
     def test_refuses_zip_from_another_version(self) -> None:
         release_dir = make_release_dir(self.root / "win", VERSION, "win-x64")
-        (release_dir / "ugc-image-tool-0.0.1-win-x64.zip").write_bytes(b"stale")
+        (release_dir / "kacha-0.0.1-win-x64.zip").write_bytes(b"stale")
         code, _ = run_publish(self.repo, release_dir, self.gitea)
         self.assertIn("0.0.1", str(code))
         self.assertIn(VERSION, str(code))

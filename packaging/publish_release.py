@@ -2,8 +2,8 @@
 
 Gitea Release 是唯一分发渠道，只挂三个附件：
 
-    ugc-image-tool-<版本>-win-x64.zip
-    ugc-image-tool-<版本>-macos-arm64.zip
+    kacha-<版本>-win-x64.zip
+    kacha-<版本>-macos-arm64.zip
     SHA256SUMS
 
 两端各在对应机器用 build_release.py 构建，构建后各跑一次本脚本：创建或复用

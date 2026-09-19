@@ -4,8 +4,8 @@
 
 - 版本号唯一来源是 client/src-tauri/Cargo.toml 的 [package] version；
   tauri.conf.json 若也写了 version，必须与之相同，否则直接报错。
-- 发布产物命名：ugc-image-tool-<版本>-win-x64.zip、
-  ugc-image-tool-<版本>-macos-arm64.zip、SHA256SUMS。
+- 发布产物命名：kacha-<版本>-win-x64.zip、
+  kacha-<版本>-macos-arm64.zip、SHA256SUMS。
 - SHA256SUMS 解析、写出、合并与核对。
 """
 
@@ -17,7 +17,7 @@ import re
 import tomllib
 from pathlib import Path
 
-ARCHIVE_BASE = "ugc-image-tool"
+ARCHIVE_BASE = "kacha"
 WIN_X64 = "win-x64"
 MACOS_ARM64 = "macos-arm64"
 PLATFORMS = (WIN_X64, MACOS_ARM64)

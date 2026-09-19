@@ -18,10 +18,10 @@ def make_repo(root: Path, version: str = "1.2.3", conf_version: str | None = Non
     tauri_dir = root / "client" / "src-tauri"
     tauri_dir.mkdir(parents=True, exist_ok=True)
     (tauri_dir / "Cargo.toml").write_text(
-        f'[package]\nname = "ugc-image-tool"\nversion = "{version}"\nedition = "2021"\n',
+        f'[package]\nname = "kacha"\nversion = "{version}"\nedition = "2021"\n',
         encoding="utf-8",
     )
-    conf: dict[str, object] = {"productName": "UGC AI 生图工具"}
+    conf: dict[str, object] = {"productName": "Kacha"}
     if conf_version is not None:
         conf["version"] = conf_version
     (tauri_dir / "tauri.conf.json").write_text(json.dumps(conf, ensure_ascii=False), encoding="utf-8")
@@ -29,7 +29,7 @@ def make_repo(root: Path, version: str = "1.2.3", conf_version: str | None = Non
         notes_dir = root / "docs" / "release"
         notes_dir.mkdir(parents=True, exist_ok=True)
         (notes_dir / f"release-notes-{version}.md").write_text(
-            f"# UGC AI 生图工具 {version}\n\n首次运行：更多信息 → 仍要运行；macOS 右键「打开」。\n",
+            f"# Kacha {version}\n\n首次运行：更多信息 → 仍要运行；macOS 右键「打开」。\n",
             encoding="utf-8",
         )
     return root
@@ -41,7 +41,7 @@ def make_release_dir(root: Path, version: str, *platforms: str) -> Path:
     release_dir.mkdir(parents=True, exist_ok=True)
     lines: list[str] = []
     for platform in platforms:
-        name = f"ugc-image-tool-{version}-{platform}.zip"
+        name = f"kacha-{version}-{platform}.zip"
         data = f"fake zip {platform}".encode("utf-8")
         (release_dir / name).write_bytes(data)
         lines.append(f"{hashlib.sha256(data).hexdigest()}  {name}")
