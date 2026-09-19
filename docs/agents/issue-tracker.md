@@ -1,10 +1,10 @@
 # Issue tracker: Gitea
 
-Issues and specs for this repo live in Gitea Issues at `http://lzxsvn:3000/qinyuanj/ugc-image-tool`. All issue reads and writes go through the authenticated `tea` CLI.
+Issues and specs for this repo live in Gitea Issues at `http://lzxsvn:3000/qinyuanj/kacha`. All issue reads and writes go through the authenticated `tea` CLI.
 
 ## CLI
 
-Run `tea` inside the repo directory; the target repository is resolved from the git remote. When repository discovery fails, check `tea logins list`, or pass `-l`, `-R`, `-r` explicitly — in automation, prefer explicit `--login lzxsvn --repo qinyuanj/ugc-image-tool` over relying on discovery.
+Run `tea` inside the repo directory; the target repository is resolved from the git remote. When repository discovery fails, check `tea logins list`, or pass `-l`, `-R`, `-r` explicitly — in automation, prefer explicit `--login lzxsvn --repo qinyuanj/kacha` over relying on discovery.
 
 ## Workflow
 
@@ -85,7 +85,7 @@ EOF
 
   ```bash
   tea api /repos/{owner}/{repo}/issues/<idx>/dependencies
-  tea api -X POST -d '{"index":<blocker>,"owner":"qinyuanj","repo":"ugc-image-tool"}' \
+  tea api -X POST -d '{"index":<blocker>,"owner":"qinyuanj","repo":"kacha"}' \
     /repos/{owner}/{repo}/issues/<idx>/dependencies
   ```
 

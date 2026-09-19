@@ -4,8 +4,8 @@
 
 import type { FetchLike } from "./gateway";
 
-export const RELEASES_PAGE_URL = "http://lzxsvn:3000/qinyuanj/ugc-image-tool/releases";
-export const LATEST_RELEASE_API_URL = "http://lzxsvn:3000/api/v1/repos/qinyuanj/ugc-image-tool/releases/latest";
+export const RELEASES_PAGE_URL = "http://lzxsvn:3000/qinyuanj/kacha/releases";
+export const LATEST_RELEASE_API_URL = "http://lzxsvn:3000/api/v1/repos/qinyuanj/kacha/releases/latest";
 
 export type Platform = "win-x64" | "macos-arm64" | "other";
 

@@ -53,7 +53,7 @@ from release_meta import (  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_BASE_URL = "http://lzxsvn:3000"
-OWNER_REPO = "qinyuanj/ugc-image-tool"
+OWNER_REPO = "qinyuanj/kacha"
 
 
 def collect_local_zips(release_dir: Path, version: str) -> list[Path]:

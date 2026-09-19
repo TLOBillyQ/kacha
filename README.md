@@ -6,7 +6,7 @@
 
 ## 下载与安装
 
-到 [Gitea Releases](http://lzxsvn:3000/qinyuanj/ugc-image-tool/releases) 下载最新版本，解压即用，无需安装：
+到 [Gitea Releases](http://lzxsvn:3000/qinyuanj/kacha/releases) 下载最新版本，解压即用，无需安装：
 
 | 附件 | 适用平台 |
 | --- | --- |
@@ -38,7 +38,7 @@
 - 网关契约：[docs/contracts/team-gateway-contract.md](docs/contracts/team-gateway-contract.md)，夹具与冒烟脚本在 `contracts/`
 - 模型选型：[docs/model-matrix.md](docs/model-matrix.md)
 - 发布流程：[docs/release/release-checklist.md](docs/release/release-checklist.md)、[packaging/README.md](packaging/README.md)
-- 需求与缺陷：[Gitea Issues](http://lzxsvn:3000/qinyuanj/ugc-image-tool/issues)
+- 需求与缺陷：[Gitea Issues](http://lzxsvn:3000/qinyuanj/kacha/issues)
 
 ## 开发
 
@@ -59,4 +59,4 @@ python3 -m unittest discover -s packaging/tests    # 打包脚本测试
 
 ## v1
 
-v1 PySide6 客户端（最后发布 `v0.1.0`）已从 main 移除，完整代码、测试、打包脚本与用户手册保存在 [`archive/v1`](http://lzxsvn:3000/qinyuanj/ugc-image-tool/src/branch/archive/v1) 分支，清单见该分支的 `V1-INVENTORY.md`。
+v1 PySide6 客户端（最后发布 `v0.1.0`）已从 main 移除，完整代码、测试、打包脚本与用户手册保存在 [`archive/v1`](http://lzxsvn:3000/qinyuanj/kacha/src/branch/archive/v1) 分支，清单见该分支的 `V1-INVENTORY.md`。

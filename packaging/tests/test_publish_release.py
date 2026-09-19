@@ -117,7 +117,7 @@ class PublishTest(unittest.TestCase):
         code, _ = run_publish(self.repo, release_dir, self.gitea)
         self.assertEqual(code, 0)
         self.assertEqual(
-            self.gitea.created_with, [("http://lzxsvn:3000", TOKEN, "qinyuanj/ugc-image-tool")]
+            self.gitea.created_with, [("http://lzxsvn:3000", TOKEN, "qinyuanj/kacha")]
         )
         release = self.gitea.releases[f"v{VERSION}"]
         self.assertEqual(release["name"], VERSION)

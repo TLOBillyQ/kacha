@@ -4,7 +4,7 @@ import { checkForUpdate, compareVersions, detectPlatform, parseLatestRelease, pa
 
 const release = (tag: string, extra: Record<string, unknown> = {}) => ({
   tag_name: tag,
-  html_url: `http://lzxsvn:3000/qinyuanj/ugc-image-tool/releases/tag/${tag}`,
+  html_url: `http://lzxsvn:3000/qinyuanj/kacha/releases/tag/${tag}`,
   draft: false,
   prerelease: false,
   assets: [
@@ -58,7 +58,7 @@ describe("平台识别", () => {
 describe("解析 Gitea 最新 Release", () => {
   it("取版本号、页面与本平台附件", () => {
     const info = parseLatestRelease(release("v0.3.0"), "macos-arm64");
-    expect(info).toEqual({ version: "0.3.0", pageUrl: "http://lzxsvn:3000/qinyuanj/ugc-image-tool/releases/tag/v0.3.0", downloadUrl: "http://x/v0.3.0/mac.zip" });
+    expect(info).toEqual({ version: "0.3.0", pageUrl: "http://lzxsvn:3000/qinyuanj/kacha/releases/tag/v0.3.0", downloadUrl: "http://x/v0.3.0/mac.zip" });
     expect(parseLatestRelease(release("v0.3.0"), "win-x64")?.downloadUrl).toBe("http://x/v0.3.0/win.zip");
   });
 
