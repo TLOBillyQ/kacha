@@ -5,7 +5,7 @@ import type { BoardAction, MenuTarget } from "../core/contextMenu";
 import type { BoardChange } from "../core/edit";
 import { resolveFromRoot } from "../core/paths";
 import type { TaskStatus } from "../core/run";
-import { interruptedCandidates, storedStatuses } from "../core/submission";
+import { createInterruptedLog, interruptedCandidates, storedStatuses } from "../core/submission";
 import type { TaskFs } from "../core/taskDir";
 import { taskFs } from "../shell/adapters";
 import { ipc, type ImageInfo } from "../shell/ipc";
@@ -139,8 +139,8 @@ const cachedReadFs: Pick<TaskFs, "readFile"> = {
   },
 };
 
-/** 已中断只在本次运行里首次发现时记一次日志。 */
-const loggedInterrupted = new Set<string>();
+/** 已中断只在本次运行里首次发现时记一次日志（去重规则见 core/submission.ts 的 createInterruptedLog）。 */
+const interruptedLog = createInterruptedLog();
 
 /**
  * 本次运行没经手过、提交过却没有结果的任务的状态（规则在 core/submission.ts 的 storedStatuses）。读完之前不显示徽标。
@@ -150,12 +150,8 @@ export function useStoredStatuses(board: Board, boardFile: string, outputRoot: s
   const signature = JSON.stringify([outputRoot, boardFile, interruptedCandidates(board, handled)]);
   useEffect(() => {
     let alive = true;
-    void storedStatuses(cachedReadFs, board, handled, outputRoot, boardFile).then(({ statuses, newlyInterrupted }) => {
-      for (const event of newlyInterrupted) {
-        if (loggedInterrupted.has(event.task_id)) continue;
-        loggedInterrupted.add(event.task_id);
-        logEvent("task", { ...event });
-      }
+    void storedStatuses(cachedReadFs, board, handled, outputRoot, boardFile).then(({ statuses, interruptedEvents }) => {
+      for (const event of interruptedLog.take(interruptedEvents)) logEvent("task", { ...event });
       if (alive) setStatuses(statuses);
     });
     return () => {

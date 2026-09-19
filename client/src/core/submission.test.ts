@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Board, BoardEdge, BoardNode, TaskNode } from "./board";
 import { BUILTIN_TABLE } from "./capabilities";
 import { imageSources } from "./graph";
-import { buildConfirmItems, collectRunFacts, isDirty, isInterrupted, runDispatch, runScope, snapshotOf, storedStatuses, withSubmitted, type ConfirmItem } from "./submission";
+import { buildConfirmItems, collectRunFacts, createInterruptedLog, isDirty, isInterrupted, runDispatch, runScope, snapshotOf, storedStatuses, withSubmitted, type ConfirmItem } from "./submission";
 import { taskDirOfTaskId, writeOutcome } from "./taskDir";
 import type { UnrunnableReason } from "./taskView";
 import { memoryTaskFs } from "./testing/memoryTaskFs";
@@ -322,11 +322,40 @@ describe("已存状态", () => {
 
   it("已中断产出一条 running → interrupted 的日志事件；本次运行经手过的不算候选", async () => {
     const fs = await outcomesFs();
-    const { newlyInterrupted } = await storedStatuses(fs, submittedTasks(), new Set(), "/root", "猫.ugcboard.json");
-    expect(newlyInterrupted).toEqual([{ task_id: NO_RECORD, board_file: "猫.ugcboard.json", task_node_id: "t3", from_status: "running", to_status: "interrupted" }]);
+    const { interruptedEvents } = await storedStatuses(fs, submittedTasks(), new Set(), "/root", "猫.ugcboard.json");
+    expect(interruptedEvents).toEqual([{ task_id: NO_RECORD, board_file: "猫.ugcboard.json", task_node_id: "t3", from_status: "running", to_status: "interrupted" }]);
     const handled = await storedStatuses(fs, submittedTasks(), new Set([NO_RECORD]), "/root", "猫.ugcboard.json");
     expect(handled.statuses.has("t3")).toBe(false);
-    expect(handled.newlyInterrupted).toEqual([]);
+    expect(handled.interruptedEvents).toEqual([]);
+  });
+
+  describe("已中断日志去重", () => {
+    const event = (taskId: string, boardFile = "猫.ugcboard.json") =>
+      ({ task_id: taskId, board_file: boardFile, task_node_id: "t", from_status: "running", to_status: "interrupted" }) as const;
+
+    it("同一 task_id 多次发现只返回一次", () => {
+      const log = createInterruptedLog();
+      expect(log.take([event("a")])).toEqual([event("a")]);
+      expect(log.take([event("a")])).toEqual([]);
+      expect(log.take([event("a"), event("a")])).toEqual([]);
+    });
+
+    it("不同 task_id 各返回一次；同一批里重复的只留首次", () => {
+      const log = createInterruptedLog();
+      expect(log.take([event("a"), event("b"), event("a")])).toEqual([event("a"), event("b")]);
+      expect(log.take([event("b"), event("c")])).toEqual([event("c")]);
+    });
+
+    it("多画板共用同一记录器时仍只记一次", () => {
+      const log = createInterruptedLog();
+      expect(log.take([event("a", "猫.ugcboard.json")])).toEqual([event("a", "猫.ugcboard.json")]);
+      expect(log.take([event("a", "狗.ugcboard.json"), event("b", "狗.ugcboard.json")])).toEqual([event("b", "狗.ugcboard.json")]);
+    });
+
+    it("各记录器互不影响", () => {
+      createInterruptedLog().take([event("a")]);
+      expect(createInterruptedLog().take([event("a")])).toEqual([event("a")]);
+    });
   });
 });
 

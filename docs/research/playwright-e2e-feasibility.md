@@ -112,7 +112,7 @@
 | 17 | 运行前缺图判定 | b | `submission.test.ts`「运行前事实采集：逐张探测参考图…探测抛任何错（缺失或不可解码）都算缺失」，`taskView.test.ts`「参考图文件缺失」 |
 | 18 | 运行前透明通道判定 | b | 同 #6，外加 `submission.test.ts`「透明背景：二次确认标红」；解析本身在 Rust `image_info.rs` |
 | 19 | 重开画板后显示失败 / 已取消 / 已中断徽标 | a | 规则已由 `submission.test.ts`「已存状态」覆盖。需要验证的是关标签 → 再打开 → `useStoredStatuses` 读 `outcome.json` → 徽标渲染（`nodes.tsx:378`）。假壳的内存文件系统预置 `outcome.json` 即可 |
-| 20 | 中断日志只记一次 | a | 去重逻辑在 `ui/context.ts` 的模块级 `loggedInterrupted` Set，**core 测不到**（core 只证「产出一条事件」）。e2e 统计假壳收到的 `log_event` 次数，同时反复关开画板。**更好的做法是把去重下沉到 core 转成 (b)**，需要单独开 issue |
+| 20 | 中断日志只记一次 | b | 去重已由 #130 下沉到 core：`submission.test.ts`「已中断日志去重」（`createInterruptedLog`）。e2e 统计假壳收到的 `log_event` 次数、反复关开画板，保留作接线冒烟 |
 | 21 | 设置：保存密钥（写进系统凭据库） | c | `secret.rs` 没有测试，真正要验证的是 macOS Keychain 的读写、权限弹窗和重启后仍在。假壳下只能验 UI 调了 `secret_set` |
 | 22 | 设置：测试连接成功 / 失败 | a | `settings.test.ts`「刷新模型列表」覆盖了成功、失败回落缓存和日志。e2e 用 `page.route` 回 200 或 401 / 超时，断言界面文案。连真网关放到发版冒烟 |
 | 23 | 设置文件较新时只存密钥 | b | `settings.test.ts`「文件由更新版本写入（newer）时不写 settings.json，但仍存密钥」「更新版本拒开…界面禁止覆盖保存」 |

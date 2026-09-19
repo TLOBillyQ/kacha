@@ -112,7 +112,7 @@ export function interruptedCandidates(board: Board, handled: ReadonlySet<string>
 /** 重开后推导出的任务状态：有结局记录按记录，没有 = 已中断。 */
 export type StoredStatus = TaskOutcome | { kind: "interrupted" };
 
-/** 推导出已中断时要记的日志事件（task 类别）；「每个 task_id 只记一次」的去重归调用方。 */
+/** 推导出已中断时要记的日志事件（task 类别）；「每个 task_id 只记一次」的去重见 createInterruptedLog。 */
 export interface InterruptedEvent {
   task_id: string;
   board_file: string;
@@ -131,16 +131,34 @@ export async function storedStatuses(
   handled: ReadonlySet<string>,
   outputRoot: string,
   boardFile: string,
-): Promise<{ statuses: Map<string, StoredStatus>; newlyInterrupted: InterruptedEvent[] }> {
-  const newlyInterrupted: InterruptedEvent[] = [];
+): Promise<{ statuses: Map<string, StoredStatus>; interruptedEvents: InterruptedEvent[] }> {
+  const interruptedEvents: InterruptedEvent[] = [];
   const entries = await Promise.all(
     interruptedCandidates(board, handled).map(async ([nodeId, taskId]) => {
       const outcome = await readOutcome(fs, outputRoot, taskId);
-      if (!outcome) newlyInterrupted.push({ task_id: taskId, board_file: boardFile, task_node_id: nodeId, from_status: "running", to_status: "interrupted" });
+      if (!outcome) interruptedEvents.push({ task_id: taskId, board_file: boardFile, task_node_id: nodeId, from_status: "running", to_status: "interrupted" });
       return [nodeId, outcome ?? { kind: "interrupted" as const }] as const;
     }),
   );
-  return { statuses: new Map(entries), newlyInterrupted };
+  return { statuses: new Map(entries), interruptedEvents };
+}
+
+/** 已中断日志的去重：本次运行里每个 task_id 只记一次（跨画板共用，一个应用实例一份）。 */
+export interface InterruptedLog {
+  /** 返回其中本次运行首次出现的 task_id 对应的事件（同一批里重复的只留首次），并记下这些 task_id。 */
+  take(events: readonly InterruptedEvent[]): InterruptedEvent[];
+}
+
+export function createInterruptedLog(): InterruptedLog {
+  const logged = new Set<string>();
+  return {
+    take: (events) =>
+      events.filter((event) => {
+        if (logged.has(event.task_id)) return false;
+        logged.add(event.task_id);
+        return true;
+      }),
+  };
 }
 
 /** 有选中时只跑选中子图（选中的任务 + 选中节点直接下游的任务），否则整个画板；跳过不脏的已执行任务与正在排队 / 执行的。 */
