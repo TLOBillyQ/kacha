@@ -23,7 +23,7 @@ def _decode_and_sanitize(body, content_type):
     if "multipart/" in ct: return "[REDACTED_MULTIPART_BODY]"
     return "[REDACTED_NON_JSON_BODY]"
 BASE = "http://lzxsvn:3001"
-KEY = os.environ.get("UGC_IMAGE_TOOL_GATEWAY_API_KEY") or open(os.path.expanduser(os.environ.get("UGC_IMAGE_TOOL_GATEWAY_KEY_FILE", "../../../.scratch/gateway.key"))).read().strip()
+KEY = os.environ.get("KACHA_GATEWAY_API_KEY") or open(os.path.expanduser(os.environ.get("KACHA_GATEWAY_KEY_FILE", "../../../.scratch/gateway.key"))).read().strip()
 def durl(p):
     return "data:image/png;base64," + base64.b64encode(open(p,"rb").read()).decode()
 def run(name, body, path="/v1/images/edits"):
