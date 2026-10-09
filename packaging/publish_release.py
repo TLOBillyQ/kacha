@@ -259,7 +259,7 @@ def remote_checksums_text(api: ReleaseApi, release_id: int) -> str | None:
 
 
 def replace_checksums_with_remote(api: ReleaseApi, release_id: int,
-                                  release_dir: Path) -> bytes:
+                                  release_dir: Path, descriptor: Path) -> bytes:
     """Remote SHA256SUMS wins for entries whose attached bytes were unchanged."""
     entries: dict[str, str] = {}
     for name, digest in read_checksums(release_dir / CHECKSUMS_NAME).items():
@@ -273,6 +273,8 @@ def replace_checksums_with_remote(api: ReleaseApi, release_id: int,
         url = str(asset.get("browser_download_url") or "")
         if url:
             entries[name] = hashlib.sha256(api.download_url(url)).hexdigest()
+    # The ready descriptor is generated after building and has not been uploaded yet.
+    entries[descriptor.name] = hashlib.sha256(descriptor.read_bytes()).hexdigest()
     from release_meta import format_checksums
     return format_checksums(entries).encode("utf-8")
 
@@ -318,7 +320,7 @@ def publish(api: ReleaseApi, release_dir: Path, version: str, body: str,
                                   separators=(",", ":"), sort_keys=True).encode("utf-8") + b"\n"
     (release_dir / descriptor).write_bytes(descriptor_bytes)
 
-    merged = replace_checksums_with_remote(api, release_id, release_dir)
+    merged = replace_checksums_with_remote(api, release_id, release_dir, release_dir / descriptor)
     upload_replace(api, release_id, CHECKSUMS_NAME, merged)
     upload_replace(api, release_id, descriptor, descriptor_bytes)
 

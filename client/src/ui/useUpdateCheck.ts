@@ -2,6 +2,7 @@
 // 顶栏与高级设置共用同一实例；3 秒首检 + 6 小时循环由核心流程调度。
 import { useEffect, useMemo, useSyncExternalStore } from "react";
 import { createUpdateFlow, type UpdateFlowPorts } from "../core/updateFlow";
+import { detectPlatform, RELEASES_PAGE_URL } from "../core/update";
 import { openExternal, updateFlowPorts } from "../shell/adapters";
 
 export function useUpdateCheck(protection: Pick<UpdateFlowPorts, "restartGuard" | "restartReleased">) {
@@ -13,6 +14,10 @@ export function useUpdateCheck(protection: Pick<UpdateFlowPorts, "restartGuard" 
   const available = state.version
     ? { version: state.version, notes: state.notes, pageUrl: state.pageUrl, downloadUrl: state.downloadUrl }
     : null;
+  // macOS 的 updater tar.gz 不用于手动安装；Release 页面提供首次安装 zip。
+  const manualDownloadUrl = detectPlatform(navigator.userAgent) === "macos-arm64"
+    ? state.pageUrl
+    : state.downloadUrl ?? state.pageUrl;
 
   return {
     state,
@@ -20,6 +25,6 @@ export function useUpdateCheck(protection: Pick<UpdateFlowPorts, "restartGuard" 
     available,
     check: flow.checkManual,
     requestInstall: flow.requestInstall,
-    openDownload: () => openExternal(state.downloadUrl ?? state.pageUrl ?? "http://lzxsvn:3000/qinyuanj/kacha/releases"),
+    openDownload: () => openExternal(manualDownloadUrl ?? RELEASES_PAGE_URL),
   };
 }
