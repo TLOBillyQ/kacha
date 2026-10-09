@@ -106,14 +106,6 @@ export function App() {
 
   const toast = useCallback((message: string) => setToastText(message), []);
   const pack = useBoardPack(outputRoot, boards, toast, gate);
-  const updateRestart = useCallback(async () => {
-    try {
-      const r = await prep.prepare();
-      toast(r.ok ? "准备就绪：画板与界面状态已保存（自动安装接入见 #12）" : r.reason);
-    } finally {
-      prep.release();
-    }
-  }, [prep, toast]);
   useEffect(() => {
     if (!toastText) return;
     const timer = setTimeout(() => setToastText(null), 4000);
@@ -444,14 +436,15 @@ export function App() {
             画板包 ▾
           </button>
           {update.available && (
-            <>
-              <button className="topbar-button topbar-update" title="打开下载页" onClick={update.openDownload}>
-                ⬇ 新版本 {update.available.version}
-              </button>
-              <button className="topbar-button" disabled={preparing} onClick={() => void updateRestart()}>
-                {preparing ? "正在准备更新…" : "重启并更新"}
-              </button>
-            </>
+            <button className="topbar-button topbar-update" title="查看更新" onClick={() => setSettingsOpen(true)}>
+              {update.state.phase === "ready"
+                ? "⬇ 重启并更新"
+                : update.state.phase === "downloading"
+                  ? `⬇ 下载中 ${update.state.progress ? Math.round((update.state.progress.done / (update.state.progress.total || 1)) * 100) : 0}%`
+                  : update.state.phase === "checking"
+                    ? "⬇ 检查中…"
+                    : `⬇ 新版本 ${update.available.version}`}
+            </button>
           )}
           <button className="topbar-button" onClick={() => setSettingsOpen(true)} disabled={!settings.loaded || !outputRoot}>
             ⚙ 高级设置

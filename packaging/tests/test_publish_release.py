@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import io
+import json
 import os
 import tempfile
 import unittest
@@ -17,8 +18,11 @@ import publish_release
 
 VERSION = "1.2.3"
 TOKEN = "test-token"
-WIN_ZIP = f"kacha-{VERSION}-win-x64.zip"
+WIN_ZIP = f"kacha-{VERSION}-win-x64-setup.exe"
 MAC_ZIP = f"kacha-{VERSION}-macos-arm64.zip"
+WIN_ASSETS = [WIN_ZIP, WIN_ZIP + ".sig", "updater-win-x64.json"]
+MAC_ASSETS = [MAC_ZIP, f"kacha-{VERSION}-macos-arm64.app.tar.gz",
+              f"kacha-{VERSION}-macos-arm64.app.tar.gz.sig", "updater-macos-arm64.json"]
 
 
 class FakeGitea:
@@ -68,7 +72,9 @@ class FakeGitea:
 
     def upload_asset(self, release_id: int, filename: str, data: bytes) -> None:
         self.calls.append(("upload_asset", release_id, filename))
-        url = f"fake://attachments/{self._next_asset}"
+        if filename == "fail.me":
+            raise publish_release.GiteaError("fake upload failure")
+        url = f"http://gitea.test/attachments/{self._next_asset}"
         self.assets[release_id][self._next_asset] = {
             "id": self._next_asset, "name": filename, "browser_download_url": url,
         }
@@ -122,8 +128,14 @@ class PublishTest(unittest.TestCase):
         release = self.gitea.releases[f"v{VERSION}"]
         self.assertEqual(release["name"], VERSION)
         self.assertIn("仍要运行", release["body"])
-        self.assertEqual(self.gitea.names(release["id"]), sorted([WIN_ZIP, "SHA256SUMS"]))
+        self.assertEqual(self.gitea.names(release["id"]), sorted([*WIN_ASSETS, "SHA256SUMS"]))
         self.assertEqual(self.gitea.data(release["id"], WIN_ZIP), (release_dir / WIN_ZIP).read_bytes())
+        descriptor = json.loads(self.gitea.data(release["id"], "updater-win-x64.json"))
+        self.assertEqual(descriptor["version"], VERSION)
+        payload = descriptor["platforms"]["windows-x86_64"]
+        installer_asset = next(a for a in self.gitea.list_assets(release["id"]) if a["name"] == WIN_ZIP)
+        self.assertEqual(payload["url"], installer_asset["browser_download_url"])
+        self.assertEqual(payload["signature"], (release_dir / (WIN_ZIP + ".sig")).read_text())
 
     def test_both_platforms_merge_into_one_release_idempotently(self) -> None:
         win_dir = make_release_dir(self.root / "win", VERSION, "win-x64")
@@ -132,15 +144,18 @@ class PublishTest(unittest.TestCase):
         self.assertEqual(run_publish(self.repo, mac_dir, self.gitea)[0], 0)
         self.assertEqual(len(self.gitea.releases), 1)
         release_id = self.gitea.releases[f"v{VERSION}"]["id"]
-        self.assertEqual(self.gitea.names(release_id), sorted([WIN_ZIP, MAC_ZIP, "SHA256SUMS"]))
+        self.assertEqual(self.gitea.names(release_id), sorted([*WIN_ASSETS, *MAC_ASSETS, "SHA256SUMS"]))
         checksums = self.gitea.data(release_id, "SHA256SUMS").decode("utf-8")
         for name, path in ((WIN_ZIP, win_dir / WIN_ZIP), (MAC_ZIP, mac_dir / MAC_ZIP)):
             self.assertIn(f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {name}", checksums)
 
         # 再跑一次：附件替换而非重复，内容不变；删除走嵌套路由参数（release_id, asset_id）。
         self.assertEqual(run_publish(self.repo, mac_dir, self.gitea)[0], 0)
-        self.assertEqual(self.gitea.names(release_id), sorted([WIN_ZIP, MAC_ZIP, "SHA256SUMS"]))
-        self.assertEqual(self.gitea.data(release_id, "SHA256SUMS").decode("utf-8"), checksums)
+        self.assertEqual(self.gitea.names(release_id), sorted([*WIN_ASSETS, *MAC_ASSETS, "SHA256SUMS"]))
+        # Gitea gives replacements new URLs; payload bytes stay identical but descriptor hash changes.
+        after = self.gitea.data(release_id, "SHA256SUMS").decode("utf-8")
+        for name in [*WIN_ASSETS, *MAC_ASSETS]:
+            self.assertIn(f"{hashlib.sha256(self.gitea.data(release_id, name)).hexdigest()}  {name}", after)
         self.assertTrue(any(call[0] == "delete_asset" and call[1] == release_id for call in self.gitea.calls))
         self.assertIn(("update_release", release_id), self.gitea.calls)
 
@@ -150,6 +165,22 @@ class PublishTest(unittest.TestCase):
         self.assertIn("GITEA_TOKEN", str(code))
         self.assertEqual(self.gitea.created_with, [])
 
+    def test_interrupted_upload_leaves_no_ready_descriptor(self) -> None:
+        release_dir = make_release_dir(self.root / "win", VERSION, "win-x64")
+        (release_dir / WIN_ZIP).rename(release_dir / "fail.me")
+        with (release_dir / "SHA256SUMS").open("a", encoding="utf-8") as stream:
+            stream.write(f"{hashlib.sha256(b'fake updater win-x64').hexdigest()}  fail.me\n")
+        release = self.gitea.create_release(f"v{VERSION}", VERSION, "notes")
+        body = publish_release.release_body(self.repo, VERSION)
+        with self.assertRaises(publish_release.GiteaError) as ctx, mock.patch.object(
+            publish_release, "local_platform", return_value="win-x64"
+        ):
+            publish_release.publish(self.gitea, release_dir, VERSION, body,
+                                    [release_dir / "fail.me", release_dir / f"{WIN_ZIP}.sig"])
+        code = ctx.exception
+        self.assertIn("fail", str(code).lower())
+        self.assertEqual(self.gitea.names(1), [])
+
     def test_refuses_checksum_mismatch_before_any_upload(self) -> None:
         release_dir = make_release_dir(self.root / "win", VERSION, "win-x64")
         (release_dir / WIN_ZIP).write_bytes(b"tampered")
@@ -157,11 +188,11 @@ class PublishTest(unittest.TestCase):
         self.assertIn("SHA256SUMS", str(code))
         self.assertEqual(self.gitea.calls, [])
 
-    def test_refuses_zip_not_listed_in_checksums(self) -> None:
+    def test_refuses_unlisted_foreign_artifact_before_upload(self) -> None:
         release_dir = make_release_dir(self.root / "win", VERSION, "win-x64")
-        (release_dir / MAC_ZIP).write_bytes(b"unlisted")
+        (release_dir / "kacha-9.9.9-macos-arm64.zip").write_bytes(b"unlisted")
         code, _ = run_publish(self.repo, release_dir, self.gitea)
-        self.assertIn(MAC_ZIP, str(code))
+        self.assertIn("9.9.9", str(code))
         self.assertEqual(self.gitea.calls, [])
 
     def test_refuses_zip_from_another_version(self) -> None:

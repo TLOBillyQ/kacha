@@ -54,6 +54,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -62,12 +63,27 @@
       "icons/icon.ico"
     ],
     "targets": [
-      "app"
+      "app",
+      "nsis"
     ],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    },
     "macOS": {
       "minimumSystemVersion": "12.0",
       "signingIdentity": "-"
     },
     "category": "GraphicsAndDesign"
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDM0OUVDNDAyOTg5NUY5RTUKUldUbCtaV1lBc1NlTk4yTm9SYlYyL09pcXhuZ2xVMVk2THdSTzFnaHh3K0R1eEMrdXJMTXZqQ2wK",
+      "dangerousInsecureTransportProtocol": true,
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

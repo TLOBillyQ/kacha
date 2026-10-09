@@ -23,6 +23,39 @@ export type UpdateCheck =
   | { status: "latest" }
   | { status: "error"; message: string };
 
+// ---- updater 描述协议（#12）：静态 JSON 端点，见 ADR-0016 / issue #3 ----
+
+/** 官方 updater 的目标名：与 Rust updater 的 target 常量一致。 */
+export const UPDATE_TARGETS: Record<Exclude<Platform, "other">, string> = {
+  "win-x64": "windows-x86_64",
+  "macos-arm64": "darwin-aarch64",
+};
+
+/** 每个平台独立的静态描述文件名，随 Release 附件发布。 */
+export const UPDATER_DESCRIPTOR_NAMES: Record<Exclude<Platform, "other">, string> = {
+  "win-x64": "updater-win-x64.json",
+  "macos-arm64": "updater-macos-arm64.json",
+};
+
+export const updaterDescriptorName = (platform: Exclude<Platform, "other">) => UPDATER_DESCRIPTOR_NAMES[platform];
+
+/** 选中一个可交给官方 updater 的 Release：定位静态描述、更新包直链与目标名。 */
+export interface SelectedUpdate {
+  version: string;
+  pageUrl: string;
+  descriptorUrl: string;
+  packageUrl: string;
+  target: string;
+}
+
+/** 描述文件本平台条目解析结果。 */
+export interface DescriptorEntry {
+  version: string;
+  notes: string;
+  url: string;
+  signature: string;
+}
+
 /** 按 userAgent 判断平台；识别不出时不挑附件，只给 Release 页面。 */
 export function detectPlatform(userAgent: string): Platform {
   if (/windows/i.test(userAgent)) return "win-x64";
@@ -95,4 +128,43 @@ export async function checkForUpdate(currentVersion: string, platform: Platform,
   if (!release) return { status: "error", message: "无法识别最新发布信息" };
   if (!parseVersion(currentVersion)) return { status: "error", message: `当前版本号无法识别：${currentVersion}` };
   return compareVersions(release.version, currentVersion) > 0 ? { status: "available", release } : { status: "latest" };
+}
+
+/** 更新包附件名：windows 安装器 / macOS 更新包。 */
+export function updaterPackageName(version: string, platform: Exclude<Platform, "other">): string {
+  return platform === "win-x64" ? `kacha-${version}-win-x64-setup.exe` : `kacha-${version}-macos-arm64.app.tar.gz`;
+}
+
+/** 从 Gitea Release 选择本平台完整 updater 描述；缺描述或缺更新包都返回 null（发布不完整）。 */
+export function selectUpdateRelease(json: unknown, platform: Platform): SelectedUpdate | null {
+  if (platform === "other" || !json || typeof json !== "object") return null;
+  const r = json as { tag_name?: unknown; html_url?: unknown; draft?: unknown; prerelease?: unknown; assets?: unknown };
+  if (typeof r.tag_name !== "string" || !parseVersion(r.tag_name)) return null;
+  if (r.draft === true || r.prerelease === true) return null;
+  const version = r.tag_name.trim().replace(/^v/, "");
+  const assets = Array.isArray(r.assets) ? (r.assets as GiteaAsset[]) : [];
+  const byName = (name: string) => assets.find((a) => a.name === name && typeof a.browser_download_url === "string");
+  const descriptor = byName(updaterDescriptorName(platform));
+  const pkg = byName(updaterPackageName(version, platform));
+  if (!descriptor || !pkg) return null;
+  return {
+    version,
+    pageUrl: typeof r.html_url === "string" && r.html_url ? r.html_url : RELEASES_PAGE_URL,
+    descriptorUrl: descriptor.browser_download_url as string,
+    packageUrl: pkg.browser_download_url as string,
+    target: UPDATE_TARGETS[platform],
+  };
+}
+
+/** 校验静态描述：版本须与所选 Release 一致，本平台条目须指向所选更新包且带签名。 */
+export function parseUpdaterDescriptor(json: unknown, selected: SelectedUpdate): DescriptorEntry | null {
+  if (!json || typeof json !== "object") return null;
+  const d = json as { version?: unknown; notes?: unknown; platforms?: unknown };
+  if (d.version !== selected.version) return null;
+  const platforms = (d.platforms ?? null) as Record<string, unknown> | null;
+  const entry = platforms?.[selected.target] as { url?: unknown; signature?: unknown } | undefined;
+  if (!entry || typeof entry !== "object") return null;
+  if (entry.url !== selected.packageUrl) return null;
+  if (typeof entry.signature !== "string" || !entry.signature.trim()) return null;
+  return { version: selected.version, notes: typeof d.notes === "string" ? d.notes : "", url: entry.url as string, signature: entry.signature };
 }
