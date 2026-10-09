@@ -7,7 +7,7 @@ mod logger;
 mod redact;
 mod secret;
 mod store;
-mod update_check;
+pub mod update_check;
 #[cfg(windows)]
 mod webview2;
 
