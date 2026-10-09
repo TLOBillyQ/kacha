@@ -130,6 +130,8 @@ const updaterRelease = (tag: string, over: Record<string, unknown> = {}) => ({
   assets: [
     { name: "updater-win-x64.json", browser_download_url: `http://x/${tag}/updater-win-x64.json` },
     { name: "updater-macos-arm64.json", browser_download_url: `http://x/${tag}/updater-macos-arm64.json` },
+    { name: `kacha-${tag.slice(1)}-win-x64-setup.exe.sig`, browser_download_url: "http://x/win.sig" },
+    { name: `kacha-${tag.slice(1)}-macos-arm64.app.tar.gz.sig`, browser_download_url: "http://x/mac.sig" },
     { name: `kacha-${tag.slice(1)}-win-x64-setup.exe`, browser_download_url: `http://x/${tag}/kacha-win-setup.exe` },
     { name: `kacha-${tag.slice(1)}-macos-arm64.app.tar.gz`, browser_download_url: `http://x/${tag}/kacha-mac.tar.gz` },
   ],
@@ -189,4 +191,13 @@ describe("updater 描述协议", () => {
       parseUpdaterDescriptor(descriptor("0.3.0", { platforms: { "windows-x86_64": { url: "http://other/p.exe", signature } } }), selected),
     ).toBeNull();
   });
+});
+
+it("正式发布标记不能使预发布 tag 或缺签名附件的发布可安装", () => {
+  expect(selectUpdateRelease(updaterRelease("v0.3.0-rc"), "win-x64")).toBeNull();
+  for (const platform of ["win-x64", "macos-arm64"] as const) {
+    const release = updaterRelease("v0.3.0");
+    release.assets = release.assets.filter(a => !a.name.endsWith(".sig"));
+    expect(selectUpdateRelease(release, platform)).toBeNull();
+  }
 });

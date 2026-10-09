@@ -256,9 +256,13 @@ const commands: Record<string, (a: Args, options?: { headers?: Record<string, st
   "plugin:opener|open_url": () => null,
   "plugin:app|version": () => "0.0.0-e2e",
   // updater 假实现：check 读 e2e 注入的描述；download 发进度后 resolve；install 记录调用。
-  "plugin:updater|check": (a) => {
+  "check_update": (a) => {
     const desc = scn.updaterDescriptor;
     if (!desc) return null;
+    if (!Array.isArray(a.endpoints) || a.endpoints.length !== 1 || typeof a.endpoints[0] !== "string") {
+      throw "Missing selected descriptor endpoint";
+    }
+    if (!desc.platforms[a.target]) throw "Missing selected target";
     return {
       rid: 1,
       currentVersion: "0.0.0-e2e",

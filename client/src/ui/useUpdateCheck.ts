@@ -1,11 +1,11 @@
 // 统一更新流程的 React 适配器（#12）：注入真实端口，订阅 updateFlow 状态。
 // 顶栏与高级设置共用同一实例；3 秒首检 + 6 小时循环由核心流程调度。
 import { useEffect, useMemo, useSyncExternalStore } from "react";
-import { createUpdateFlow } from "../core/updateFlow";
+import { createUpdateFlow, type UpdateFlowPorts } from "../core/updateFlow";
 import { openExternal, updateFlowPorts } from "../shell/adapters";
 
-export function useUpdateCheck() {
-  const flow = useMemo(() => createUpdateFlow(updateFlowPorts()), []);
+export function useUpdateCheck(protection: Pick<UpdateFlowPorts, "restartGuard" | "restartReleased">) {
+  const flow = useMemo(() => createUpdateFlow(updateFlowPorts(protection)), [protection.restartGuard, protection.restartReleased]);
   useEffect(() => flow.start(), [flow]);
   const state = useSyncExternalStore(flow.subscribe, flow.getState);
 

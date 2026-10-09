@@ -35,7 +35,6 @@ export function App() {
   const [outputRoot, setOutputRoot] = useState<string | null>(null);
   const [defaultRoot, setDefaultRoot] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const update = useUpdateCheck();
   const [toolbarSlot, setToolbarSlot] = useState<HTMLElement | null>(null);
   const [packMenu, setPackMenu] = useState<{ x: number; y: number } | null>(null);
   const [confirm, setConfirm] = useState<{ boardKey: string; board: Board; items: ConfirmItem[]; scope: "selection" | "board" } | null>(null);
@@ -93,6 +92,7 @@ export function App() {
       setPreparing(active);
     },
   }));
+  const update = useUpdateCheck({ restartGuard: prep.restartGuard, restartReleased: prep.release });
   const [focus, setFocus] = useState<{ boardKey: string; nodeId: string; nonce: number } | null>(null);
   const generation = prep.generation();
   const applyActive = useCallback((change: BoardChange) =>
@@ -436,15 +436,25 @@ export function App() {
             画板包 ▾
           </button>
           {update.available && (
-            <button className="topbar-button topbar-update" title="查看更新" onClick={() => setSettingsOpen(true)}>
+            <button className="topbar-button topbar-update" title="查看更新" disabled={preparing || update.state.phase === "preparing" || update.state.phase === "installing"}
+              onClick={() => update.state.phase === "ready" ? void update.requestInstall() : setSettingsOpen(true)}>
               {update.state.phase === "ready"
-                ? "⬇ 重启并更新"
+                ? "重启并更新"
+                : update.state.phase === "preparing"
+                  ? "正在准备更新…"
+                  : update.state.phase === "installing"
+                    ? "正在安装更新…"
                 : update.state.phase === "downloading"
                   ? `⬇ 下载中 ${update.state.progress ? Math.round((update.state.progress.done / (update.state.progress.total || 1)) * 100) : 0}%`
                   : update.state.phase === "checking"
                     ? "⬇ 检查中…"
                     : `⬇ 新版本 ${update.available.version}`}
             </button>
+          )}
+          {(update.state.installBlockedReason || update.state.error) && (
+            <span className="muted small">{update.state.installBlockedReason ?? update.state.error}
+              <button className="link" onClick={update.openDownload}>手动下载</button>
+            </span>
           )}
           <button className="topbar-button" onClick={() => setSettingsOpen(true)} disabled={!settings.loaded || !outputRoot}>
             ⚙ 高级设置

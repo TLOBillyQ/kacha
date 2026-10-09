@@ -13,7 +13,7 @@ const descriptor = (version: string) => ({
   },
 });
 
-test("发现新版后台下载并就绪，重启入口被守护阻止", async ({ page }) => {
+test("所选描述端点交给原生 updater，严格保存后才安装", async ({ page }) => {
   const text = board("更新", [promptNode("p1", "图"), taskNode("t1")], [edge("p1", "t1", "positive")]);
   const scn = boardScenario("更新", text, { updaterDescriptor: descriptor("0.3.0") });
   await page.route(RELEASE_URL, (route) =>
@@ -25,6 +25,7 @@ test("发现新版后台下载并就绪，重启入口被守护阻止", async ({
         prerelease: false,
         assets: [
           { name: "updater-win-x64.json", browser_download_url: "http://x/v0.3.0/updater-win-x64.json" },
+          { name: "kacha-0.3.0-win-x64-setup.exe.sig", browser_download_url: "http://x/v0.3.0/kacha-win-setup.exe.sig" },
           { name: "kacha-0.3.0-win-x64-setup.exe", browser_download_url: "http://x/v0.3.0/kacha-win-setup.exe" },
         ],
       },
@@ -38,9 +39,12 @@ test("发现新版后台下载并就绪，重启入口被守护阻止", async ({
   await page.locator("button", { hasText: "高级设置" }).click();
   await expect(page.locator(".modal")).toContainText("已就绪 0.3.0");
   await expect(page.locator(".modal")).toContainText("修复若干问题");
-  // 点击重启并更新：守护阻止，不安装
+  const checks = await page.evaluate(() => window.__e2e.calls.filter(c => c.cmd === "check_update"));
+  expect(checks).toHaveLength(1);
+  expect(checks[0].args).toMatchObject({ endpoints: ["http://x/v0.3.0/updater-win-x64.json"], target: "windows-x86_64" });
+  // 设置与顶栏共用受保护的安装流程
   await page.locator(".modal button.link", { hasText: "重启并更新" }).click();
-  await expect(page.locator(".modal")).toContainText("更新重启保护将在后续版本接入");
+  await expect(page.locator(".modal")).toContainText("正在安装更新");
   const installs = await page.evaluate(() => window.__e2e.calls.filter((c) => c.cmd === "plugin:updater|install"));
-  expect(installs).toEqual([]);
+  expect(installs).toHaveLength(1);
 });

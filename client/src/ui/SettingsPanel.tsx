@@ -192,6 +192,8 @@ export function SettingsPanel({ settings, outputRoot, defaultOutputRoot, openBoa
               下载中 {update.state.progress ? `${update.state.progress.done}/${update.state.progress.total ?? "?"} bytes` : "…"}
             </span>
           )}
+          {update.state.phase === "preparing" && <span>正在准备更新…</span>}
+          {update.state.phase === "installing" && <span>正在安装更新…</span>}
           {update.state.phase === "idle" && <span className="muted small">已是最新版本</span>}
           {update.state.phase === "error" && (
             <span className="form-error">
@@ -202,6 +204,8 @@ export function SettingsPanel({ settings, outputRoot, defaultOutputRoot, openBoa
             </span>
           )}
           {update.state.installBlockedReason && <span className="muted small">{update.state.installBlockedReason}</span>}
+          {update.state.phase === "ready" && update.state.error && <span className="form-error">{update.state.error}</span>}
+          {update.state.error && <button className="link" onClick={update.openDownload}>手动下载</button>}
         </div>
         {update.state.version && update.state.notes && <div className="muted small form-hint">更新说明：{update.state.notes}</div>}
         <div className="muted small form-hint">发现新版自动后台下载；就绪后由你点击重启并更新，不会自动安装或重启。</div>

@@ -2,7 +2,7 @@
 // 在统一流程边界观察：假壳的内存文件 + 命令调用表即持久化结果；更新入口只经注入的安装适配器前进。
 import { expect, test, type Page } from "@playwright/test";
 import { board, boardScenario, edge, GW, openApp, png, promptNode, referenceNode, task, taskNode } from "../app";
-import { OUTPUT_ROOT, scenario } from "../scenario";
+import { OUTPUT_ROOT } from "../scenario";
 
 const calls = (page: Page, cmd: string) => page.evaluate((c) => window.__e2e.calls.filter((x) => x.cmd === c).map((x) => x.args), cmd) as Promise<Record<string, unknown>[]>;
 
@@ -15,7 +15,11 @@ async function withUpdate(page: Page, version = "9.9.9") {
         html_url: `http://releases/v${version}`,
         draft: false,
         prerelease: false,
-        assets: [{ name: `kacha-${version}-win-x64.zip`, browser_download_url: `http://x/${version}/win.zip` }],
+        assets: [
+          { name: "updater-win-x64.json", browser_download_url: `http://x/${version}/updater-win-x64.json` },
+          { name: `kacha-${version}-win-x64-setup.exe`, browser_download_url: `http://x/${version}/setup.exe` },
+          { name: `kacha-${version}-win-x64-setup.exe.sig`, browser_download_url: `http://x/${version}/setup.exe.sig` },
+        ],
       },
     }),
   );
@@ -27,7 +31,10 @@ const scene = (partial: Parameters<typeof boardScenario>[2] = {}) =>
   boardScenario(
     title,
     board(title, [promptNode("p1", "把图1变成水彩"), referenceNode("r1", REF), taskNode("t1", { image_ports: 1 })], [edge("p1", "t1", "positive"), edge("r1", "t1", "image:0")]),
-    { files: { [`${OUTPUT_ROOT}/${REF}`]: { b64: png(64, 64) }, ...partial.files }, ...partial },
+    { ...partial, files: { [`${OUTPUT_ROOT}/${REF}`]: { b64: png(64, 64) }, ...partial.files },
+      updaterDescriptor: { version: "9.9.9", notes: "更新说明", pub_date: "2026-10-01T00:00:00Z",
+        platforms: { "windows-x86_64": { url: "http://x/9.9.9/setup.exe", signature: "sig" } } },
+    },
   );
 
 /** 点击顶栏「重启并更新」。 */
@@ -53,7 +60,7 @@ test.describe("#13 任务队列阻止更新", () => {
     await expect(page.locator(".topbar-update")).toBeVisible({ timeout: 10_000 });
     await clickUpdate(page);
 
-    await expect(page.locator(".toast")).toContainText("任务结束后可更新");
+    await expect(page.locator(".board-toolbar-right")).toContainText("任务结束后可更新");
     expect(await calls(page, "plugin:updater|install")).toEqual([]);
     await expect(task(page, "t1").locator(".status")).toContainText(/执行中|排队/);
   });
@@ -61,11 +68,18 @@ test.describe("#13 任务队列阻止更新", () => {
   test("任务结束后仍需用户再次点击：不自动重启", async ({ page }) => {
     await openApp(page, scene());
     await withUpdate(page);
+    let finishTask!: () => Promise<void>;
+    await page.route(`${GW}/v1/images/**`, route => { finishTask = () => route.fulfill({ status: 400, json: { error: { message: "failed" } } }); });
+    await task(page, "t1").locator(".task-actions button.primary").click();
+    await expect.poll(() => calls(page, "write_new_file").then(c => c.length > 0)).toBe(true);
     await expect(page.locator(".topbar-update")).toBeVisible({ timeout: 10_000 });
     await clickUpdate(page);
-    await expect(page.locator(".toast")).toContainText("准备就绪");
-    // 第一次点击只是准备；没有自动安装或重启。
+    await expect(page.locator(".board-toolbar-right")).toContainText("任务结束后可更新");
+    await finishTask();
+    await expect(task(page, "t1").locator(".status")).toContainText("失败");
     expect(await calls(page, "plugin:updater|install")).toEqual([]);
+    await clickUpdate(page);
+    await expect.poll(() => calls(page, "plugin:updater|install").then(c => c.length)).toBe(1);
   });
 });
 
@@ -84,8 +98,8 @@ test.describe("#13 严格保存边界", () => {
     await expect(page.locator(".topbar-update")).toBeVisible({ timeout: 10_000 });
     await clickUpdate(page);
 
-    await expect(page.locator(".toast")).toContainText("保存画板失败：未能保存到");
-    await expect(page.locator(".toast")).toContainText("磁盘已满");
+    await expect(page.locator(".board-toolbar-right")).toContainText("保存画板失败：未能保存到");
+    await expect(page.locator(".board-toolbar-right")).toContainText("磁盘已满");
     expect(await calls(page, "plugin:updater|install")).toEqual([]);
     // 失败后画板仍可编辑（保护已解除）：改名输入框能正常出现并提交。
     await page.locator(".tab", { hasText: "失败重试2" }).dblclick();
@@ -104,7 +118,7 @@ test.describe("#13 严格保存边界", () => {
     await withUpdate(page);
     await expect(page.locator(".topbar-update")).toBeVisible({ timeout: 10_000 });
     await clickUpdate(page);
-    await expect(page.locator(".toast")).toContainText("保存界面状态失败：只读文件系统");
+    await expect(page.locator(".board-toolbar-right")).toContainText("保存界面状态失败：只读文件系统");
     expect(await calls(page, "plugin:updater|install")).toEqual([]);
   });
 
@@ -117,7 +131,7 @@ test.describe("#13 严格保存边界", () => {
     await page.locator(".tab input").fill("改名后");
     await page.locator(".tab input").press("Enter");
     await clickUpdate(page);
-    await expect(page.locator(".toast")).toContainText("准备就绪");
+    await expect(page.locator(".topbar-update")).toContainText("正在安装更新");
     expect(await boardTitleOnDisk(page, "改名后")).toBe("改名后");
   });
 });
@@ -136,7 +150,7 @@ test.describe("#13 准备期间的保护", () => {
     await page.getByRole("toolbar", { name: "画板工具栏" }).getByRole("button", { name: /参考图/ }).click();
     await expect.poll(() => page.evaluate(() => window.__e2e.held())).toContain("inspect_image");
     await clickUpdate(page);
-    await expect(page.locator(".toast")).toContainText("保存界面状态失败");
+    await expect(page.locator(".board-toolbar-right")).toContainText("保存界面状态失败");
     await page.evaluate(async () => {
       await window.__e2e.release("inspect_image");
       await new Promise(requestAnimationFrame);
@@ -166,7 +180,7 @@ test.describe("#13 准备期间的保护", () => {
     await expect(page.getByRole("button", { name: "正在准备更新…" })).toBeVisible();
     await page.evaluate(() => window.__e2e.emit("tauri://close-requested", null));
     await page.evaluate(() => window.__e2e.release("plugin:window|scale_factor"));
-    await expect(page.locator(".toast")).toContainText("准备就绪");
+    await expect(page.locator(".topbar-update")).toContainText("正在安装更新");
     const ui = await page.evaluate(() => JSON.parse(window.__e2e.readText("/e2e/appdata/ui_state.json")!));
     expect(ui.window).toEqual({ width: 1234, height: 789 });
     expect(await calls(page, "plugin:window|destroy")).toEqual([]);
@@ -188,7 +202,7 @@ test.describe("#13 准备期间的保护", () => {
     await page.evaluate((p) => window.__e2e.emit("second-instance", [p]), extraPath);
     expect(await calls(page, "plugin:updater|install")).toEqual([]);
     await page.evaluate(() => window.__e2e.release("write_board"));
-    await expect(page.locator(".toast")).toContainText("准备就绪");
+    await expect(page.locator(".topbar-update")).toContainText("正在安装更新");
     expect(await boardTitleOnDisk(page, title)).toBe(title);
     await expect(page.locator(".tab")).toHaveCount(1);
     await expect(page.locator(".react-flow__node")).toHaveCount(3);
@@ -206,30 +220,38 @@ test.describe("#13 准备期间的保护", () => {
     await clickUpdate(page);
     await expect(page.getByRole("button", { name: "正在准备更新…" })).toBeVisible();
     await page.evaluate(() => window.__e2e.release("read_board"));
-    await expect(page.locator(".toast")).toContainText("准备就绪");
+    await expect(page.locator(".topbar-update")).toContainText("正在安装更新");
     const ui = await page.evaluate(() => JSON.parse(window.__e2e.readText("/e2e/appdata/ui_state.json")!));
     expect(ui.open_boards).toContain(extraPath);
   });
-  test("准备完成后画板可正常编辑（保护已解除，无残留阻断）", async ({ page }) => {
-    await openApp(page, scene());
+  test("安装失败后恢复画板编辑与任务提交，保留就绪状态与手动下载", async ({ page }) => {
+    await openApp(page, scene({ fail: { "plugin:updater|install": "Access denied" } }));
     await withUpdate(page);
     await expect(page.locator(".topbar-update")).toBeVisible({ timeout: 10_000 });
     await clickUpdate(page);
-    await expect(page.locator(".toast")).toContainText("准备就绪");
-    // 正常编辑：新增提示词节点。
+    await expect(page.locator(".board-toolbar-right")).toContainText("Access denied");
+    await expect(page.locator(".board-toolbar-right").getByRole("button", { name: "手动下载" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "重启并更新", exact: true })).toBeEnabled();
     await page.getByRole("toolbar", { name: "画板工具栏" }).getByRole("button", { name: /提示词/ }).click();
-    await expect(page.locator('.react-flow__node[data-id="p1"]')).toHaveCount(1);
     await expect(page.locator(".react-flow__node")).toHaveCount(4);
+    await task(page, "t1").locator(".task-actions button.primary").click();
+    await expect.poll(() => calls(page, "write_new_file").then(c => c.length > 0)).toBe(true);
   });
 
-  test("重复点击不产生重复安装", async ({ page }) => {
+  test("重复点击不产生重复安装，安装阶段保持关闭与编辑保护", async ({ page }) => {
     await openApp(page, scene());
     await withUpdate(page);
     await expect(page.locator(".topbar-update")).toBeVisible({ timeout: 10_000 });
+    await page.evaluate(() => window.__e2e.pause("plugin:updater|install"));
     await clickUpdate(page);
-    await clickUpdate(page);
-    await clickUpdate(page);
-    await expect(page.locator(".toast")).toContainText("准备就绪");
-    expect(await calls(page, "plugin:updater|install")).toEqual([]);
+    await expect.poll(() => page.evaluate(() => window.__e2e.held())).toContain("plugin:updater|install");
+    await page.locator(".topbar-update").evaluate(el => { (el as HTMLButtonElement).click(); (el as HTMLButtonElement).click(); });
+    await page.evaluate(() => window.__e2e.emit("tauri://close-requested", null));
+    await page.getByRole("toolbar", { name: "画板工具栏" }).getByRole("button", { name: /提示词/ }).click();
+    await expect(page.locator(".react-flow__node")).toHaveCount(3);
+    expect(await calls(page, "plugin:window|destroy")).toEqual([]);
+    await page.evaluate(() => window.__e2e.release("plugin:updater|install"));
+    await expect(page.locator(".topbar-update")).toContainText("正在安装更新");
+    expect(await calls(page, "plugin:updater|install")).toHaveLength(1);
   });
 });

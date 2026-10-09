@@ -1,6 +1,8 @@
 // core 端口的真适配器集中在这里（#128）：ui 只 import 使用，不在调用点就地拼。测试侧各自就地拼伪实现。
 import { getVersion } from "@tauri-apps/api/app";
-import { check } from "@tauri-apps/plugin-updater";
+import { invoke } from "@tauri-apps/api/core";
+import { Update } from "@tauri-apps/plugin-updater";
+import { relaunch } from "@tauri-apps/plugin-process";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { PackFs, PackIo } from "../core/boardPack";
 import type { RelocateFs } from "../core/relocate";
@@ -69,7 +71,7 @@ export const settingsPorts: SettingsPorts = {
 };
 
 /** 统一更新流程的真端口（#12）。 */
-export function updateFlowPorts(): UpdateFlowPorts {
+export function updateFlowPorts(protection: Pick<UpdateFlowPorts, "restartGuard" | "restartReleased">): UpdateFlowPorts {
   const platform: Platform = detectPlatform(navigator.userAgent);
   return {
     currentVersion: () => getVersion(),
@@ -89,10 +91,15 @@ export function updateFlowPorts(): UpdateFlowPorts {
     },
     updater: {
       // 静态端点：官方 updater 直接请求描述 URL；target 固定平台名。
-      check: async (_descriptorUrl, target) => check({ target }),
+      check: async (descriptorUrl, target) => {
+        const metadata = await invoke<ConstructorParameters<typeof Update>[0] | null>("check_update", {
+          endpoints: [descriptorUrl], target,
+        });
+        return metadata ? new Update(metadata) : null;
+      },
     },
-    // #13 接入前：统一重启入口存在，但永远被守护阻止。
-    restartGuard: async () => ({ allowed: false, reason: "更新重启保护将在后续版本接入，请稍后再试" }),
+    ...protection,
+    restart: relaunch,
   };
 }
 

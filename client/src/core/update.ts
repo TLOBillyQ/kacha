@@ -139,14 +139,14 @@ export function updaterPackageName(version: string, platform: Exclude<Platform, 
 export function selectUpdateRelease(json: unknown, platform: Platform): SelectedUpdate | null {
   if (platform === "other" || !json || typeof json !== "object") return null;
   const r = json as { tag_name?: unknown; html_url?: unknown; draft?: unknown; prerelease?: unknown; assets?: unknown };
-  if (typeof r.tag_name !== "string" || !parseVersion(r.tag_name)) return null;
+  if (typeof r.tag_name !== "string" || !/^v?\d+\.\d+\.\d+(?:\+[0-9A-Za-z.-]+)?$/.test(r.tag_name.trim())) return null;
   if (r.draft === true || r.prerelease === true) return null;
   const version = r.tag_name.trim().replace(/^v/, "");
   const assets = Array.isArray(r.assets) ? (r.assets as GiteaAsset[]) : [];
   const byName = (name: string) => assets.find((a) => a.name === name && typeof a.browser_download_url === "string");
   const descriptor = byName(updaterDescriptorName(platform));
   const pkg = byName(updaterPackageName(version, platform));
-  if (!descriptor || !pkg) return null;
+  if (!descriptor || !pkg || !byName(`${updaterPackageName(version, platform)}.sig`)) return null;
   return {
     version,
     pageUrl: typeof r.html_url === "string" && r.html_url ? r.html_url : RELEASES_PAGE_URL,
