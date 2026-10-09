@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import contextlib
+import base64
 import hashlib
 import io
 import json
 import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -15,6 +17,8 @@ from unittest import mock
 from _support import make_release_dir, make_repo
 
 import publish_release
+import build_release
+from release_meta import read_checksums
 
 VERSION = "1.2.3"
 TOKEN = "test-token"
@@ -117,6 +121,46 @@ class PublishTest(unittest.TestCase):
 
     def tearDown(self) -> None:
         self._temp.cleanup()
+
+    def test_built_release_checksums_cover_descriptor_on_publish_and_republish(self) -> None:
+        client = self.repo / "client"
+        bundle = client / "src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis"
+        installer = bundle / f"Kacha_{VERSION}_x64-setup.exe"
+        signature = base64.b64encode((
+            "untrusted comment: test signature\n"
+            + base64.b64encode(b"ED" + b"k" * 8 + b"s" * 64).decode() + "\n"
+            + "trusted comment: test\n"
+            + base64.b64encode(b"g" * 64).decode() + "\n"
+        ).encode())
+
+        def fake_run(command, *, check, cwd):
+            self.assertEqual(command, ["npx.cmd", "tauri", "build", "--bundles", "nsis",
+                                       "--target", "x86_64-pc-windows-msvc"])
+            self.assertTrue(check)
+            self.assertEqual(cwd, client)
+            bundle.mkdir(parents=True)
+            installer.write_bytes(b"fake NSIS installer")
+            Path(str(installer) + ".sig").write_bytes(signature)
+            return subprocess.CompletedProcess(command, 0)
+
+        with mock.patch.multiple(build_release, REPO_ROOT=self.repo, CLIENT_DIR=client), \
+                mock.patch.object(build_release.platform_module, "system", return_value="Windows"), \
+                mock.patch.object(build_release.platform_module, "machine", return_value="AMD64"), \
+                mock.patch.object(build_release.shutil, "which", side_effect=lambda tool: tool + ".cmd"), \
+                mock.patch.object(build_release.subprocess, "run", side_effect=fake_run):
+            self.assertEqual(build_release.main(["--skip-npm-ci"]), 0)
+
+        release_dir = self.repo / "release"
+        self.assertFalse((release_dir / "updater-win-x64.json").exists())
+        self.assertEqual(set(read_checksums(release_dir / "SHA256SUMS")),
+                         {WIN_INSTALLER, WIN_INSTALLER + ".sig"})
+        for attempt in ("first publish", "republish"):
+            with self.subTest(attempt=attempt):
+                self.assertEqual(run_publish(self.repo, release_dir, self.gitea)[0], 0)
+                release_id = self.gitea.releases[f"v{VERSION}"]["id"]
+                checksums = self.gitea.data(release_id, "SHA256SUMS").decode()
+                for name in WIN_ASSETS:
+                    self.assertIn(f"{hashlib.sha256(self.gitea.data(release_id, name)).hexdigest()}  {name}\n", checksums)
 
     def test_first_publish_creates_release_with_notes_body(self) -> None:
         release_dir = make_release_dir(self.root / "win", VERSION, "win-x64")

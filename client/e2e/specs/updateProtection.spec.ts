@@ -84,6 +84,67 @@ test.describe("#13 任务队列阻止更新", () => {
 });
 
 test.describe("#13 严格保存边界", () => {
+  test("关闭画板的在途写入失败时，更新保留画板并阻止安装，修复后可重试", async ({ page }) => {
+    await openApp(page, scene());
+    await withUpdate(page);
+    await expect(page.getByRole("button", { name: "重启并更新", exact: true })).toBeVisible({ timeout: 10_000 });
+    await page.evaluate(() => {
+      window.__e2e.pause("write_board");
+      window.__e2e.fail.write_board = "磁盘已满";
+    });
+    await page.getByRole("toolbar", { name: "画板工具栏" }).getByRole("button", { name: /提示词/ }).click();
+    await page.locator(".tab-close").click();
+    await expect.poll(() => page.evaluate(() => window.__e2e.held())).toContain("write_board");
+    await clickUpdate(page);
+    await expect(page.locator(".topbar-update")).toContainText("正在准备更新");
+    expect(await calls(page, "plugin:updater|install")).toEqual([]);
+
+    await page.evaluate(() => window.__e2e.release("write_board"));
+    await expect(page.locator(".board-toolbar-right")).toContainText("磁盘已满");
+    expect(await calls(page, "plugin:updater|install")).toEqual([]);
+    expect(await calls(page, "plugin:process|restart")).toEqual([]);
+    await expect(page.locator(".tab", { hasText: title })).toHaveCount(1);
+    await expect(page.locator(".react-flow__node")).toHaveCount(4);
+
+    await page.evaluate(() => delete window.__e2e.fail.write_board);
+    await page.getByRole("toolbar", { name: "画板工具栏" }).getByRole("button", { name: /提示词/ }).click();
+    await expect(page.locator(".react-flow__node")).toHaveCount(5);
+    await clickUpdate(page);
+    await expect(page.locator(".topbar-update")).toContainText("正在安装更新");
+    const saved = await page.evaluate((path) => JSON.parse(window.__e2e.readText(path)!), `${OUTPUT_ROOT}/画板/${title}.ugcboard.json`);
+    expect(saved.nodes).toHaveLength(5);
+    const ui = await page.evaluate(() => JSON.parse(window.__e2e.readText("/e2e/appdata/ui_state.json")!));
+    expect(ui.open_boards).toContain(`${OUTPUT_ROOT}/画板/${title}.ugcboard.json`);
+  });
+
+  test("关闭画板的在途写入成功时，更新等待落盘后继续安装", async ({ page }) => {
+    await openApp(page, scene());
+    await withUpdate(page);
+    await expect(page.getByRole("button", { name: "重启并更新", exact: true })).toBeVisible({ timeout: 10_000 });
+    await page.evaluate(() => window.__e2e.pause("write_board"));
+    await page.getByRole("toolbar", { name: "画板工具栏" }).getByRole("button", { name: /提示词/ }).click();
+    await page.locator(".tab-close").click();
+    await expect.poll(() => page.evaluate(() => window.__e2e.held())).toContain("write_board");
+    await clickUpdate(page);
+    await expect(page.locator(".topbar-update")).toContainText("正在准备更新");
+    expect(await calls(page, "plugin:updater|install")).toEqual([]);
+    await page.evaluate(() => window.__e2e.release("write_board"));
+    await expect(page.locator(".topbar-update")).toContainText("正在安装更新");
+    const saved = await page.evaluate((path) => JSON.parse(window.__e2e.readText(path)!), `${OUTPUT_ROOT}/画板/${title}.ugcboard.json`);
+    expect(saved.nodes).toHaveLength(4);
+    expect(await calls(page, "plugin:updater|install")).toHaveLength(1);
+  });
+
+  test("未准备更新时，关闭画板仍允许保存失败后关闭", async ({ page }) => {
+    await openApp(page, scene());
+    await page.evaluate(() => { window.__e2e.fail.write_board = "磁盘已满"; });
+    await page.getByRole("toolbar", { name: "画板工具栏" }).getByRole("button", { name: /提示词/ }).click();
+    await page.locator(".tab-close").click();
+    await expect(page.locator(".tab")).toHaveCount(0);
+    await expect.poll(() => calls(page, "write_board").then(c => c.length > 0)).toBe(true);
+    expect(await calls(page, "plugin:updater|install")).toEqual([]);
+  });
+
   test("此前保存失败的画板在更新准备时重试；仍失败则不安装并报告真实原因", async ({ page }) => {
     await openApp(page, scene());
     await page.evaluate(() => (window.__e2e.fail.write_board = "磁盘已满"));

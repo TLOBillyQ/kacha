@@ -289,6 +289,8 @@ export function useBoardSessions(outputRoot: string | null, envSource: EnvSource
       const saver = savers.current.get(key);
       if (saver?.timer) await flush(key);
       else if (saver) await saver.chain;
+      // 更新准备接管在途关闭：保留会话，由严格保存重试吞错的写入。
+      if (blocked()) return;
       savers.current.delete(key);
       const list = sessionsRef.current;
       const index = list.findIndex((s) => s.key === key);
