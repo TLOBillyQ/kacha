@@ -5,6 +5,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
+    "build:desktop": "tauri build --debug --config src-tauri/tauri.dev.conf.json",
+    "build:release": "python ../packaging/build_release.py",
     "typecheck": "tsc --noEmit -p .",
     "test": "vitest run",
     "test:e2e": "playwright test",

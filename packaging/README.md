@@ -37,6 +37,18 @@ Gitea Release（tag `v<版本>`）按平台挂以下附件：
 
 ## 用法
 
+日常本地打包在 `client/` 下执行：
+
+    npm run build:desktop
+
+该入口使用 Rust dev/debug profile（`tauri build --debug --config src-tauri/tauri.dev.conf.json`），
+默认安装包位于 `client/src-tauri/target/debug/bundle/`；不生成 updater 更新包与签名。
+前端仍执行 `npm run build`，让安装包内含可独立运行的静态资源。
+`npm run tauri -- dev` 用于交互开发，不生成安装包。
+
+正式发布才使用 release 构建。在 `client/` 下执行 `npm run build:release`，
+或在仓库根目录执行 `packaging/build_release.py`；继续使用 release 优化及 updater 签名发布产物。
+
 发版前在 `client/src-tauri/Cargo.toml` bump 版本。Tauri 不能交叉构建，两个平台各在对应机器上执行：
 
     python3 packaging/build_release.py            # 自动识别 win-x64 / macos-arm64，其他机器拒绝
