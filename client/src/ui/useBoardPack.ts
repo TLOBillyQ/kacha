@@ -2,7 +2,7 @@
 // 包格式规则与导入流程（含取消竞态与脱敏日志）在 core/boardPack.ts，字节搬运在 Rust 壳；这里只管弹窗、进度与提示文案。
 import { getVersion } from "@tauri-apps/api/app";
 import { message, open, save } from "@tauri-apps/plugin-dialog";
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { BOARD_EXTENSION, type Board } from "../core/board";
 import { buildExportSpec, importPack as importPackIn, PACK_EXTENSION, PACK_FILE_FILTER, planExport, runCancellable } from "../core/boardPack";
 import { basename } from "../core/paths";
@@ -19,10 +19,19 @@ interface PackBoards {
   addImportedBoard: (board: Board) => Promise<string>;
 }
 
+/** 更新准备的更新闸：blocked 时画板包导入 / 导出都不开始。 */
+export interface PackGate {
+  blocked(): boolean;
+  track(operation: Promise<unknown>): void;
+  generation(): number;
+}
+
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
-export function useBoardPack(outputRoot: string | null, boards: PackBoards, toast: (message: string) => void) {
+export function useBoardPack(outputRoot: string | null, boards: PackBoards, toast: (message: string) => void, gate?: PackGate) {
   const [dialog, setDialog] = useState<PackDialogState | null>(null);
+  const gateRef = useRef(gate);
+  gateRef.current = gate;
 
   /** runCancellable 复位取消标记之后才调：此时弹进度，之后立刻点的取消不会丢。 */
   const progress = (title: string) => () => setDialog({ stage: "progress", title });
@@ -31,6 +40,7 @@ export function useBoardPack(outputRoot: string | null, boards: PackBoards, toas
   const prepareExport = useCallback(
     async (key: string) => {
       if (!outputRoot) return;
+      if (gateRef.current?.blocked()) return;
       await boards.flushAll();
       const board = boards.getBoard(key);
       const boardFile = boards.boardFileName(key);
@@ -45,7 +55,7 @@ export function useBoardPack(outputRoot: string | null, boards: PackBoards, toas
   );
 
   const confirmExport = useCallback(async () => {
-    if (!outputRoot || dialog?.stage !== "confirmExport") return;
+    if (!outputRoot || dialog?.stage !== "confirmExport" || gateRef.current?.blocked()) return;
     const { boardFile, plan } = dialog;
     const stem = boardFile.slice(0, -BOARD_EXTENSION.length);
     const picked = await save({ defaultPath: `${stem}${PACK_EXTENSION}`, filters: [PACK_FILE_FILTER] });
@@ -65,17 +75,26 @@ export function useBoardPack(outputRoot: string | null, boards: PackBoards, toas
   }, [outputRoot, dialog, toast]);
 
   /** 导入：先判版本与布局（不合格不写任何文件），再解压合并，最后写画板并在新标签页打开。 */
-  const importPack = useCallback(async () => {
+  const importWork = useCallback(async () => {
     if (!outputRoot) return;
+    if (gateRef.current?.blocked()) return;
+    const token = gateRef.current?.generation();
     const picked = await open({ multiple: false, directory: false, filters: [PACK_FILE_FILTER] });
-    if (typeof picked !== "string") return;
-    const result = await importPackIn(packIo, {
+    if (typeof picked !== "string" || gateRef.current?.blocked() || token !== gateRef.current?.generation()) return;
+    const work = importPackIn(packIo, {
       packPath: picked,
       outputRoot,
       addBoard: (board) => boards.addImportedBoard(board),
       onStage: progress(`正在导入画板包：${basename(picked)}`),
       log: logEvent,
     });
+    const result = await work;
+    if (gateRef.current?.blocked()) {
+      setDialog(null);
+      if (result.kind === "done" && result.writeError) throw new Error(result.writeError);
+      if (result.kind === "failed") throw new Error(result.error);
+      return;
+    }
     switch (result.kind) {
       case "newer":
         await message(result.message, { title: "无法导入画板包", kind: "warning" });
@@ -101,7 +120,12 @@ export function useBoardPack(outputRoot: string | null, boards: PackBoards, toas
 
   return {
     prepareExport,
-    importPack,
+    importPack: () => {
+      if (gateRef.current?.blocked()) return Promise.resolve();
+      const work = importWork();
+      gateRef.current?.track(work);
+      return work.catch((e) => toast(`导入画板包失败：${errorText(e)}`));
+    },
     dialog: dialog && {
       state: dialog,
       onExport: () => void confirmExport(),

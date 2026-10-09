@@ -30,6 +30,8 @@ export interface E2eControl {
   emit(event: string, payload: unknown): void;
   /** 当前挂起的命令名。 */
   held(): string[];
+  pause(cmd: string): void;
+  release(cmd: string): void;
   fail: Record<string, string>;
   secret: string | null;
 }
@@ -94,6 +96,8 @@ function emit(event: string, payload: unknown) {
 // ---- 挂起与取消（画板包） ----
 let cancelled = false;
 const holds = new Map<string, () => void>();
+const paused = new Set<string>();
+const pausedCalls = new Map<string, (() => void)[]>();
 function holdable<T>(cmd: string, work: () => Promise<T> | T): Promise<T> {
   if (!scn!.hold.includes(cmd)) return Promise.resolve(work());
   return new Promise<T>((resolve, reject) => {
@@ -119,7 +123,13 @@ const control: E2eControl = {
   writeText: (p, text) => void files.set(norm(p), enc.encode(text)),
   remove: (p) => void files.delete(norm(p)),
   emit,
-  held: () => [...holds.keys()],
+  held: () => [...holds.keys(), ...pausedCalls.keys()],
+  pause: (cmd) => void paused.add(cmd),
+  release: (cmd) => {
+    paused.delete(cmd);
+    for (const resolve of pausedCalls.get(cmd) ?? []) resolve();
+    pausedCalls.delete(cmd);
+  },
   fail: { ...scn.fail },
   secret: scn.secret,
 };
@@ -261,6 +271,9 @@ const commands: Record<string, (a: Args, options?: { headers?: Record<string, st
 
 async function invoke(cmd: string, args: unknown, options?: { headers?: Record<string, string> }) {
   control.calls.push({ cmd, args: args instanceof Uint8Array ? `<${args.length} bytes>` : args });
+  if (paused.has(cmd)) await new Promise<void>((resolve) => {
+    pausedCalls.set(cmd, [...(pausedCalls.get(cmd) ?? []), resolve]);
+  });
   if (control.fail[cmd]) throw control.fail[cmd];
   const handler = commands[cmd];
   if (handler) return handler((args ?? {}) as Args, options, args);

@@ -15,6 +15,7 @@ import { emptyHistory, recordChange, redo, undo, type History } from "../core/hi
 import { basename, boardsDir, dirname, joinPath, resolveFromRoot } from "../core/paths";
 import { ipc } from "../shell/ipc";
 import { logEvent } from "../shell/log";
+import type { OperationGate } from "../core/updatePreparation";
 import { knownImageInfo } from "./context";
 
 export const AUTOSAVE_DEBOUNCE_MS = 1000;
@@ -38,11 +39,26 @@ const samePath = (a: string, b: string) => a.replace(/\\/g, "/").toLowerCase() =
 /** 编辑环境里随应用状态变化的部分：能力表、网关发现、该画板的锁定集（排队 / 执行 / 限流退避中的任务节点）。 */
 export type EnvSource = (key: string) => Pick<EditEnv, "table" | "discovery" | "locked">;
 
-export function useBoardSessions(outputRoot: string | null, envSource: EnvSource) {
+export function useBoardSessions(outputRoot: string | null, envSource: EnvSource, gate?: OperationGate) {
   const [sessions, setSessionsState] = useState<Session[]>([]);
-  const [activeKey, setActiveKey] = useState<string | null>(null);
+  const [activeKey, setActiveKeyState] = useState<string | null>(null);
+  const activeKeyRef = useRef<string | null>(null);
+  const setActiveKey = useCallback((next: string | null | ((prev: string | null) => string | null)) => {
+    activeKeyRef.current = typeof next === "function" ? next(activeKeyRef.current) : next;
+    setActiveKeyState(activeKeyRef.current);
+  }, []);
   const sessionsRef = useRef<Session[]>([]);
   const savers = useRef(new Map<string, Saver>());
+  const gateRef = useRef(gate);
+  gateRef.current = gate;
+  const blocked = () => gateRef.current?.blocked() ?? false;
+  const tracked = <A extends unknown[], R,>(operation: (...args: A) => Promise<R>, fallback: R) =>
+    (...args: A): Promise<R> => {
+      if (blocked()) return Promise.resolve(fallback);
+      const work = operation(...args);
+      gateRef.current?.track(work);
+      return work;
+    };
 
   const setSessions = useCallback((next: Session[]) => {
     sessionsRef.current = next;
@@ -51,7 +67,7 @@ export function useBoardSessions(outputRoot: string | null, envSource: EnvSource
 
   const patch = useCallback(
     (key: string, fn: (s: OkSession) => OkSession) => {
-      setSessions(sessionsRef.current.map((s) => (s.key === key && s.status === "ok" ? fn(s) : s)));
+      setSessions(sessionsRef.current.map((s) => (s.key === key && s.status === "ok" ? { ...fn(s) } : s)));
     },
     [setSessions],
   );
@@ -170,10 +186,42 @@ export function useBoardSessions(outputRoot: string | null, envSource: EnvSource
   }, []);
   const closeBoardRef = useRef<(key: string) => Promise<void>>(async () => undefined);
 
+  /** 普通关窗 / 导出入口：吞掉失败，只保证计时器与在途写入做完。 */
   const flushAll = useCallback(async () => {
     const pending = [...savers.current.entries()].filter(([, s]) => s.timer !== null).map(([key]) => flush(key));
     await Promise.all([...pending, ...[...savers.current.values()].map((s) => s.chain)]);
   }, [flush]);
+
+  /** 单画板严格写入（更新准备用）：清空计时器，写入当前画板，失败 reject 真实原因。 */
+  const flushStrictOne = useCallback(async (key: string) => {
+    const saver = saverOf(key);
+    if (saver.timer) clearTimeout(saver.timer);
+    saver.timer = null;
+    const write = saver.chain.then(async () => {
+      const s = sessionsRef.current.find((x) => x.key === key);
+      if (!s || s.status !== "ok") return;
+      try {
+        await ipc.writeBoard(s.path, serializeBoard(s.board));
+        if (s.saveError) patch(key, (x) => ({ ...x, saveError: null }));
+      } catch (e) {
+        const message = `未能保存到 ${s.path}：${errorText(e)}`;
+        logEvent("board_save_failed", { board_file: basename(s.path), reason: "update_prepare", message: errorText(e) });
+        patch(key, (x) => ({ ...x, saveError: message }));
+        throw new Error(message);
+      }
+    });
+    saver.chain = write.catch(() => undefined);
+    return write;
+  }, [patch]);
+
+  /** 严格保存全部已打开画板（ADR 0016）：每个可编辑会话都重新写一遍并等待真实结果，
+   *  覆盖未到期计时器、在途写入与此前失败的保存；一个失败也等其余写完再抛错。 */
+  const flushAllStrict = useCallback(async () => {
+    const keys = sessionsRef.current.filter((s) => s.status === "ok").map((s) => s.key);
+    const results = await Promise.allSettled(keys.map((key) => flushStrictOne(key)));
+    const failed = results.find((r) => r.status === "rejected");
+    if (failed) throw (failed as PromiseRejectedResult).reason;
+  }, [flushStrictOne]);
 
   /** 打开画板文件；已打开则切过去。主文件与 .bak 都不存在时返回 false。 */
   const openPath = useCallback(
@@ -306,21 +354,28 @@ export function useBoardSessions(outputRoot: string | null, envSource: EnvSource
   return {
     sessions,
     activeKey,
-    setActiveKey,
-    openPath,
-    createBoard,
-    addImportedBoard,
-    closeBoard,
-    renameBoard,
-    saveAs,
-    apply,
+    setActiveKey: (key: string | null) => { if (!blocked()) setActiveKey(key); },
+    openPath: tracked(openPath, false),
+    createBoard: tracked(createBoard, undefined),
+    addImportedBoard: (board: Board) => {
+      if (blocked()) return Promise.reject(new Error("正在准备更新，暂不能导入画板"));
+      const work = addImportedBoard(board);
+      gateRef.current?.track(work);
+      return work;
+    },
+    closeBoard: tracked(closeBoard, undefined),
+    renameBoard: tracked(renameBoard, undefined),
+    saveAs: tracked(saveAs, undefined),
+    apply: (key: string, change: BoardChange) => blocked() ? null : apply(key, change),
     check,
-    undoBoard,
-    redoBoard,
+    undoBoard: (key: string) => { if (!blocked()) undoBoard(key); },
+    redoBoard: (key: string) => { if (!blocked()) redoBoard(key); },
     getBoard,
     boardFileName,
     closeAll,
     flushAll,
-    dismissNotice,
+    flushAllStrict,
+    dismissNotice: (key: string) => { if (!blocked()) dismissNotice(key); },
+    snapshot: () => ({ sessions: sessionsRef.current, activeKey: activeKeyRef.current }),
   };
 }

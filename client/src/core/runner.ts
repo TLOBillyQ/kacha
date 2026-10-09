@@ -76,6 +76,9 @@ export interface Runner {
   cancel(filter: CancelFilter): void;
   /** 关闭画板：取消该画板的任务并遗忘它的状态与经手过的任务编号。 */
   closeBoard(boardKey: string): void;
+  /** 更新准备的提交守护（ADR 0016）：挂上后 submit / regenerate 一律拒绝，
+   *  包含已经在等能力表摘要的异步间隙；传 null 解除。 */
+  setSubmissionGuard(guard: (() => void) | null): void;
   setConcurrency(limit: number): void;
   subscribe(listener: () => void): () => void;
   getSnapshot(): RunnerSnapshot;
@@ -124,6 +127,9 @@ export function createRunner(ports: RunnerPorts): Runner {
   const handled = new Map<string, Set<string>>();
   /** 已关闭的画板键（键不复用）：关闭前已开始、还在算摘要的提交不再入队。 */
   const closed = new Set<string>();
+  /** 更新准备期间拒绝一切新提交（读摘要之前与之后都查）。 */
+  let submissionGuard: (() => void) | null = null;
+  let submissionGeneration = 0;
   const listeners = new Set<() => void>();
   let snapshot = buildSnapshot();
 
@@ -288,6 +294,12 @@ export function createRunner(ports: RunnerPorts): Runner {
   /** 读参考图并入队；读的期间被取消则不入队。返回本地失败说明。 */
   async function enqueue(target: RunTarget, taskNodeId: string, submission: Job["submission"], prepare: () => Promise<Prepared>): Promise<string | null> {
     if (closed.has(target.boardKey)) return null;
+    // 守护在算能力表摘要期间挂上的情况由 submit / regenerate 在 await 之后拦截，这里不用查。
+    const guardedAtEntry = submissionGuard;
+    if (guardedAtEntry) {
+      guardedAtEntry();
+      return null;
+    }
     const job: Job = { target, taskNodeId, phase: "reading", submission, retries: 0, startedAt: 0, controller: new AbortController() };
     jobs.add(job);
     setFinished(job, null);
@@ -359,10 +371,16 @@ export function createRunner(ports: RunnerPorts): Runner {
 
   async function submit(target: RunTarget, board: Board, taskNodeIds: string[]): Promise<string[]> {
     const problems: string[] = [];
+    if (submissionGuard) {
+      submissionGuard();
+      return problems;
+    }
+    const generation = submissionGeneration;
     const submission = { cancelled: false };
     const tableSha256 = await tableDigest(target.table);
+    if (generation !== submissionGeneration) return problems;
     for (const taskNodeId of taskNodeIds) {
-      if (submission.cancelled || closed.has(target.boardKey)) break;
+      if (submission.cancelled || closed.has(target.boardKey) || generation !== submissionGeneration) break;
       if (occupied(target.boardKey, taskNodeId)) continue;
       const problem = await enqueue(target, taskNodeId, submission, () => prepareJob(deps, { board, table: target.table, tableSha256, outputRoot: target.outputRoot, taskNodeId }));
       if (problem) problems.push(problem);
@@ -371,8 +389,14 @@ export function createRunner(ports: RunnerPorts): Runner {
   }
 
   async function regenerate(target: RunTarget, board: Board, taskNodeId: string, fromTaskId?: string): Promise<string | null> {
+    if (submissionGuard) {
+      submissionGuard();
+      return null;
+    }
+    const generation = submissionGeneration;
     if (occupied(target.boardKey, taskNodeId)) return null;
     const tableSha256 = await tableDigest(target.table);
+    if (generation !== submissionGeneration) return null;
     if (occupied(target.boardKey, taskNodeId)) return null;
     return enqueue(target, taskNodeId, { cancelled: false }, () =>
       prepareRegenerate(deps, { board, table: target.table, tableSha256, outputRoot: target.outputRoot, taskNodeId, fromTaskId }),
@@ -383,6 +407,10 @@ export function createRunner(ports: RunnerPorts): Runner {
     submit,
     regenerate,
     cancel,
+    setSubmissionGuard(guard) {
+      if (guard) submissionGeneration++;
+      submissionGuard = guard;
+    },
     closeBoard(boardKey) {
       closed.add(boardKey);
       cancel({ kind: "board", boardKey });

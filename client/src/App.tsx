@@ -11,6 +11,7 @@ import { basename } from "./core/paths";
 import type { Runner, RunTarget } from "./core/runner";
 import { runDispatch, runScope, buildConfirmItems, collectRunFacts, type ConfirmItem } from "./core/submission";
 import { parseUiState, serializeUiState, type UiState } from "./core/uiState";
+import { createUpdatePreparation, type UpdatePreparation } from "./core/updatePreparation";
 import { imageProbe } from "./shell/adapters";
 import { ipc } from "./shell/ipc";
 import { BoardPackDialog } from "./ui/BoardPackDialog";
@@ -52,25 +53,67 @@ export function App() {
   const envRef = useRef({ table, discovery: settings.discovery });
   envRef.current = { table, discovery: settings.discovery };
   const runnerRef = useRef<Runner | null>(null);
+  const prepRef = useRef<UpdatePreparation | null>(null);
+  const gate = {
+    blocked: () => prepRef.current?.active() ?? false,
+    track: (op: Promise<unknown>) => prepRef.current?.track(op),
+    generation: () => prepRef.current?.generation() ?? 0,
+  };
   const boards = useBoardSessions(
     outputRoot,
     useCallback((key: string) => ({ ...envRef.current, locked: runnerRef.current!.getSnapshot().board(key).locked }), []),
+    gate,
   );
   const { sessions, activeKey, openPath, createBoard, flushAll } = boards;
 
   const { apply, check, undoBoard, redoBoard } = boards;
-  const { runner, snapshot: runState } = useRunner(apply, settings.settings.concurrency);
+  // 更新准备闸（issue #13）：active 期间阻断画板变更与任务提交；prepare 复用同一次准备，重复点击不产生第二次流程。
+  const [preparing, setPreparing] = useState(false);
+  const preparingRef = useRef(false);
+  /** 更新准备进行中（含异步操作结算期）。所有会产生画板变更 / 新任务的入口先过这道闸。 */
+  const guardPreparation = useCallback(() => preparingRef.current, []);
+  /** 更新准备期间画板变更入口一律拒绝（runner 产出的系统变更同样不能落地）。 */
+  const applyGuarded = useCallback(
+    (key: string, change: BoardChange) => (guardPreparation() ? null : apply(key, change)),
+    [apply, guardPreparation],
+  );
+  const { runner, snapshot: runState } = useRunner(applyGuarded, settings.settings.concurrency);
   runnerRef.current = runner;
+  /** 严格保存界面状态（更新准备）：立即序列化当前挂起状态并等待真实写入；失败 reject。 */
+  const persistStrictRef = useRef<() => Promise<void>>(async () => undefined);
+  const prep = (prepRef.current ??= createUpdatePreparation({
+    queue: {
+      pending: () => runnerRef.current!.getSnapshot().pending(),
+      setSubmissionGuard: (g) => runnerRef.current!.setSubmissionGuard(g),
+    },
+    saveBoards: () => boards.flushAllStrict(),
+    saveUi: () => persistStrictRef.current(),
+    onProtectionChange: (active) => {
+      preparingRef.current = active;
+      setPreparing(active);
+    },
+  }));
   const [focus, setFocus] = useState<{ boardKey: string; nodeId: string; nonce: number } | null>(null);
-  const applyActive = useCallback((change: BoardChange) => (activeKey ? apply(activeKey, change) : null), [activeKey, apply]);
+  const generation = prep.generation();
+  const applyActive = useCallback((change: BoardChange) =>
+    activeKey && !guardPreparation() && generation === prep.generation() ? apply(activeKey, change) : null,
+    [activeKey, apply, guardPreparation, generation, prep]);
   const checkActive = useCallback((change: BoardChange) => (activeKey ? check(activeKey, change) : null), [activeKey, check]);
-  const undoActive = useCallback(() => activeKey && undoBoard(activeKey), [activeKey, undoBoard]);
-  const redoActive = useCallback(() => activeKey && redoBoard(activeKey), [activeKey, redoBoard]);
+  const undoActive = useCallback(() => activeKey && !guardPreparation() && undoBoard(activeKey), [activeKey, undoBoard, guardPreparation]);
+  const redoActive = useCallback(() => activeKey && !guardPreparation() && redoBoard(activeKey), [activeKey, redoBoard, guardPreparation]);
   const openFromCanvas = useCallback((p: string) => void openOrWarnRef.current(p), []);
   const openOrWarnRef = useRef<(p: string) => Promise<void>>(async () => undefined);
 
   const toast = useCallback((message: string) => setToastText(message), []);
-  const pack = useBoardPack(outputRoot, boards, toast);
+  const pack = useBoardPack(outputRoot, boards, toast, gate);
+  const updateRestart = useCallback(async () => {
+    try {
+      const r = await prep.prepare();
+      toast(r.ok ? "准备就绪：画板与界面状态已保存（自动安装接入见 #12）" : r.reason);
+    } finally {
+      prep.release();
+    }
+  }, [prep, toast]);
   useEffect(() => {
     if (!toastText) return;
     const timer = setTimeout(() => setToastText(null), 4000);
@@ -79,10 +122,12 @@ export function App() {
 
   const openOrWarn = useCallback(
     async (path: string) => {
+      // 第二实例 / 画板里的打开动作在准备期间忽略（不多开标签页、不产生界面状态变更）。
+      if (guardPreparation()) return;
       const found = await openPath(path, true).catch(() => false);
-      if (!found) toast(`找不到画板文件：${path}`);
+      if (!found && !guardPreparation()) toast(`找不到画板文件：${path}`);
     },
-    [openPath, toast],
+    [openPath, toast, guardPreparation],
   );
   openOrWarnRef.current = openOrWarn;
 
@@ -122,7 +167,7 @@ export function App() {
       setOutputRoot(root);
       toast("已切换输出根目录：旧目录的画板与任务目录原样保留，新目录的画板列表为空");
     },
-    [boards, runner, toast],
+    [boards, runner, toast, guardPreparation],
   );
 
   /** 与运行时相同的上下文算确认项：逐张检测参考图（缺失 / 透明通道）。运行与查看发送文本共用。 */
@@ -137,23 +182,30 @@ export function App() {
   const startRun = useCallback(
     async (boardKey: string, board: Board, taskIds: string[]) => {
       setConfirm(null);
+      if (guardPreparation()) return;
       if (!outputRoot) return;
       const target: RunTarget = { boardKey, boardFile: boards.boardFileName(boardKey), table, outputRoot, baseUrl: settings.settings.base_url, apiKey: settings.apiKey };
-      const problems = await runner.submit(target, board, taskIds);
-      if (problems.length) toast(`${problems.length} 个任务提交失败：${problems[0]}`);
+      const submitting = runner.submit(target, board, taskIds);
+      prep.track(submitting);
+      const problems = await submitting;
+      if (problems.length && !guardPreparation()) toast(`${problems.length} 个任务提交失败：${problems[0]}`);
     },
-    [outputRoot, runner, boards, table, settings.settings.base_url, settings.apiKey, toast],
+    [outputRoot, runner, boards, table, settings.settings.base_url, settings.apiKey, toast, guardPreparation, prep],
   );
 
   // 单个干净任务直接提交，单个标红 / 没有任务只提示；其余弹二次确认（分派规则见 runDispatch）。
   const openRunConfirm = useCallback(
     async (selectedIds: string[]) => {
       if (!activeKey || !outputRoot) return;
+      if (guardPreparation()) return;
+      const token = prep.generation();
       await boards.flushAll();
+      if (guardPreparation()) return;
       const board = boards.getBoard(activeKey);
       if (!board) return;
       const busy = runner.getSnapshot().board(activeKey).locked;
       const items = await confirmItemsOf(board, runScope(board, selectedIds, busy), outputRoot);
+      if (guardPreparation() || token !== prep.generation()) return;
       const dispatch = runDispatch(items);
       // 没有可提交的任务时先说明原因；真要提交或弹确认窗才需要密钥。
       if (dispatch.kind === "toast") return toast(dispatch.message);
@@ -165,7 +217,7 @@ export function App() {
       if (dispatch.kind === "submit") void startRun(activeKey, board, [dispatch.taskId]);
       else setConfirm({ boardKey: activeKey, board, items, scope: selectedIds.length ? "selection" : "board" });
     },
-    [activeKey, outputRoot, settings.apiKey, boards, runner, confirmItemsOf, startRun, toast],
+    [activeKey, outputRoot, settings.apiKey, boards, runner, confirmItemsOf, startRun, toast, guardPreparation],
   );
 
   const viewSendText = useCallback(
@@ -191,6 +243,7 @@ export function App() {
   const regenerate = useCallback(
     async (taskNodeId: string, fromTaskId?: string) => {
       if (!activeKey || !outputRoot) return;
+      if (guardPreparation()) return;
       if (!settings.apiKey) {
         toast("请先在高级设置中填写 API 密钥");
         setSettingsOpen(true);
@@ -199,10 +252,12 @@ export function App() {
       const board = boards.getBoard(activeKey);
       if (!board) return;
       const target: RunTarget = { boardKey: activeKey, boardFile: boards.boardFileName(activeKey), table, outputRoot, baseUrl: settings.settings.base_url, apiKey: settings.apiKey };
-      const problem = await runner.regenerate(target, board, taskNodeId, fromTaskId);
-      if (problem) toast(`${fromTaskId ? "生成变体" : "重新生成"}失败：${problem}`);
+      const regenerating = runner.regenerate(target, board, taskNodeId, fromTaskId);
+      prep.track(regenerating);
+      const problem = await regenerating;
+      if (problem && !guardPreparation()) toast(`${fromTaskId ? "生成变体" : "重新生成"}失败：${problem}`);
     },
-    [activeKey, outputRoot, boards, runner, settings.apiKey, settings.settings.base_url, table, toast],
+    [activeKey, outputRoot, boards, runner, settings.apiKey, settings.settings.base_url, table, toast, guardPreparation, prep],
   );
 
   const cancelTask = useCallback((taskNodeId: string) => activeKey && runner.cancel({ kind: "task", boardKey: activeKey, taskNodeId }), [activeKey, runner]);
@@ -218,8 +273,11 @@ export function App() {
 
   const closeBoard = useCallback(
     async (key: string) => {
+      if (guardPreparation()) return;
+      const token = prep.generation();
       const count = runner.getSnapshot().pending(key);
       if (count > 0 && !(await confirmStopTasks(count))) return;
+      if (guardPreparation() || token !== prep.generation()) return;
       // 取消并遗忘：重开后失败 / 已取消由任务目录的 outcome.json 给出。
       runner.closeBoard(key);
       await boards.closeBoard(key);
@@ -257,13 +315,24 @@ export function App() {
     return () => void unlisten.then((fn) => fn());
   }, [openOrWarn]);
 
-  const persistUi = useCallback(() => {
-    const active = sessions.find((s) => s.key === activeKey);
-    const state: UiState = { window: windowSize.current, open_boards: sessions.map((s) => s.path), active_board: active?.path ?? null };
-    return ipc.writeUiState(serializeUiState(state)).catch(() => undefined);
-  }, [sessions, activeKey]);
+  const uiWriteChain = useRef(Promise.resolve());
+  const writeUi = useCallback(() => {
+    const { sessions: list, activeKey: key } = boards.snapshot();
+    const active = list.find((s) => s.key === key);
+    const text = serializeUiState({ window: windowSize.current, open_boards: list.map((s) => s.path), active_board: active?.path ?? null });
+    const write = uiWriteChain.current.then(() => ipc.writeUiState(text));
+    uiWriteChain.current = write.catch(() => undefined);
+    return write;
+  }, [boards]);
+  const persistUi = useCallback(() => guardPreparation() ? Promise.resolve() : writeUi().catch(() => undefined), [writeUi, guardPreparation]);
   const persistRef = useRef(persistUi);
   persistRef.current = persistUi;
+  const resizeTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  persistStrictRef.current = async () => {
+    clearTimeout(resizeTimerRef.current);
+    resizeTimerRef.current = undefined;
+    await writeUi();
+  };
 
   const uiSignature = JSON.stringify([sessions.map((s) => s.path), sessions.find((s) => s.key === activeKey)?.path]);
   useEffect(() => {
@@ -272,25 +341,35 @@ export function App() {
 
   useEffect(() => {
     const win = getCurrentWindow();
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const resized = win.onResized(async ({ payload }) => {
-      if (await win.isMaximized()) return;
-      const logical = payload.toLogical(await win.scaleFactor());
-      windowSize.current = { width: Math.round(logical.width), height: Math.round(logical.height) };
-      clearTimeout(timer);
-      timer = setTimeout(() => void persistRef.current(), 500);
+    const resized = win.onResized(({ payload }) => {
+      if (guardPreparation()) return;
+      const work = (async () => {
+        if (await win.isMaximized()) return;
+        const logical = payload.toLogical(await win.scaleFactor());
+        windowSize.current = { width: Math.round(logical.width), height: Math.round(logical.height) };
+        clearTimeout(resizeTimerRef.current);
+        resizeTimerRef.current = setTimeout(() => void persistRef.current(), 500);
+      })();
+      prep.track(work);
+      void work.catch(() => undefined);
     });
     // 注册了关闭监听后由前端调用 destroy 关窗（需 core:window:allow-destroy）；保存出错也不能挡住关窗。
     // 有未完成任务时先阻断式确认，全局只弹一次。
     let asking = false;
     const closing = win.onCloseRequested(async (event) => {
+      // 更新准备期间一律挡住关窗：保存与检查不能被中途截断。
+      if (guardPreparation()) {
+        event.preventDefault();
+        return;
+      }
+      const token = prep.generation();
       const count = runner.getSnapshot().pending();
       if (count > 0) {
         event.preventDefault();
         if (asking) return;
         asking = true;
         const confirmed = await confirmStopTasks(count).finally(() => (asking = false));
-        if (!confirmed) return;
+        if (!confirmed || guardPreparation() || token !== prep.generation()) return;
         runner.cancel({ kind: "all" });
       }
       try {
@@ -299,14 +378,18 @@ export function App() {
       } catch (e) {
         console.error("关闭前保存失败", e);
       }
+      if (guardPreparation() || token !== prep.generation()) {
+        event.preventDefault();
+        return;
+      }
       if (count > 0) await win.destroy();
     });
     return () => {
-      clearTimeout(timer);
+      clearTimeout(resizeTimerRef.current);
       void resized.then((fn) => fn());
       void closing.then((fn) => fn());
     };
-  }, [flushAll, runner]);
+  }, [flushAll, runner, guardPreparation]);
 
   if (fatal) return <div className="fatal">启动失败：{fatal}</div>;
 
@@ -326,7 +409,7 @@ export function App() {
           }}
           onClose={(key) => void closeBoard(key)}
           onRename={(key, title) => void boards.renameBoard(key, title)}
-          onCreate={() => void createBoard()}
+          onCreate={() => void (!guardPreparation() && createBoard())}
           onExportPack={(key) => void pack.prepareExport(key)}
         />
       </div>
@@ -352,7 +435,7 @@ export function App() {
             className="topbar-button"
             aria-haspopup="menu"
             aria-expanded={packMenu !== null}
-            disabled={!outputRoot}
+            disabled={!outputRoot || preparing}
             onClick={(e) => {
               const r = e.currentTarget.getBoundingClientRect();
               setPackMenu((m) => (m ? null : { x: r.left, y: r.bottom + 2 }));
@@ -361,9 +444,14 @@ export function App() {
             画板包 ▾
           </button>
           {update.available && (
-            <button className="topbar-button topbar-update" title="打开下载页" onClick={update.openDownload}>
-              ⬇ 新版本 {update.available.version}
-            </button>
+            <>
+              <button className="topbar-button topbar-update" title="打开下载页" onClick={update.openDownload}>
+                ⬇ 新版本 {update.available.version}
+              </button>
+              <button className="topbar-button" disabled={preparing} onClick={() => void updateRestart()}>
+                {preparing ? "正在准备更新…" : "重启并更新"}
+              </button>
+            </>
           )}
           <button className="topbar-button" onClick={() => setSettingsOpen(true)} disabled={!settings.loaded || !outputRoot}>
             ⚙ 高级设置
@@ -424,7 +512,7 @@ export function App() {
                   <button className="primary" onClick={() => void createBoard()} disabled={!outputRoot}>
                     新建画板
                   </button>
-                  <button onClick={() => void pack.importPack()} disabled={!outputRoot}>
+                  <button onClick={() => void pack.importPack()} disabled={!outputRoot || preparing}>
                     导入画板包…
                   </button>
                 </div>
@@ -478,7 +566,8 @@ export function App() {
           outputRoot={outputRoot}
           defaultOutputRoot={defaultRoot}
           openBoards={sessions.map((s) => s.path)}
-          busy={runState.pending() > 0}
+          busy={runState.pending() > 0 || preparing}
+          gate={gate}
           onOutputRootChange={switchOutputRoot}
           update={update}
           onClose={() => setSettingsOpen(false)}

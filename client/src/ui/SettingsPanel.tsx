@@ -11,6 +11,7 @@ import {
   validateBaseUrl,
   type Settings,
 } from "../core/settings";
+import type { OperationGate } from "../core/updatePreparation";
 import { DiagnosticsSection } from "./DiagnosticsSection";
 import type { ConnectionResult, useSettings } from "./useSettings";
 import type { useUpdateCheck } from "./useUpdateCheck";
@@ -24,13 +25,14 @@ interface Props {
   openBoards: string[];
   /** 有排队 / 执行中的任务时不允许切换输出根目录。 */
   busy: boolean;
+  gate?: OperationGate;
   /** 输出根目录变了：由调用方关闭标签页并切换。 */
   onOutputRootChange: (root: string) => Promise<void>;
   update: ReturnType<typeof useUpdateCheck>;
   onClose: () => void;
 }
 
-export function SettingsPanel({ settings, outputRoot, defaultOutputRoot, openBoards, busy, onOutputRootChange, update, onClose }: Props) {
+export function SettingsPanel({ settings, outputRoot, defaultOutputRoot, openBoards, busy, gate, onOutputRootChange, update, onClose }: Props) {
   const [baseUrl, setBaseUrl] = useState(settings.settings.base_url);
   const [apiKey, setApiKey] = useState(settings.apiKey);
   const [showKey, setShowKey] = useState(false);
@@ -63,8 +65,8 @@ export function SettingsPanel({ settings, outputRoot, defaultOutputRoot, openBoa
     if (typeof picked === "string") setRoot(picked);
   };
 
-  const submit = async () => {
-    if (urlError) return;
+  const submitWork = async () => {
+    if (urlError || (rootChanged && busy)) return;
     setSaving(true);
     setError(null);
     const next: Settings = {
@@ -82,6 +84,13 @@ export function SettingsPanel({ settings, outputRoot, defaultOutputRoot, openBoa
     if (rootChanged && !readOnly) await onOutputRootChange(root);
     setSaving(false);
     onClose();
+  };
+
+  const submit = () => {
+    if (gate?.blocked()) return;
+    const work = submitWork();
+    gate?.track(work);
+    return work;
   };
 
   return (
@@ -149,7 +158,7 @@ export function SettingsPanel({ settings, outputRoot, defaultOutputRoot, openBoa
             </button>
           )}
         </div>
-        {busy && <div className="muted small form-hint">有任务在排队或执行，暂不能切换输出根目录。</div>}
+        {busy && <div className="muted small form-hint">有任务在排队或执行，或正在准备更新，暂不能切换输出根目录。</div>}
         {rootChanged && <div className="notice notice-warn">切换不搬文件，新目录的画板列表为空；保存后会关闭当前打开的画板。</div>}
 
         <label className="form-row">
