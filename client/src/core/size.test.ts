@@ -33,10 +33,12 @@ describe("Seedream 5.0 分辨率档 × 宽高比按官方映射表（API 参考 
   const seedream = (id: string) => BUILTIN_TABLE.models.find((m) => m.model_id === id)!;
   const pro = seedream("doubao-seedream-5-0-pro-260628");
   const lite = seedream("doubao-seedream-5-0-lite-260128");
+  const flash = seedream("doubao-seedream-5-0-flash-260915");
 
-  it("pro：1K / 1.5K / 2K，lite：2K / 3K / 4K，各 8 个宽高比；文生图与图片编辑同表", () => {
+  it("pro / flash：1K / 1.5K / 2K，lite：2K / 3K / 4K，各 8 个宽高比；文生图与图片编辑同表", () => {
     for (const [model, tiers] of [
       [pro, ["1K", "1.5K", "2K"]],
+      [flash, ["1K", "1.5K", "2K"]],
       [lite, ["2K", "3K", "4K"]],
     ] as const) {
       const { text_to_image, image_edit } = model.workflows;
@@ -59,7 +61,7 @@ describe("Seedream 5.0 分辨率档 × 宽高比按官方映射表（API 参考 
   });
 
   it("每个分辨率档的像素都落在该模型像素模式的总像素与宽高比区间内，宽高比与标称一致（±2%）", () => {
-    for (const model of [pro, lite]) {
+    for (const model of [pro, lite, flash]) {
       const rule = model.workflows.text_to_image.size_rule;
       for (const [tier, ratios] of Object.entries(rule.tiers)) {
         for (const [ratio, [w, h]] of Object.entries(ratios)) {
@@ -69,6 +71,15 @@ describe("Seedream 5.0 分辨率档 × 宽高比按官方映射表（API 参考 
         }
       }
     }
+  });
+
+  it("Flash 拒绝 Lite 的 3K / 4K 和超出官方像素范围的旧生成尺寸", () => {
+    const rule = flash.workflows.image_edit.size_rule;
+    expect(resolveSize(rule, { tier: "3K", ratio: "1:1", width: null, height: null })).toBeNull();
+    expect(resolveSize(rule, { tier: "4K", ratio: "1:1", width: null, height: null })).toBeNull();
+    expect(resolveSize(rule, { tier: null, ratio: null, width: 3072, height: 3072 })).toBeNull();
+    expect(resolveSize(rule, { tier: null, ratio: null, width: 512, height: 512 })).toBeNull();
+    expect(resolveSize(rule, { tier: "2K", ratio: "16:9", width: null, height: null })).toEqual({ width: 2816, height: 1584 });
   });
 });
 

@@ -19,6 +19,7 @@ const FIXTURE_DIRS = [
   "2026-09-16-team-gateway-multiturn-refs-mask",
 ];
 const SEEDREAM_DIR = "2026-09-17-team-gateway-seedream";
+const FLASH_DIR = "2026-10-09-team-gateway-flash";
 
 interface Exchange {
   request: { method: string; path: string; headers: Record<string, string>; body: unknown };
@@ -101,6 +102,7 @@ function replay(exchange: Exchange, images: (url: string) => Uint8Array | undefi
 const qwenPro = findModel(BUILTIN_TABLE, "qwen-image-3.0-pro")!;
 const seedreamPro = findModel(BUILTIN_TABLE, "doubao-seedream-5-0-pro-260628")!;
 const seedreamLite = findModel(BUILTIN_TABLE, "doubao-seedream-5-0-lite-260128")!;
+const seedreamFlash = findModel(BUILTIN_TABLE, "doubao-seedream-5-0-flash-260915")!;
 const png = { mediaType: "image/png", bytes: PNG_BYTES };
 
 const textInput = (patch: Partial<GenerationInput> = {}): GenerationInput => ({
@@ -113,6 +115,30 @@ const textInput = (patch: Partial<GenerationInput> = {}): GenerationInput => ({
 });
 
 const BASE = "http://gateway.test:3001";
+
+describe("Flash：当前网关实测夹具回放", () => {
+  it.each([
+    ["text", 0, 1024, 1024, false],
+    ["overlay", 2, 2400, 800, false],
+    ["transparent", 1, 1536, 1536, true],
+  ] as const)("%s：复用 Seedream 路由、精确尺寸和单结果 URL 解析", async (name, count, width, height, transparentBackground) => {
+    const fixture = loadFixture(FLASH_DIR, `${name}.json`);
+    const { fetch, calls } = replay(fixture);
+    const result = await generate(
+      { baseUrl: BASE, apiKey: "sk-test", fetch },
+      textInput({ model: seedreamFlash, size: { width, height }, references: Array(count).fill(png), transparentBackground }),
+    );
+    expect(calls[0].url).toBe(`${BASE}/v1/images/generations`);
+    expect(calls[0].method).toBe(fixture.request.method);
+    expectMatchesFixture(calls[0].headers, fixture.request.headers, "headers");
+    expectMatchesFixture(calls[0].body, fixture.request.body);
+    expect(result.images).toEqual([{ kind: "url", url: "https://example.invalid/redacted" }]);
+    expect(calls[0].body).not.toHaveProperty("sequential_image_generation");
+    expect(calls[0].body).not.toHaveProperty("n");
+    expect(calls[0].body).not.toHaveProperty("input");
+    expect(calls[0].body).not.toHaveProperty("negative_prompt");
+  });
+});
 
 describe("网关适配器：请求载荷对照夹具", () => {
   it("文生图 POST /v1/images/generations，字段 model / prompt / negative_prompt / n / size(WxH) / fixed_params", async () => {

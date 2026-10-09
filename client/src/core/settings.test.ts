@@ -117,7 +117,7 @@ describe("模型发现", () => {
   });
 
   it("从未发现过时列出上架清单", () => {
-    expect(availableModels(BUILTIN_TABLE, { source: "none" }).map((m) => m.model_id)).toEqual(["qwen-image-3.0-pro", "doubao-seedream-5-0-pro-260628", "qwen-image-3.0", "doubao-seedream-5-0-lite-260128"]);
+    expect(availableModels(BUILTIN_TABLE, { source: "none" }).map((m) => m.model_id)).toEqual(["qwen-image-3.0-pro", "doubao-seedream-5-0-pro-260628", "qwen-image-3.0", "doubao-seedream-5-0-lite-260128", "doubao-seedream-5-0-flash-260915"]);
   });
 
   it("已发现但网关没有该模型时，任务标红原因", () => {
@@ -125,6 +125,16 @@ describe("模型发现", () => {
     expect(modelAvailabilityIssue(BUILTIN_TABLE, live, "qwen-image-3.0-pro")).toBeNull();
     expect(modelAvailabilityIssue(BUILTIN_TABLE, live, "qwen-image-3.0")).toBe("网关未提供模型 qwen-image-3.0");
     expect(modelAvailabilityIssue(BUILTIN_TABLE, { source: "none" }, "qwen-image-3.0")).toBeNull();
+  });
+
+  it("Flash 按完整 ID 与网关发现求交集，旧缓存不提前显示 Flash", () => {
+    const flash = "doubao-seedream-5-0-flash-260915";
+    const live = { source: "live" as const, ids: [flash], fetchedAt: "t" };
+    expect(availableModels(BUILTIN_TABLE, live).map((m) => m.model_id)).toEqual([flash]);
+    expect(defaultTaskModel(BUILTIN_TABLE, live, null)).toBe(flash);
+    const cached = { source: "cached" as const, ids: ["doubao-seedream-5-0-lite-260128"], fetchedAt: "t" };
+    expect(availableModels(BUILTIN_TABLE, cached).some((m) => m.model_id === flash)).toBe(false);
+    expect(modelAvailabilityIssue(BUILTIN_TABLE, cached, flash)).toBe("网关未提供模型 Seedream 5.0 flash");
   });
 });
 

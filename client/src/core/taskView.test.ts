@@ -202,6 +202,32 @@ describe("不可运行原因：种类与类别", () => {
   });
 });
 
+describe("Flash 提交边界", () => {
+  const model = "doubao-seedream-5-0-flash-260915";
+  const flashBoard = (count: number) => {
+    const refs = Array.from({ length: count }, (_, i) => `r${i + 1}`);
+    return ready({ model }, refs, refs.map((_, i) => `@图${i + 1}`).join(" ") || "猫");
+  };
+
+  it("允许 10 张参考图，11 张在提交前拦下", () => {
+    expect(kinds(flashBoard(10))).toEqual([]);
+    expect(kinds(flashBoard(11))).toEqual([["tooManyReferences", "error"]]);
+  });
+
+  it("高亮叠加图计入 10 张发送上限", () => {
+    const b = flashBoard(10);
+    b.edges[1] = { ...b.edges[1], region: REGION };
+    expect(kinds(b)).toEqual([["tooManyReferences", "error"]]);
+  });
+
+  it("透明背景只允许单张带 alpha 参考图", () => {
+    expect(kinds(ready({ model, transparent_background: true }, [], "猫"))).toEqual([["transparentNeedsOneImage", "error"]]);
+    expect(kinds(ready({ model, transparent_background: true }, ["r1"]), BUILTIN_TABLE, { ...UNKNOWN, alphaByNode: new Map([["r1", false]]) })).toEqual([["transparentNoAlpha", "error"]]);
+    expect(kinds(ready({ model, transparent_background: true }, ["r1"]), BUILTIN_TABLE, { ...UNKNOWN, alphaByNode: new Map([["r1", true]]) })).toEqual([]);
+    expect(kinds(ready({ model, transparent_background: true }, ["r1", "r2"], "@图1 @图2"))).toEqual([["transparentNeedsOneImage", "error"]]);
+  });
+});
+
 describe("不可运行原因：文案", () => {
   const texts = (b: Board, table?: CapabilityTable) => view(b, table).reasons.map((r) => r.text);
 

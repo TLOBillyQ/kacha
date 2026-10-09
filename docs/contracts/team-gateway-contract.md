@@ -55,6 +55,15 @@
 - **透明背景**：pro 单张带 alpha 输入 + `background:"transparent"` 输出 RGBA；不带参数输出白底 RGB；lite 忽略该参数。
 - **图层拆分**：`layer_decomposition` 三种猜测形态均被静默忽略；真实参数未知。
 
+## 2026-10-09 冒烟：Seedream 5.0 Flash
+
+夹具保存于 `contracts/fixtures/2026-10-09-team-gateway-flash/`，参数来源和验证边界见 [Flash 接入与能力依据](../research/seedream-flash.md)：
+
+- 完整 ID `doubao-seedream-5-0-flash-260915`，复用 `POST /v1/images/generations`；发送精确 `WxH`、`response_format:"url"`、`output_format:"png"`、`watermark:false`，不发送 Lite 的 `sequential_image_generation`。
+- 文生图、两张有序 data-URL 参考图编辑、单张 RGBA 输入的透明背景均 HTTP 200；各返回一张 `data[].url`，`usage.input_images` 分别为 0 / 2 / 1。
+- 高亮叠加编辑只改变指定的第 4 个方块，无高亮残留；透明背景输出真实 RGBA PNG。
+- 1K / 1.5K / 2K 及 10 张参考图限制来自当前官方 Flash 参数表。图上标记、坐标标签和图层拆分保持待测；本轮没有验证限流或退役行为。
+
 ## 探测流程
 
 临时密钥只能通过环境变量或权限受限的临时文件提供：

@@ -84,6 +84,7 @@ const MODELS: { model: ModelCapability; native: boolean }[] = [
   { model: qwen, native: true },
   { model: seedreamPro, native: false },
   { model: seedreamLite, native: false },
+  { model: findModel(BUILTIN_TABLE, "doubao-seedream-5-0-flash-260915")!, native: false },
 ];
 
 const NEGATIVE = { zh: { text: "模糊", line: "\n避免出现：模糊" }, en: { text: "blurry", line: "\nAvoid: blurry" } };
@@ -98,7 +99,7 @@ it("单张用户参考图默认引用，按已确认文本说明参考用途与�
   expect(plan.referenceCount).toBe(1);
 });
 
-describe("发送计划：4 个内置模型 × 参考图与区域 × 语言 × 负向", () => {
+describe("发送计划：内置模型 × 参考图与区域 × 语言 × 负向", () => {
   for (const { model, native } of MODELS) {
     for (const c of CASES) {
       for (const language of ["zh", "en"] as const) {
