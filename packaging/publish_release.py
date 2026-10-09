@@ -9,14 +9,14 @@ Gitea Release 是唯一分发渠道；每端发布完整 updater 集合：
 两端各在对应机器用 build_release.py 构建，构建后各跑一次本脚本：创建或复用
 tag `v<版本>` 的 Release，上传/替换本机产物（幂等，同名附件先删后传）。本机
 SHA256SUMS 与远端已有内容合并（本机条目优先），两端都发布后校验值文件覆盖
-全部压缩包。
+全部发布产物。
 
 安全闸门（任一不满足即拒绝，且不发起任何写操作）：
 
 - token 只从环境变量 GITEA_TOKEN 读取，不接受命令行传参；
 - 版本号唯一来源是 client/src-tauri/Cargo.toml；release/ 里出现与该版本
-  不一致的压缩包（如旧版本残留）即拒绝；
-- 上传前重核 release/SHA256SUMS：缺失文件、哈希不一致、或本地压缩包未被
+  不一致的发布产物（如旧版本残留）即拒绝；
+- 上传前重核 release/SHA256SUMS：缺失文件、哈希不一致、或本地发布产物未被
   列出都算失败；
 - 必须已有 docs/release/release-notes-<版本>.md（Release 正文与更新说明）。
 
@@ -298,8 +298,8 @@ def publish(api: ReleaseApi, release_dir: Path, version: str, body: str,
             api.delete_asset(release_id, int(asset["id"]))
             print(f"[ok] 已撤下旧更新描述：{descriptor}")
 
-    for zip_path in artifacts:
-        upload_replace(api, release_id, zip_path.name, zip_path.read_bytes())
+    for artifact_path in artifacts:
+        upload_replace(api, release_id, artifact_path.name, artifact_path.read_bytes())
 
     updater = updater_name(version, platform)
     url = None
@@ -329,7 +329,7 @@ def main(
     repo_root: Path = REPO_ROOT,
     client_factory: Callable[[str, str, str], ReleaseApi] = GiteaClient,
 ) -> int:
-    parser = argparse.ArgumentParser(description="把本机发布物上传到 Gitea Release（三附件，幂等）")
+    parser = argparse.ArgumentParser(description="把本机完整 updater 发布集合上传到 Gitea Release（幂等）")
     parser.add_argument(
         "--release-dir",
         default=str(repo_root / "release"),

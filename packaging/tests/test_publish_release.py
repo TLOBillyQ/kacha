@@ -18,9 +18,9 @@ import publish_release
 
 VERSION = "1.2.3"
 TOKEN = "test-token"
-WIN_ZIP = f"kacha-{VERSION}-win-x64-setup.exe"
+WIN_INSTALLER = f"kacha-{VERSION}-win-x64-setup.exe"
 MAC_ZIP = f"kacha-{VERSION}-macos-arm64.zip"
-WIN_ASSETS = [WIN_ZIP, WIN_ZIP + ".sig", "updater-win-x64.json"]
+WIN_ASSETS = [WIN_INSTALLER, WIN_INSTALLER + ".sig", "updater-win-x64.json"]
 MAC_ASSETS = [MAC_ZIP, f"kacha-{VERSION}-macos-arm64.app.tar.gz",
               f"kacha-{VERSION}-macos-arm64.app.tar.gz.sig", "updater-macos-arm64.json"]
 
@@ -129,13 +129,13 @@ class PublishTest(unittest.TestCase):
         self.assertEqual(release["name"], VERSION)
         self.assertIn("仍要运行", release["body"])
         self.assertEqual(self.gitea.names(release["id"]), sorted([*WIN_ASSETS, "SHA256SUMS"]))
-        self.assertEqual(self.gitea.data(release["id"], WIN_ZIP), (release_dir / WIN_ZIP).read_bytes())
+        self.assertEqual(self.gitea.data(release["id"], WIN_INSTALLER), (release_dir / WIN_INSTALLER).read_bytes())
         descriptor = json.loads(self.gitea.data(release["id"], "updater-win-x64.json"))
         self.assertEqual(descriptor["version"], VERSION)
         payload = descriptor["platforms"]["windows-x86_64"]
-        installer_asset = next(a for a in self.gitea.list_assets(release["id"]) if a["name"] == WIN_ZIP)
+        installer_asset = next(a for a in self.gitea.list_assets(release["id"]) if a["name"] == WIN_INSTALLER)
         self.assertEqual(payload["url"], installer_asset["browser_download_url"])
-        self.assertEqual(payload["signature"], (release_dir / (WIN_ZIP + ".sig")).read_text())
+        self.assertEqual(payload["signature"], (release_dir / (WIN_INSTALLER + ".sig")).read_text())
 
     def test_both_platforms_merge_into_one_release_idempotently(self) -> None:
         win_dir = make_release_dir(self.root / "win", VERSION, "win-x64")
@@ -146,7 +146,7 @@ class PublishTest(unittest.TestCase):
         release_id = self.gitea.releases[f"v{VERSION}"]["id"]
         self.assertEqual(self.gitea.names(release_id), sorted([*WIN_ASSETS, *MAC_ASSETS, "SHA256SUMS"]))
         checksums = self.gitea.data(release_id, "SHA256SUMS").decode("utf-8")
-        for name, path in ((WIN_ZIP, win_dir / WIN_ZIP), (MAC_ZIP, mac_dir / MAC_ZIP)):
+        for name, path in ((WIN_INSTALLER, win_dir / WIN_INSTALLER), (MAC_ZIP, mac_dir / MAC_ZIP)):
             self.assertIn(f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {name}", checksums)
 
         # 再跑一次：附件替换而非重复，内容不变；删除走嵌套路由参数（release_id, asset_id）。
@@ -167,7 +167,7 @@ class PublishTest(unittest.TestCase):
 
     def test_interrupted_upload_leaves_no_ready_descriptor(self) -> None:
         release_dir = make_release_dir(self.root / "win", VERSION, "win-x64")
-        (release_dir / WIN_ZIP).rename(release_dir / "fail.me")
+        (release_dir / WIN_INSTALLER).rename(release_dir / "fail.me")
         with (release_dir / "SHA256SUMS").open("a", encoding="utf-8") as stream:
             stream.write(f"{hashlib.sha256(b'fake updater win-x64').hexdigest()}  fail.me\n")
         release = self.gitea.create_release(f"v{VERSION}", VERSION, "notes")
@@ -176,14 +176,14 @@ class PublishTest(unittest.TestCase):
             publish_release, "local_platform", return_value="win-x64"
         ):
             publish_release.publish(self.gitea, release_dir, VERSION, body,
-                                    [release_dir / "fail.me", release_dir / f"{WIN_ZIP}.sig"])
+                                    [release_dir / "fail.me", release_dir / f"{WIN_INSTALLER}.sig"])
         code = ctx.exception
         self.assertIn("fail", str(code).lower())
         self.assertEqual(self.gitea.names(1), [])
 
     def test_refuses_checksum_mismatch_before_any_upload(self) -> None:
         release_dir = make_release_dir(self.root / "win", VERSION, "win-x64")
-        (release_dir / WIN_ZIP).write_bytes(b"tampered")
+        (release_dir / WIN_INSTALLER).write_bytes(b"tampered")
         code, _ = run_publish(self.repo, release_dir, self.gitea)
         self.assertIn("SHA256SUMS", str(code))
         self.assertEqual(self.gitea.calls, [])
