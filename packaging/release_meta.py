@@ -4,8 +4,8 @@
 
 - 版本号唯一来源是 client/src-tauri/Cargo.toml 的 [package] version；
   tauri.conf.json 若也写了 version，必须与之相同，否则直接报错。
-- 发布产物命名：kacha-<版本>-win-x64.zip、
-  kacha-<版本>-macos-arm64.zip、SHA256SUMS。
+- 发布产物命名：Windows NSIS 安装器、macOS 首次安装 zip 与 `.app.tar.gz` 更新包，
+  各端 updater 签名、平台描述及 SHA256SUMS。
 - SHA256SUMS 解析、写出、合并与核对。
 """
 

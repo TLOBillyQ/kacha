@@ -5,8 +5,8 @@ Tauri 不能交叉编译到另一平台，Windows 与 macOS 包必须各在对�
 - Windows x64：`npx tauri build --bundles nsis --target x86_64-pc-windows-msvc`，产物为
   按当前用户安装的 NSIS 安装器及 `.sig`，复制并统一命名。
 - macOS Apple Silicon：`npx tauri build --bundles app --target aarch64-apple-darwin`，
-  产物为 `Kacha.app`；ad-hoc 签名（codesign --sign -）并严格校验后，
-  用 ditto 压缩（保留签名与扩展属性，zipfile 会破坏 .app）。
+  Tauri 先 ad-hoc 签名，再生成同目录的 `Kacha.app.tar.gz` 与 `.sig`；
+  本脚本只严格校验应用签名，再用 ditto 制作首次安装 zip，保留签名与扩展属性。
 
 输出到仓库根目录 release/：
 
@@ -15,8 +15,8 @@ Tauri 不能交叉编译到另一平台，Windows 与 macOS 包必须各在对�
     SHA256SUMS
 
 版本号唯一来源是 client/src-tauri/Cargo.toml（见 release_meta.py）。
-release/ 中存在其他版本的压缩包时拒绝构建，避免旧产物混进发布。
-SHA256SUMS 与已有内容合并：另一平台的压缩包若也在本目录，则保留其条目。
+release/ 中存在其他版本的发布产物时拒绝构建，避免旧产物混进发布。
+SHA256SUMS 与已有内容合并：另一平台的发布产物若也在本目录，则保留其条目。
 
 示例：
 
@@ -41,7 +41,6 @@ from release_meta import (  # noqa: E402
     PLATFORMS,
     WIN_X64,
     ReleaseMetaError,
-    foreign_zips,
     foreign_artifacts,
     read_checksums,
     sha256_of,
@@ -99,17 +98,17 @@ def product_path(repo_root: Path, platform: str, version: str | None = None) -> 
 
 
 def ensure_no_foreign_zips(release_dir: Path, version: str) -> None:
-    """release/ 里有其他版本（或命名不合规）的压缩包即拒绝。"""
+    """release/ 里有其他版本（或命名不合规）的发布产物即拒绝。"""
     stale = foreign_artifacts(release_dir, version)
     if stale:
         raise SystemExit(
-            f"release/ 存在与版本 {version} 不一致的压缩包：{', '.join(stale)}。"
+            f"release/ 存在与版本 {version} 不一致的发布产物：{', '.join(stale)}。"
             "版本号唯一来源是 client/src-tauri/Cargo.toml；请清理旧产物或先 bump 版本。"
         )
 
 
 def update_checksums(release_dir: Path, version: str) -> dict[str, str]:
-    """重写 SHA256SUMS：只含当前版本且确实存在于 release/ 的压缩包。
+    """重写 SHA256SUMS：只含当前版本且确实存在于 release/ 的安装包、更新包与签名。
 
     本机刚构建的包自然被重新计算；另一平台的包（例如从另一台机器拷来）
     若在目录里也一并计算，从而保留其条目；已不存在的文件条目被丢弃，
@@ -152,11 +151,10 @@ def _which(tool: str) -> str:
     return found
 
 
-def _adhoc_sign(app_path: Path) -> None:
-    """ad-hoc 签名：无开发者身份，仅固定代码哈希；不做公证（ADR 0007）。"""
-    _run(["codesign", "--force", "--deep", "--sign", "-", str(app_path)], cwd=REPO_ROOT)
+def _verify_macos_signature(app_path: Path) -> None:
+    """验证 Tauri 已签名的应用；归档后重新签名会使首次安装与更新内容分歧。"""
     _run(["codesign", "--verify", "--deep", "--strict", str(app_path)], cwd=REPO_ROOT)
-    print(f"[ok] ad-hoc 签名完成：{app_path.name}")
+    print(f"[ok] 应用签名校验通过：{app_path.name}")
 
 
 def _make_macos_zip(app_path: Path, out_zip: Path) -> None:
@@ -168,7 +166,7 @@ def _make_macos_zip(app_path: Path, out_zip: Path) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="在目标机器上构建 v2 客户端发布压缩包")
+    parser = argparse.ArgumentParser(description="在目标机器上构建 v2 客户端安装包与签名更新包")
     parser.add_argument(
         "--platform",
         choices=PLATFORMS,
@@ -213,11 +211,11 @@ def main(argv: list[str] | None = None) -> int:
             raise SystemExit(f"缺少 updater 签名：{product_sig}")
         shutil.copy2(product_sig, Path(str(out_package) + ".sig"))
     else:
-        _adhoc_sign(product)
+        _verify_macos_signature(product)
         out_zip = release_dir / zip_name(version, target)
         _make_macos_zip(product, out_zip)
         out_package = release_dir / updater_name(version, target)
-        source_package = product.parent.parent.parent / "updater" / out_package.name
+        source_package = Path(str(product) + ".tar.gz")
         if not source_package.is_file():
             raise SystemExit(f"构建产物缺失：{source_package}")
         shutil.copy2(source_package, out_package)
