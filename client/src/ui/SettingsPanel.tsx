@@ -170,18 +170,32 @@ export function SettingsPanel({ settings, outputRoot, defaultOutputRoot, openBoa
           <button onClick={() => void update.check().catch(() => undefined)} disabled={update.checking}>
             {update.checking ? "检查中…" : "检查更新"}
           </button>
-          {update.result?.status === "available" && (
+          {update.state.phase === "ready" && (
             <span className="ok-text">
-              有新版本 {update.result.release.version}，
-              <button className="link" onClick={update.openDownload}>
-                {update.result.release.downloadUrl ? "下载" : "打开发布页"}
+              已就绪 {update.state.version}，
+              <button className="link" onClick={() => void update.requestInstall()}>
+                重启并更新
               </button>
             </span>
           )}
-          {update.result?.status === "latest" && <span className="muted small">已是最新版本</span>}
-          {update.result?.status === "error" && <span className="form-error">{update.result.message}</span>}
+          {update.state.phase === "downloading" && (
+            <span className="muted small">
+              下载中 {update.state.progress ? `${update.state.progress.done}/${update.state.progress.total ?? "?"} bytes` : "…"}
+            </span>
+          )}
+          {update.state.phase === "idle" && <span className="muted small">已是最新版本</span>}
+          {update.state.phase === "error" && (
+            <span className="form-error">
+              {update.state.error}
+              <button className="link" onClick={() => void update.check().catch(() => undefined)}>
+                重试
+              </button>
+            </span>
+          )}
+          {update.state.installBlockedReason && <span className="muted small">{update.state.installBlockedReason}</span>}
         </div>
-        <div className="muted small form-hint">只提示不自动安装：下载后关闭本应用，解压覆盖即可，设置与画板不受影响。</div>
+        {update.state.version && update.state.notes && <div className="muted small form-hint">更新说明：{update.state.notes}</div>}
+        <div className="muted small form-hint">发现新版自动后台下载；就绪后由你点击重启并更新，不会自动安装或重启。</div>
 
         <DiagnosticsSection outputRoot={outputRoot} openBoards={openBoards} />
 

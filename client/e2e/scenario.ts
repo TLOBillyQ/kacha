@@ -26,6 +26,8 @@ export interface Scenario {
   hold: string[];
   /** 命令 → 固定 reject 的错误文案。 */
   fail: Record<string, string>;
+  /** updater 描述（e2e 注入）：非空时 plugin:updater|check 返回 Update。 */
+  updaterDescriptor: { version: string; notes: string; pub_date: string; platforms: Record<string, { url: string; signature: string }> } | null;
 }
 
 export const OUTPUT_ROOT = "/e2e/out";
@@ -45,6 +47,7 @@ export function scenario(partial: Partial<Scenario> = {}): Scenario {
     packs: {},
     hold: [],
     fail: {},
+    updaterDescriptor: null,
     ...partial,
   };
 }
