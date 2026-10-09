@@ -6,7 +6,7 @@
 
 ### Issue tracker
 
-项目使用 Gitea Issues 跟踪工作，并通过 `tea` CLI 读写。详见 `docs/agents/issue-tracker.md`。
+Issues：创建、读取、更新工作票或推进 wayfinder 地图时，使用 GitHub Issues，并先读 `docs/agents/issue-tracker.md`。
 
 ### Domain docs
 

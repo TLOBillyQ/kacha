@@ -1,111 +1,56 @@
-# Issue tracker: Gitea
+# Issue tracker: GitHub
 
-Issues and specs for this repo live in Gitea Issues at `http://lzxsvn:3000/qinyuanj/kacha`. All issue reads and writes go through the authenticated `tea` CLI.
-
-## CLI
-
-Run `tea` inside the repo directory; the target repository is resolved from the git remote. When repository discovery fails, check `tea logins list`, or pass `-l`, `-R`, `-r` explicitly — in automation, prefer explicit `--login lzxsvn --repo qinyuanj/kacha` over relying on discovery.
+项目工作票、规格和 wayfinder 地图的唯一跟踪入口是 [TLOBillyQ/kacha 的 GitHub Issues](https://github.com/TLOBillyQ/kacha/issues)，通过已认证的 `gh` CLI 读写。
 
 ## Workflow
 
-1. **Read the current state**
+1. 读取目标票的完整正文、评论、标签、状态和 assignees：
 
-   ```bash
-   tea issue <idx> --comments -o json
+   ```powershell
+   gh issue view <number> --repo TLOBillyQ/kacha --json number,title,body,comments,labels,state,assignees,url
    ```
 
-   Done when you have the title, state, body, labels, and all comments; if you need to edit or delete a comment, also capture its comment ID.
+   涉及关系时，同时读取下文的原生关系接口。完成标准：取得所有将被修改的字段及其现值。
 
-   Long bodies get truncated when the whole issue is dumped (including background task logs); extract only the fields you need:
+2. 只修改请求涉及的字段。替换正文前保留最新全文；多行正文和评论使用 UTF-8 临时文件配合 `--body-file`，以保留换行和字面字符。应用标签前用 `gh label list --repo TLOBillyQ/kacha --json name,color,description` 核对名称。
 
-   ```bash
-   tea issue <idx> -o json | python3 -c 'import json,sys; print(json.load(sys.stdin)["body"])'
-   ```
-
-2. **Make the minimal change**
-   - Pass only the fields that change.
-   - `tea issue edit -d` replaces the entire body — keep the existing full text before editing.
-   - Use a quoted heredoc for multi-line Markdown (see below).
-   - Verify label names with `tea labels list -o json` before applying them.
-
-3. **Re-read to verify**
-
-   ```bash
-   tea issue <idx> --comments -o json
-   ```
-
-   Done when the target fields, state, and comments match the request; deleted comment IDs are gone; Markdown structure is intact.
+3. 回读目标票和变更过的关系。完成标准：正文、评论、状态、标签和关系与请求一致，所有交叉引用指向正确票。
 
 ## Common operations
 
-```bash
-tea issue list --state all --keyword 关键词 -o json
-tea issue create -t "标题" -d "正文" -L 标签1,标签2
-tea issue edit <idx> -t "新标题" -d "完整新正文"
-tea issue edit <idx> -L 追加标签 --remove-labels 去除标签
-tea issue close <idx>
-tea issue reopen <idx>
-
-tea comments add <idx> "正文"
-tea comments list <idx> -o json
-tea comments edit <comment_id> "新正文"
-tea comments delete <comment_id>
-
-tea labels list -o json
+```powershell
+gh issue list --repo TLOBillyQ/kacha --state all --search "关键词" --json number,title,state,labels,url
+gh issue create --repo TLOBillyQ/kacha --title "标题" --body-file <path> --label <label>
+gh issue edit <number> --repo TLOBillyQ/kacha --body-file <path>
+gh issue edit <number> --repo TLOBillyQ/kacha --add-label <label> --remove-label <label>
+gh issue comment <number> --repo TLOBillyQ/kacha --body-file <path>
+gh issue close <number> --repo TLOBillyQ/kacha --reason completed
+gh issue reopen <number> --repo TLOBillyQ/kacha
 ```
 
-`create` returns the new issue URL; take `<idx>` from the last URL segment, then re-read to verify as above.
+列表默认有限制；完整枚举时用分页 API 或明确足够的 `--limit`。机器读取用 JSON。修改或删除评论时通过 `gh api` 使用评论数据库 ID；它与 issue number 不同。CLI 参数以 `gh <command> --help` 为准。
 
-## Multi-line bodies
+当技能要求发布规格或获取工作票时，在 GitHub 创建或读取 Issue。标题使用简洁任务名称，完整问题或规格放正文，按技能要求设置标签。`.scratch/` 是忽略的本地工作区，临时文件留在本地，正式上下文通过 Issue 或已提交资产链接保存。
 
-```bash
-tea issue create -t "标题" -d "$(cat <<'EOF'
-## 章节
-正文……
-EOF
-)"
+PR 仅在用户明确要求包含时进入 issue 分诊范围。
+
+## Wayfinding operations
+
+- 地图是仅标记 `wayfinder:map` 的 Issue；决策票仅使用对应 `wayfinder:<type>` 标签，并通过 GitHub 原生 sub-issues 归属地图。
+- 建票后再连接父子和阻塞关系、填写真实引用。用户可见引用用票名包装链接，避免裸编号。地图只索引已关闭决策及未明确范围；开放票通过子议题查询取得。
+- 开始工作前认领票：先用 `gh api user --jq .login` 确认当前开发者，再用 `gh issue edit <number> --repo TLOBillyQ/kacha --add-assignee <login>` 分配。无 assignee 才是未认领。
+- Issue number 用于 URL 路径；关系 POST 请求中的 `sub_issue_id` 和 `issue_id` 是数据库整数 ID，通过 `gh api repos/TLOBillyQ/kacha/issues/<number> --jq .id` 获取。
+
+```powershell
+# 父子关系：查询地图的全部子票；写入时 sub_issue_id 是子票数据库 ID。
+gh api --paginate repos/TLOBillyQ/kacha/issues/<map-number>/sub_issues
+gh api --method POST repos/TLOBillyQ/kacha/issues/<map-number>/sub_issues -F sub_issue_id=<child-id>
+
+# 阻塞关系：查询阻塞当前票的票；写入时 issue_id 是阻塞方数据库 ID。
+gh api --paginate repos/TLOBillyQ/kacha/issues/<number>/dependencies/blocked_by
+gh api --method POST repos/TLOBillyQ/kacha/issues/<number>/dependencies/blocked_by -F issue_id=<blocker-id>
 ```
 
-`issue create`/`issue edit` take the body via `-d`; `comments add`/`comments edit` take it as a positional argument (no `-d` — passing one errors with `flag provided but not defined`). Both accept a quoted heredoc for multi-line content.
+**Frontier**：读取所有子票，按创建顺序筛选 open、无 assignee、所有 blocked-by 票均 closed 的票。每条依赖通过原生接口核实，不能从正文猜测；用户指定票时仍先核对认领与依赖状态。
 
-## Conventions and gotchas
-
-- `tea issue <idx>` does not include comments by default; pass `--comments` explicitly for full context.
-- Comment edit and delete use the comment ID, not the issue number.
-- `tea issue edit -L` appends labels; use `--remove-labels` to remove them.
-- For machine reading, use JSON output; never parse the terminal table or hyperlink escapes.
-- This instance's assignees endpoint returns 404 (`tea issue edit -a` is unavailable); assign via the API:
-
-  ```bash
-  tea api -X PATCH -F 'assignees=["<user>"]' /repos/{owner}/{repo}/issues/<idx>
-  ```
-
-  `tea api -f` passes values as strings (array fields fail to unmarshal); use `-F` for array/object fields (values starting with `[`/`{` are parsed as JSON).
-- Issue dependencies (blocked-by) go through `tea api`, and the body fields are `index`/`owner`/`repo` passed as raw JSON with `-d` (`-F owner=... name=...` fails with `repository does not exist`):
-
-  ```bash
-  tea api /repos/{owner}/{repo}/issues/<idx>/dependencies
-  tea api -X POST -d '{"index":<blocker>,"owner":"qinyuanj","repo":"kacha"}' \
-    /repos/{owner}/{repo}/issues/<idx>/dependencies
-  ```
-
-- `tea issue list -o json` returns `labels` as a string array; a single-issue `tea issue <idx> -o json` returns an object array.
-- Use `tea api` only for endpoints the CLI does not cover; do not fall back to raw curl.
-
-## Source of truth
-
-Commands and flags are authoritative as reported by `tea <command> --help`.
-
-## When a skill says "publish to the issue tracker"
-
-Create a Gitea Issue. Put the concise feature or task name in the title and the complete specification or ticket in the description. Apply the requested triage label when one is specified.
-
-Do not publish tracker files from `.scratch/`. That directory is a local ignored workspace and is not part of Git history.
-
-## When a skill says "fetch the relevant ticket"
-
-Read the referenced Gitea Issue with `tea`. The user will normally provide an issue number or URL.
-
-## Pull requests as a request surface
-
-Pull requests are not part of the issue-triage queue unless the user explicitly asks to include one.
+解决决策后，将答案发为 resolution comment，再关闭票，在地图的 Decisions so far 追加票名链接与一句 gist。新增票先创建、后连接关系；更新地图前读取最新全文，保留并发会话的变化。研究资产链接到实际推送分支或固定 commit，不将临时路径当作共享上下文。

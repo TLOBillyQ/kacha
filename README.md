@@ -39,4 +39,4 @@
 
 ## 反馈
 
-需求与缺陷请到 [Gitea Issues](http://lzxsvn:3000/qinyuanj/kacha/issues) 提交。
+需求与缺陷请到 [GitHub Issues](https://github.com/TLOBillyQ/kacha/issues) 提交。
