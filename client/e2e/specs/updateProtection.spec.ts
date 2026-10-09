@@ -123,6 +123,76 @@ test.describe("#13 严格保存边界", () => {
 });
 
 test.describe("#13 准备期间的保护", () => {
+  test("准备失败恢复之后，之前已开始的参考图导入不能重新带入未保存内容", async ({ page }) => {
+    const image = `${OUTPUT_ROOT}/导入参考图/late.png`;
+    await openApp(page, scene({ files: { [image]: { b64: png(32, 32) } } }));
+    await withUpdate(page);
+    await expect(page.locator(".topbar-update")).toBeVisible({ timeout: 10_000 });
+    await page.evaluate((p) => {
+      window.__e2e.pause("inspect_image");
+      window.__e2e.dialogAnswers.open.push([p]);
+      window.__e2e.fail.write_ui_state = "磁盘已满";
+    }, image);
+    await page.getByRole("toolbar", { name: "画板工具栏" }).getByRole("button", { name: /参考图/ }).click();
+    await expect.poll(() => page.evaluate(() => window.__e2e.held())).toContain("inspect_image");
+    await clickUpdate(page);
+    await expect(page.locator(".toast")).toContainText("保存界面状态失败");
+    await page.evaluate(async () => {
+      await window.__e2e.release("inspect_image");
+      await new Promise(requestAnimationFrame);
+    });
+    await expect(page.locator(".react-flow__node")).toHaveCount(3);
+    await page.getByRole("toolbar", { name: "画板工具栏" }).getByRole("button", { name: /提示词/ }).click();
+    await expect(page.locator(".react-flow__node")).toHaveCount(4);
+  });
+
+  test("普通关窗仍按既有约定吞掉保存错误并关闭", async ({ page }) => {
+    await openApp(page, scene());
+    await page.evaluate(() => { window.__e2e.fail.write_board = "磁盘已满"; });
+    await page.getByRole("toolbar", { name: "画板工具栏" }).getByRole("button", { name: /提示词/ }).click();
+    await page.evaluate(() => window.__e2e.emit("tauri://close-requested", null));
+    await expect.poll(() => calls(page, "plugin:window|destroy").then((x) => x.length)).toBe(1);
+  });
+  test("等待窗口尺寸异步查询并立即保存最新尺寸，准备期间关闭窗口被阻止", async ({ page }) => {
+    await openApp(page, scene());
+    await withUpdate(page);
+    await expect(page.locator(".topbar-update")).toBeVisible({ timeout: 10_000 });
+    await page.evaluate(() => {
+      window.__e2e.pause("plugin:window|scale_factor");
+      window.__e2e.emit("tauri://resize", { width: 1234, height: 789 });
+    });
+    await expect.poll(() => page.evaluate(() => window.__e2e.held())).toContain("plugin:window|scale_factor");
+    await clickUpdate(page);
+    await expect(page.getByRole("button", { name: "正在准备更新…" })).toBeVisible();
+    await page.evaluate(() => window.__e2e.emit("tauri://close-requested", null));
+    await page.evaluate(() => window.__e2e.release("plugin:window|scale_factor"));
+    await expect(page.locator(".toast")).toContainText("准备就绪");
+    const ui = await page.evaluate(() => JSON.parse(window.__e2e.readText("/e2e/appdata/ui_state.json")!));
+    expect(ui.window).toEqual({ width: 1234, height: 789 });
+    expect(await calls(page, "plugin:window|destroy")).toEqual([]);
+  });
+
+  test("慢写入期间忽略新建、改名、编辑和第二实例打开，严格写入结束后才能前进", async ({ page }) => {
+    const extraPath = `${OUTPUT_ROOT}/画板/第二块.ugcboard.json`;
+    await openApp(page, scene({ files: { [extraPath]: { text: board("第二块", [], []) } } }));
+    await withUpdate(page);
+    await expect(page.locator(".topbar-update")).toBeVisible({ timeout: 10_000 });
+    await page.evaluate(() => window.__e2e.pause("write_board"));
+    await clickUpdate(page);
+    await expect.poll(() => page.evaluate(() => window.__e2e.held())).toContain("write_board");
+    await page.locator(".tab-new").click();
+    await page.locator(".tab").dblclick();
+    await page.locator(".tab input").fill("不应保存");
+    await page.locator(".tab input").press("Enter");
+    await page.getByRole("toolbar", { name: "画板工具栏" }).getByRole("button", { name: /提示词/ }).click();
+    await page.evaluate((p) => window.__e2e.emit("second-instance", [p]), extraPath);
+    expect(await calls(page, "plugin:updater|install")).toEqual([]);
+    await page.evaluate(() => window.__e2e.release("write_board"));
+    await expect(page.locator(".toast")).toContainText("准备就绪");
+    expect(await boardTitleOnDisk(page, title)).toBe(title);
+    await expect(page.locator(".tab")).toHaveCount(1);
+    await expect(page.locator(".react-flow__node")).toHaveCount(3);
+  });
   test("第二实例已开始打开画板时，等待打开完成并严格保存新增标签页", async ({ page }) => {
     const extraPath = `${OUTPUT_ROOT}/画板/第二块.ugcboard.json`;
     await openApp(page, scene({ files: { [extraPath]: { text: board("第二块", [], []) } } }));

@@ -21,6 +21,8 @@ export interface UpdatePreparationPorts {
 
 export interface UpdatePreparation extends OperationGate {
   prepare(): Promise<PreparationResult>;
+  /** 可直接注入 #12 的 UpdateFlowPorts.restartGuard；允许后保持保护到安装结束。 */
+  restartGuard(): Promise<{ allowed: boolean; reason?: string }>;
   release(): void;
   active(): boolean;
   /** 异步 UI 操作持有代次；失败恢复后旧操作仍不可提交变更。 */
@@ -66,9 +68,10 @@ export function createUpdatePreparation(ports: UpdatePreparationPorts): UpdatePr
     }
   }
 
-  return {
+  const preparation: UpdatePreparation = {
     prepare() {
       if (current) return current;
+      if (ports.queue.pending() > 0) return Promise.resolve({ ok: false, reason: BUSY_MESSAGE });
       protectedNow = true;
       generation++;
       ports.queue.setSubmissionGuard(() => undefined);
@@ -80,6 +83,10 @@ export function createUpdatePreparation(ports: UpdatePreparationPorts): UpdatePr
       return current;
     },
     release,
+    async restartGuard() {
+      const result = await preparation.prepare();
+      return result.ok ? { allowed: true } : { allowed: false, reason: result.reason };
+    },
     track(operation) {
       pending.add(operation);
       void operation.then(() => pending.delete(operation), () => pending.delete(operation));
@@ -88,4 +95,5 @@ export function createUpdatePreparation(ports: UpdatePreparationPorts): UpdatePr
     blocked: () => protectedNow,
     generation: () => generation,
   };
+  return preparation;
 }

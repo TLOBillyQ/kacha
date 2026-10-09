@@ -23,6 +23,26 @@ function deferred() {
 }
 
 describe("更新准备：真实任务队列与严格保存", () => {
+  it("统一更新流程的 restartGuard 端口在严格落盘后才返回 allowed，并保持安装保护", async () => {
+    const h = fixture();
+    expect(await h.prep.restartGuard()).toEqual({ allowed: true });
+    expect([...h.disk.values()]).toEqual(["最新画板", "最新标签页"]);
+    expect(h.prep.active()).toBe(true);
+    h.prep.release();
+  });
+  it("更新被读图中的任务阻止后，同一次提交的后续任务仍正常入队", async () => {
+    const h = fixture();
+    h.read.closed = true;
+    h.gateway.closed = true;
+    const submitting = h.runner.submit(h.target(), board(["t1", "t2"], true), ["t1", "t2"]);
+    await settle();
+    expect(await h.prep.prepare()).toEqual({ ok: false, reason: BUSY_MESSAGE });
+    h.read.open();
+    await submitting;
+    expect(h.runner.getSnapshot().pending()).toBe(2);
+    h.gateway.open();
+    await settle();
+  });
   it("已开始的操作失败时等待全部在途操作结束，再拒绝安装并恢复", async () => {
     const slow = deferred();
     const h = fixture();

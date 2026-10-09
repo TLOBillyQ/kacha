@@ -31,7 +31,7 @@ export interface E2eControl {
   /** 当前挂起的命令名。 */
   held(): string[];
   pause(cmd: string): void;
-  release(cmd: string): void;
+  release(cmd: string): Promise<void>;
   fail: Record<string, string>;
   secret: string | null;
 }
@@ -98,6 +98,7 @@ let cancelled = false;
 const holds = new Map<string, () => void>();
 const paused = new Set<string>();
 const pausedCalls = new Map<string, (() => void)[]>();
+const pausedCompletions = new Map<string, Promise<void>[]>();
 function holdable<T>(cmd: string, work: () => Promise<T> | T): Promise<T> {
   if (!scn!.hold.includes(cmd)) return Promise.resolve(work());
   return new Promise<T>((resolve, reject) => {
@@ -125,10 +126,12 @@ const control: E2eControl = {
   emit,
   held: () => [...holds.keys(), ...pausedCalls.keys()],
   pause: (cmd) => void paused.add(cmd),
-  release: (cmd) => {
+  release: async (cmd) => {
     paused.delete(cmd);
     for (const resolve of pausedCalls.get(cmd) ?? []) resolve();
     pausedCalls.delete(cmd);
+    await Promise.all(pausedCompletions.get(cmd) ?? []);
+    pausedCompletions.delete(cmd);
   },
   fail: { ...scn.fail },
   secret: scn.secret,
@@ -271,14 +274,23 @@ const commands: Record<string, (a: Args, options?: { headers?: Record<string, st
 
 async function invoke(cmd: string, args: unknown, options?: { headers?: Record<string, string> }) {
   control.calls.push({ cmd, args: args instanceof Uint8Array ? `<${args.length} bytes>` : args });
-  if (paused.has(cmd)) await new Promise<void>((resolve) => {
-    pausedCalls.set(cmd, [...(pausedCalls.get(cmd) ?? []), resolve]);
-  });
-  if (control.fail[cmd]) throw control.fail[cmd];
-  const handler = commands[cmd];
-  if (handler) return handler((args ?? {}) as Args, options, args);
-  if (cmd.startsWith("plugin:window|") || cmd.startsWith("plugin:webview|")) return null;
-  throw `e2e 假壳未实现命令：${cmd}`;
+  let finished = () => undefined as void;
+  if (paused.has(cmd)) {
+    const completion = new Promise<void>((resolve) => { finished = resolve; });
+    pausedCompletions.set(cmd, [...(pausedCompletions.get(cmd) ?? []), completion]);
+    await new Promise<void>((resolve) => {
+      pausedCalls.set(cmd, [...(pausedCalls.get(cmd) ?? []), resolve]);
+    });
+  }
+  try {
+    if (control.fail[cmd]) throw control.fail[cmd];
+    const handler = commands[cmd];
+    if (handler) return await handler((args ?? {}) as Args, options, args);
+    if (cmd.startsWith("plugin:window|") || cmd.startsWith("plugin:webview|")) return null;
+    throw `e2e 假壳未实现命令：${cmd}`;
+  } finally {
+    finished();
+  }
 }
 
 const blobUrls = new Map<string, string>();
