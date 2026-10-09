@@ -2,7 +2,7 @@
 
 记录日期：2026-10-09。对应 #3 与 #14，文档切片基于集成提交 `c937707`。本文区分基线自动测试、真实旧版启动事实及尚待补齐的安装更新证据，不以模拟测试代替真机验收。
 
-当前结论：**Windows 完整迁移与自动更新尚未验收通过**。迁移目标待 Gitea 首个带 updater 签名的正式版发布，本次未真实发布、未关闭 Issue。本文的 signed 指 Tauri updater 签名，不指 Windows 代码签名证书或 Apple 公证。
+当前结论：**Windows 完整迁移与自动更新尚未验收通过**。2026-10-09 获用户授权后已发布 Windows `v0.3.0`，并验证真实 Gitea 端点的下载与 updater 签名；完整应用内安装、重启及恢复仍待观察，Issue 保持开放。下文较早记录中的“未发布”描述对应当时的验证范围。本文的 signed 指 Tauri updater 签名，不指 Windows 代码签名证书或 Apple 公证。
 
 ## 已知环境与旧版事实
 
@@ -189,3 +189,52 @@ stdout / stderr 均为 0 字节。随后仅停止本次启动的进程，最终�
 macOS 真机安装、迁移和自动更新**未验收**。本次不执行这些验证，也不将它们列为 #14 的完成条件。保留 macOS 构建与发布分支及可在本机运行的相关脚本测试；脚本通过不代表 macOS 真机验收通过。
 
 Windows 没有购买操作系统代码签名证书，macOS 没有 Apple 公证。Updater 签名不消除首次 SmartScreen / Gatekeeper 手动放行要求，操作说明见 [自动更新用户指南](auto-update-user-guide.md)。
+
+## 2026-10-09 授权发布与端点报错排查
+
+用户授权真实 Gitea 发布后，版本号由 `0.2.2` 升至 `0.3.0`，源提交为
+`b283724`。执行 `python packaging/build_release.py`，release 构建及 updater 签名成功，
+随后执行 `python packaging/publish_release.py`，创建正式 Release `v0.3.0` 并依次上传
+Windows 安装器、签名、校验文件和平台描述。macOS 本轮未构建、未发布。
+
+| 产物 | SHA256 |
+| --- | --- |
+| `kacha-0.3.0-win-x64-setup.exe` | `57c0ffbc1641def2ecd5b4bd9aa12de80352630ca78e172c63486e9dbd7d8e6e` |
+| `kacha-0.3.0-win-x64-setup.exe.sig` | `d068909b99ebbb31abd28848905577d359f1fd975cb0c7333b23ed44c93d95e8` |
+
+### 错误的验收基线
+
+第一次在线验收使用较早构建的本地签名 NSIS `0.2.2`，用户在界面观察到
+`Updater does not have any endpoints set.`。这份中间实现的前端适配器仍调用
+`check({ target })`，丢弃从 Gitea 取得的 `descriptorUrl`，而 updater 配置没有固定 endpoints。
+本地产物不能仅因版本号相同或具有 updater 签名，就视为完成后的基线。
+该失败不计入在线更新通过记录。
+
+最终适配器通过 `check_update` IPC 把动态描述地址传入 Rust 的
+`updater_builder().endpoints(...)`，然后用返回资源构造官方 `Update`。
+Rust 回归测试 `official_updater_fetches_selected_endpoint_without_configured_endpoints`
+在 `0.3.0` 工作区重新运行通过。
+
+CLI harness 进一步使用官方 updater 复现无端点的原文报错，再请求已发布的真实
+Gitea `v0.3.0/updater-win-x64.json`：发现版本 `0.3.0`，下载 2,850,197 字节并通过
+内置公钥的签名校验；下载内容与本地正式安装包逐字节一致。
+这项验证没有执行安装或重启，不能代替应用内完整升级。
+
+### 修正的本地升级起点
+
+使用集成提交 `2f794a6` 的完整代码，保留其版本号 `0.2.2`，经
+`npm run build:desktop` 构建 dev/debug NSIS，静默安装到当前用户
+`Programs/Kacha`，然后启动。该版本只作本地验收起点，没有作为 `0.2.2` 正式版发布，
+也不代表原 Gitea 免安装版已经支持官方 updater。
+
+安装后的 exe 与构建目录 exe 仅有三个 bundle 类型标记字节不同：安装版为 `NSS`，
+未打包原文件为 `UNK`；其余字节一致。两份哈希及构建来源已保存，避免再次混淆中间产物。
+
+修正后的应用已于 2026-10-09 23:12（Asia/Shanghai）启动。本次可核实进程存活及启动日志，
+尚未取得用户观察到下载就绪、点击更新后的安装、重启、画板恢复证据。
+本轮没有通过原生 GUI 自动化替代用户点击。
+
+本地证据目录：`.scratch/windows-live-acceptance-0.3.0/`。其中包含正式构建与发布日志、
+修正基线构建日志、`corrected-baseline.json`、`corrected-baseline-launch.json`、
+`live-gitea-download.log`，以及更新前画板、界面状态和输出文件哈希快照。
+本地材料不提交到仓库，尤其不发布画板内容、设置或凭据。
