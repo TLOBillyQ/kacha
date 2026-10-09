@@ -64,7 +64,7 @@ describe("单任务端到端", () => {
     const dir = `/root/${job.relDir}`;
     expect(files.get(`${dir}/reference-1.png`)).toEqual(PNG);
     const taskJson = JSON.parse(new TextDecoder().decode(files.get(`${dir}/task.json`)));
-    expect(taskJson).toMatchObject({ task_id: job.taskId, model: "qwen-image-3.0-pro", capability_table_sha256: "f".repeat(64), send_text: "本次提供 1 张参考图。\n一只橘猫" });
+    expect(taskJson).toMatchObject({ task_id: job.taskId, model: "qwen-image-3.0-pro", capability_table_sha256: "f".repeat(64), send_text: "本次提供一张参考图，编号为图1。请依据图1的视觉内容执行下方用户指令；指令中省略编号的图片指代均指图1。\n\n用户指定参考用途时，按指定用途使用图1。用户要求修改图片时，以图1为编辑基础，保留与修改要求无关的内容。\n\n用户指令：\n一只橘猫" });
     expect(requests).toHaveLength(0);
 
     const result = await executeJob(d, { job, outputRoot: "/root", baseUrl: "http://gw", apiKey: "sk-test" });
@@ -131,7 +131,7 @@ describe("单任务端到端", () => {
     const job = await writeJob(d, "/root", again);
     expect(job.relDir.startsWith("2026-09-17/")).toBe(true);
     const taskJson = JSON.parse(new TextDecoder().decode(files.get(`/root/${job.relDir}/task.json`)));
-    expect(taskJson).toMatchObject({ prompt: "一只橘猫", send_text: "本次提供 1 张参考图。\n一只橘猫", capability_table_sha256: "y" });
+    expect(taskJson).toMatchObject({ prompt: "一只橘猫", send_text: "本次提供一张参考图，编号为图1。请依据图1的视觉内容执行下方用户指令；指令中省略编号的图片指代均指图1。\n\n用户指定参考用途时，按指定用途使用图1。用户要求修改图片时，以图1为编辑基础，保留与修改要求无关的内容。\n\n用户指令：\n一只橘猫", capability_table_sha256: "y" });
     expect(files.get(`/root/${job.relDir}/reference-1.png`)).toEqual(PNG);
     await executeJob(d, { job, outputRoot: "/root", baseUrl: "http://gw", apiKey: "k" });
     expect(requests.map((r) => r.url)).toEqual(["http://gw/v1/images/edits"]);
@@ -283,7 +283,7 @@ describe("区域指示：提交链路", () => {
       source: { kind: "overlay", of: 1 },
       region: { rects: REGION.rects, render: "highlight_overlay", source_port: 1 },
     });
-    expect(taskJson.send_text).toContain("本次提供 2 张参考图，按顺序为图1、图2。");
+    expect(taskJson.send_text).toContain("本次提供一张参考图，编号为图1。");
     expect(taskJson.send_text).toContain("紫色半透明高亮标出的是要修改的区域");
 
     await executeJob(d, { job, outputRoot: "/root", baseUrl: "http://gw", apiKey: "k" });

@@ -251,7 +251,7 @@ describe("运行分派", () => {
   });
 
   it("恰好一个任务仅有黄色警告：弹确认窗", () => {
-    expect(runDispatch([confirmItem("t", { warnings: ["图2 已接线但提示词未引用"] })])).toEqual({ kind: "confirm" });
+    expect(runDispatch([confirmItem("t", { warnings: ["图2 已连接，尚未说明它的用途。可在提示词中点击参考图插入引用，并描述如何使用它。"] })])).toEqual({ kind: "confirm" });
   });
 
   it("两个及以上任务：弹确认窗，即使全部干净", () => {
@@ -268,7 +268,7 @@ describe("二次确认：「图N」校验与提示", () => {
     (b.nodes[0] as { text: string }).text = "把@图3 的颜色用到@图1 上";
     const [item] = buildConfirmItems(b, BUILTIN_TABLE, ["t"], ctx);
     expect(texts(item)).toEqual(["提示词引用了图3，但只接了 2 张参考图"]);
-    expect(item.warnings).toEqual(["图2 已接线但提示词未引用"]);
+    expect(item.warnings).toEqual(["图2 已连接，尚未说明它的用途。可在提示词中点击参考图插入引用，并描述如何使用它。"]);
     expect(item.send?.text).toContain("把图3 的颜色用到图1 上");
   });
 
@@ -281,7 +281,7 @@ describe("二次确认：「图N」校验与提示", () => {
     t.models.find((m) => m.model_id === "doubao-seedream-5-0-lite-260128")!.reference_phrasing.en_verified = "untested";
     const [item] = buildConfirmItems(b, t, ["t"], ctx);
     expect(item.warnings).toContain("该模型英文序号未验证");
-    expect(item.send?.text).toBe("This request provides 1 reference image.\nPut Image 1 on a beach");
+    expect(item.send?.text).toBe("This request provides one reference image, identified as Image 1. Use the visual content of Image 1 to follow the user instructions below; image references without a number in those instructions refer to Image 1.\n\nWhen the user specifies a reference purpose, use Image 1 for that purpose. When the user asks to modify the image, use Image 1 as the editing base and preserve content unrelated to the requested changes.\n\nUser instructions:\nPut Image 1 on a beach");
   });
 });
 
@@ -410,7 +410,7 @@ describe("区域指示：图N 校验与发送文本", () => {
     expect(item.warnings).toEqual([]);
     expect(item.send?.referenceCount).toBe(2);
     expect(item.send?.text).toBe(
-      "本次提供 2 张参考图，按顺序为图1、图2。\n把图1 的帽子改成红色\n图2 是图1 的标注版，紫色半透明高亮标出的是要修改的区域。只修改图1 中高亮区域内的内容，高亮区域之外的所有内容保持完全不变，输出图里不要出现任何高亮颜色。",
+      "本次提供一张参考图，编号为图1。请依据图1的视觉内容执行下方用户指令；指令中省略编号的图片指代均指图1。\n\n用户指定参考用途时，按指定用途使用图1。用户要求修改图片时，以图1为编辑基础，保留与修改要求无关的内容。\n\n用户指令：\n把图1 的帽子改成红色\n图2 是图1 的标注版，紫色半透明高亮标出的是要修改的区域。只修改图1 中高亮区域内的内容，高亮区域之外的所有内容保持完全不变，输出图里不要出现任何高亮颜色。",
     );
   });
 
@@ -479,7 +479,7 @@ describe("区域指示：图N 校验与发送文本", () => {
   it("引用越界按用户连线数：两张用户图其中一张带区域时 @图3 标红；未引用的用户图标黄，叠加图从不标黄", () => {
     const [item] = buildConfirmItems(twoImages("把@图3 的颜色用到@图1 上", REGION), BUILTIN_TABLE, ["t"], ctx);
     expect(texts(item)).toEqual(["提示词引用了图3，但只接了 2 张参考图"]);
-    expect(item.warnings).toEqual(["图2 已接线但提示词未引用"]);
+    expect(item.warnings).toEqual(["图2 已连接，尚未说明它的用途。可在提示词中点击参考图插入引用，并描述如何使用它。"]);
   });
 
   it("区域变更让任务变脏", () => {

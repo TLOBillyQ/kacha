@@ -50,7 +50,21 @@ import type { Rect01 } from "./rects";
 
 /** recorded：直接下游有已提交过的任务，编辑时三选；autoFocus：「以此继续编辑」刚新建的空提示词。 */
 /** portKind：输出端口类型色（只连负向端口 = 负向色）。 */
-export type PromptFlowNode = Node<{ node: PromptModel; recorded: boolean; autoFocus: boolean; portKind: PortKind }, "prompt">;
+export interface PromptReferenceGuideItem {
+  /** 用户序号，即该任务提示词里的「图N」。 */
+  port: number;
+  label: string;
+  absPath: string | null;
+  /** 该线框出的矩形；叠加图不会成为可点击条目。 */
+  rects: Rect01[];
+}
+export interface PromptReferenceGuideTask {
+  taskId: string;
+  /** 生成任务的可识别标签（当前为模型展示名）。 */
+  label: string;
+  images: PromptReferenceGuideItem[];
+}
+export type PromptFlowNode = Node<{ node: PromptModel; recorded: boolean; autoFocus: boolean; portKind: PortKind; guides: PromptReferenceGuideTask[] }, "prompt">;
 /** missing：图片文件读不到，显示占位与「重新定位」。 */
 export type ReferenceFlowNode = Node<{ node: ReferenceModel; rules: InputImageRule[]; missing: boolean }, "reference">;
 /** rules = 下游任务模型的输入规则；没接任务时为空。 */
@@ -193,7 +207,7 @@ function ImageNode({
 
 export const PromptNodeView = memo(function PromptNodeView({ data }: NodeProps<PromptFlowNode>) {
   const { apply } = useBoardActions();
-  const { node, recorded, autoFocus, portKind } = data;
+  const { node, recorded, autoFocus, portKind, guides } = data;
   const textarea = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
     if (autoFocus) textarea.current?.focus();
@@ -211,6 +225,25 @@ export const PromptNodeView = memo(function PromptNodeView({ data }: NodeProps<P
     setKeep(true);
   };
   const holdFocus = (e: React.MouseEvent) => e.preventDefault();
+  const change = (text: string, cursor: number | null = null) => {
+    if (pending !== null || (recorded && !keep)) setPending(text);
+    else apply({ kind: "editPrompt", promptId: node.id, text });
+    if (cursor !== null) requestAnimationFrame(() => {
+      const el = textarea.current;
+      if (el) {
+        el.focus();
+        el.setSelectionRange(cursor, cursor);
+      }
+    });
+  };
+  const insertReference = (port: number) => {
+    const el = textarea.current;
+    const current = pending ?? node.text;
+    const start = el?.selectionStart ?? current.length;
+    const end = el?.selectionEnd ?? start;
+    const tag = `@图${port}`;
+    change(current.slice(0, start) + tag + current.slice(end), start + tag.length);
+  };
   return (
     <Shell kind="prompt" title={portKind === "negative" ? "负向提示词" : "提示词"}>
       <textarea
@@ -226,11 +259,34 @@ export const PromptNodeView = memo(function PromptNodeView({ data }: NodeProps<P
             fork();
           } else if (e.key === "Escape") setPending(null);
         }}
-        onChange={(e) => {
-          if (pending !== null || (recorded && !keep)) setPending(e.target.value);
-          else apply({ kind: "editPrompt", promptId: node.id, text: e.target.value });
-        }}
+        onChange={(e) => change(e.target.value)}
       />
+      {guides.length > 0 && (
+        <div className="reference-guide nodrag">
+          {guides.length > 1 && <div className="muted small">此提示词供多个任务使用，图片编号按各任务的连接分别解释。</div>}
+          {guides.map((guide) => (
+            <div key={guide.taskId} className="reference-guide-task">
+              {guides.length > 1 && <div className="reference-guide-task-label">{guide.label}</div>}
+              <div className="reference-guide-help">点击参考图，将引用插入提示词。</div>
+              <div className="reference-guide-thumbs">
+                {guide.images.map((image) => (
+                  <button key={`${guide.taskId}:${image.port}`} type="button" className="reference-guide-thumb" title={image.label} onMouseDown={holdFocus} onClick={() => insertReference(image.port)}>
+                    {image.absPath && (
+                      <>
+                        <img src={fileUrl(image.absPath)} alt="" draggable={false} />
+                        {image.rects.map((r, k) => (
+                          <span key={k} className="reference-guide-rect" style={{ left: `${r[0] * 100}%`, top: `${r[1] * 100}%`, width: `${(r[2] - r[0]) * 100}%`, height: `${(r[3] - r[1]) * 100}%` }} />
+                        ))}
+                      </>
+                    )}
+                    <span className="reference-guide-port">图{image.port}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
       {pending !== null && (
         <div className="popover nodrag fork-choice" onMouseDown={holdFocus}>
           <div>下游任务已执行过，这次修改：</div>

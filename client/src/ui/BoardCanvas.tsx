@@ -58,7 +58,7 @@ import { ContextMenu } from "./ContextMenu";
 import { BoardContext, primeImageInfo, useImageInfos, useMissingImages, useStoredStatuses, type BoardActions } from "./context";
 import { edgeTypes } from "./edges";
 import { HoverProvider, useHoverLayer } from "./hoverInfo";
-import { ModelOptions, nodeTypes, type ImagePortInfo, type ImageSlotInfo } from "./nodes";
+import { ModelOptions, nodeTypes, type ImagePortInfo, type ImageSlotInfo, type PromptReferenceGuideTask } from "./nodes";
 import { DragContext } from "./ports";
 import { PreviewDialog, type PreviewRequest, type RegionTarget } from "./PreviewDialog";
 import { isTyping, useCanvasInteraction, type Selection } from "./useCanvasInteraction";
@@ -378,6 +378,23 @@ export function BoardCanvas({
       const tasks = board.edges.filter((e) => e.from[0] === id).map((e) => board.nodes.find((t) => t.id === e.to[0]));
       return [...new Set(tasks.flatMap((t) => (t?.type === "task" ? [t.model] : [])))];
     };
+    const promptGuidesOf = (promptId: string): PromptReferenceGuideTask[] => {
+      const groups: PromptReferenceGuideTask[] = [];
+      const taskIds = new Set<string>();
+      for (const promptEdge of board.edges) {
+        if (promptEdge.from[0] !== promptId || (promptEdge.to[1] !== "positive" && promptEdge.to[1] !== "negative")) continue;
+        const task = board.nodes.find((n) => n.id === promptEdge.to[0]);
+        if (task?.type !== "task" || taskIds.has(task.id)) continue;
+        taskIds.add(task.id);
+        const modelName = findModel(table, task.model)?.display_name ?? task.model;
+        const images = imageEdges(board, task.id).flatMap((imageEdge, index) => {
+          const info = labelOf(imageEdge.from[0]);
+          return info.absPath ? [{ port: index + 1, label: info.label, absPath: info.absPath, rects: imageEdge.region?.rects ?? [] }] : [];
+        });
+        if (images.length > 0) groups.push({ taskId: task.id, label: modelName, images });
+      }
+      return groups;
+    };
     const rulesOf = (modelIds: string[]): InputImageRule[] => modelIds.flatMap((id) => findModel(table, id)?.input_image_rule ?? []);
     return board.nodes.flatMap((n): Node[] => {
       if (n.type === "unknown") return [];
@@ -395,7 +412,7 @@ export function BoardCanvas({
       };
       switch (n.type) {
         case "prompt":
-          return [{ ...base, type: "prompt", data: { node: n, recorded: hasDownstreamRecords(board, n.id), autoFocus: focusPrompt === n.id, portKind: promptPortKind(board, n.id) } }];
+          return [{ ...base, type: "prompt", data: { node: n, recorded: hasDownstreamRecords(board, n.id), autoFocus: focusPrompt === n.id, portKind: promptPortKind(board, n.id), guides: promptGuidesOf(n.id) } }];
         case "result":
           // 结果回灌到任务上才按下游模型规则提示；没接任务不提示。
           return [{ ...base, ...imageBox(n.path), type: "result", data: { node: n, rules: rulesOf(downstreamModels(n.id)), missing: missing.has(n.id) } }];

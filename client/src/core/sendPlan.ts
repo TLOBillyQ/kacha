@@ -17,7 +17,7 @@ export interface ReferenceProblems {
 }
 
 export interface SendPlan {
-  /** 发送文本：有参考图时含数量顺序前缀；negativeInlined 时含「避免出现：」一行；区域固定句追加在末尾。 */
+  /** 发送文本：有参考图时含参考说明；negativeInlined 时含「避免出现：」一行；区域固定句追加在末尾。 */
   text: string;
   /** 走请求体原生字段的负向提示词；负向拼进文本或为空时为 null。 */
   nativeNegativePrompt: string | null;
@@ -36,7 +36,8 @@ export function planSend(model: ModelCapability, slots: SlotRef[], prompt: strin
   const negativeInlined = !isSupported(model.workflows[workflow].supports_negative_prompt);
   const phrases = overlayPhrases(model, slots, language);
   const rewritten = rewriteRegionRefs(rewriteImageRefs(prompt, imageRefMap(slots)), regionNames(slots, language));
-  const withNote = slots.length === 0 ? rewritten : `${referenceNote(slots.length, language)}\n${rewritten}`;
+  const note = imageRefMap(slots).length === 1 ? singleImageNote(language) : referenceNote(slots.length, language);
+  const withNote = slots.length === 0 ? rewritten : `${note}\n${rewritten}`;
   const negative = negativeInlined && negativePrompt ? `\n${language === "en" ? "Avoid: " : "避免出现："}${negativePrompt}` : "";
   return {
     text: `${withNote}${negative}${phrases.length ? `\n${phrases.join("\n")}` : ""}`,
@@ -64,13 +65,13 @@ export function referenceProblemsOf(model: ModelCapability | undefined, slots: S
   // 红是硬阻断，只认用户明确写的 @图N；「地图5」之类的普通文字不拦。
   const tagged = new Set([...prompt.matchAll(TAG)].map((m) => Number(m[1])));
   const outOfRange = [...tagged].filter((n) => n < 1 || n > count).sort((a, b) => a - b);
-  const unreferenced = Array.from({ length: count }, (_, i) => i + 1).filter((n) => !referenced.has(n));
+  const unreferenced = count === 1 ? [] : Array.from({ length: count }, (_, i) => i + 1).filter((n) => !referenced.has(n));
   // 只有区域真的生效（叠加槽存在）时才校验「区域N」；没有框选时这两个字是普通文字。
   const regions = regionNames(slots, language).length;
   const regionIssues = regions > 0 ? referencedRegions(prompt).filter((n) => n < 1 || n > regions).map((n) => `提示词引用了区域${n}，但只框选了 ${regions} 个区域`) : [];
   return {
     issues: [...outOfRange.map((n) => `提示词引用了图${n}，但只接了 ${count} 张参考图`), ...regionIssues],
-    warnings: unreferenced.map((n) => `图${n} 已接线但提示词未引用`),
+    warnings: unreferenced.map((n) => `图${n} 已连接，尚未说明它的用途。可在提示词中点击参考图插入引用，并描述如何使用它。`),
     unreferenced,
   };
 }
@@ -113,6 +114,12 @@ function referencedIndexes(texts: string[]): Set<number> {
   const out = new Set<number>();
   for (const text of texts) for (const m of text.matchAll(REFERENCE)) out.add(Number(m.groups!.tagged ?? m.groups!.zhN ?? m.groups!.enN));
   return out;
+}
+
+function singleImageNote(language: PromptLanguage): string {
+  return language === "zh"
+    ? "本次提供一张参考图，编号为图1。请依据图1的视觉内容执行下方用户指令；指令中省略编号的图片指代均指图1。\n\n用户指定参考用途时，按指定用途使用图1。用户要求修改图片时，以图1为编辑基础，保留与修改要求无关的内容。\n\n用户指令："
+    : "This request provides one reference image, identified as Image 1. Use the visual content of Image 1 to follow the user instructions below; image references without a number in those instructions refer to Image 1.\n\nWhen the user specifies a reference purpose, use Image 1 for that purpose. When the user asks to modify the image, use Image 1 as the editing base and preserve content unrelated to the requested changes.\n\nUser instructions:";
 }
 
 function referenceNote(count: number, language: PromptLanguage): string {
