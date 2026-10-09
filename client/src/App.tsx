@@ -361,8 +361,14 @@ export function App() {
             画板包 ▾
           </button>
           {update.available && (
-            <button className="topbar-button topbar-update" title="打开下载页" onClick={update.openDownload}>
-              ⬇ 新版本 {update.available.version}
+            <button className="topbar-button topbar-update" title="查看更新" onClick={() => setSettingsOpen(true)}>
+              {update.state.phase === "ready"
+                ? "⬇ 重启并更新"
+                : update.state.phase === "downloading"
+                  ? `⬇ 下载中 ${update.state.progress ? Math.round((update.state.progress.done / (update.state.progress.total || 1)) * 100) : 0}%`
+                  : update.state.phase === "checking"
+                    ? "⬇ 检查中…"
+                    : `⬇ 新版本 ${update.available.version}`}
             </button>
           )}
           <button className="topbar-button" onClick={() => setSettingsOpen(true)} disabled={!settings.loaded || !outputRoot}>

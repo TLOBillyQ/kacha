@@ -242,6 +242,27 @@ const commands: Record<string, (a: Args, options?: { headers?: Record<string, st
   },
   "plugin:opener|open_url": () => null,
   "plugin:app|version": () => "0.0.0-e2e",
+  // updater 假实现：check 读 e2e 注入的描述；download 发进度后 resolve；install 记录调用。
+  "plugin:updater|check": (a) => {
+    const desc = scn.updaterDescriptor;
+    if (!desc) return null;
+    return {
+      rid: 1,
+      currentVersion: "0.0.0-e2e",
+      version: desc.version,
+      body: desc.notes,
+      rawJson: desc,
+    };
+  },
+  "plugin:updater|download": (a) => {
+    const onEvent = a.onEvent as { onmessage?: (e: unknown) => void };
+    onEvent.onmessage?.({ event: "Started", data: { contentLength: 100 } });
+    onEvent.onmessage?.({ event: "Progress", data: { chunkLength: 60 } });
+    onEvent.onmessage?.({ event: "Finished" });
+    return 2;
+  },
+  "plugin:updater|install": () => null,
+  "plugin:resources|close": () => null,
   "plugin:event|listen": (a) => {
     const id = nextEventId++;
     listenerIds.set(id, { event: a.event, handler: a.handler });
