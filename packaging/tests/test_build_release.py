@@ -1,16 +1,137 @@
-"""build_release：平台识别、命令参数、产物路径与 release/ 目录逻辑（不跑真实构建）。"""
+"""build_release：完整 main 的假 subprocess 构建收集及 release/ 目录逻辑（不跑真实构建）。"""
 
 from __future__ import annotations
 
 import hashlib
+import subprocess
+import tarfile
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
+from unittest import mock
 
-from _support import make_release_dir
+from _support import make_release_dir, make_repo
 
 import build_release
 from release_meta import read_checksums
+
+
+class BuildMainTest(unittest.TestCase):
+    def test_windows_collects_official_nsis_installer_and_signature(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = make_repo(Path(temp))
+            client = repo / "client"
+            bundle = client / "src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis"
+            installer = bundle / "Kacha_1.2.3_x64-setup.exe"
+            release = repo / "release"
+            expected_files = {
+                "kacha-1.2.3-win-x64-setup.exe": b"fake NSIS installer",
+                "kacha-1.2.3-win-x64-setup.exe.sig": b"fake minisign signature for NSIS\n",
+            }
+
+            def fake_run(command, *, check, cwd):
+                self.assertTrue(check)
+                self.assertEqual(cwd, client)
+                if command == ["npm.cmd", "ci"]:
+                    pass
+                elif command == ["npx.cmd", "tauri", "build", "--bundles", "nsis",
+                                 "--target", "x86_64-pc-windows-msvc"]:
+                    bundle.mkdir(parents=True)
+                    installer.write_bytes(expected_files["kacha-1.2.3-win-x64-setup.exe"])
+                    Path(str(installer) + ".sig").write_bytes(
+                        expected_files["kacha-1.2.3-win-x64-setup.exe.sig"])
+                else:
+                    self.fail(f"Unexpected subprocess: {command}")
+                return subprocess.CompletedProcess(command, 0)
+
+            with mock.patch.multiple(build_release, REPO_ROOT=repo, CLIENT_DIR=client), \
+                    mock.patch.object(build_release.platform_module, "system", return_value="Windows"), \
+                    mock.patch.object(build_release.platform_module, "machine", return_value="AMD64"), \
+                    mock.patch.object(build_release.shutil, "which", side_effect=lambda tool: tool + ".cmd"), \
+                    mock.patch.object(build_release.subprocess, "run", side_effect=fake_run):
+                self.assertEqual(build_release.main([]), 0)
+
+            self.assertEqual({path.name for path in release.iterdir()},
+                             {*expected_files, "SHA256SUMS"})
+            checksums = read_checksums(release / "SHA256SUMS")
+            self.assertEqual(set(checksums), set(expected_files))
+            for name, data in expected_files.items():
+                self.assertEqual((release / name).read_bytes(), data)
+                self.assertEqual(checksums[name], hashlib.sha256(data).hexdigest())
+
+    def test_macos_collects_official_updater_and_zips_the_same_signed_app(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = make_repo(Path(temp))
+            client = repo / "client"
+            bundle = client / "src-tauri/target/aarch64-apple-darwin/release/bundle/macos"
+            app = bundle / "Kacha.app"
+            archive = bundle / "Kacha.app.tar.gz"
+            release = repo / "release"
+            expected_app = {
+                "Kacha.app/Contents/MacOS/kacha": b"fake arm64 executable",
+                "Kacha.app/Contents/_CodeSignature/CodeResources": b"tauri ad-hoc signature",
+            }
+            signature = b"fake minisign signature for official archive\n"
+
+            def fake_run(command, *, check, cwd):
+                self.assertTrue(check)
+                if command == ["npm", "ci"]:
+                    self.assertEqual(cwd, client)
+                elif command == ["npx", "tauri", "build", "--bundles", "app",
+                                 "--target", "aarch64-apple-darwin"]:
+                    self.assertEqual(cwd, client)
+                    for name, data in expected_app.items():
+                        path = bundle / name
+                        path.parent.mkdir(parents=True, exist_ok=True)
+                        path.write_bytes(data)
+                    with tarfile.open(archive, "w:gz") as stream:
+                        stream.add(app, arcname="Kacha.app")
+                    Path(str(archive) + ".sig").write_bytes(signature)
+                elif command[0] == "codesign":
+                    self.assertEqual(cwd, repo)
+                    if "--sign" in command:
+                        # Re-signing after archiving must be visible in the first-install ZIP.
+                        (app / "Contents/_CodeSignature/CodeResources").write_bytes(b"resigned app")
+                    else:
+                        self.assertEqual(command, ["codesign", "--verify", "--deep",
+                                                   "--strict", str(app)])
+                elif command == ["ditto", "-c", "-k", "--keepParent", str(app),
+                                 str(release / "kacha-1.2.3-macos-arm64.zip")]:
+                    self.assertEqual(cwd, repo)
+                    with zipfile.ZipFile(command[-1], "w") as stream:
+                        for path in app.rglob("*"):
+                            if path.is_file():
+                                stream.write(path, path.relative_to(bundle).as_posix())
+                else:
+                    self.fail(f"Unexpected subprocess: {command}")
+                return subprocess.CompletedProcess(command, 0)
+
+            with mock.patch.multiple(build_release, REPO_ROOT=repo, CLIENT_DIR=client), \
+                    mock.patch.object(build_release.platform_module, "system", return_value="Darwin"), \
+                    mock.patch.object(build_release.platform_module, "machine", return_value="arm64"), \
+                    mock.patch.object(build_release.shutil, "which", side_effect=lambda tool: tool), \
+                    mock.patch.object(build_release.subprocess, "run", side_effect=fake_run):
+                self.assertEqual(build_release.main([]), 0)
+
+            updater = release / "kacha-1.2.3-macos-arm64.app.tar.gz"
+            self.assertEqual(updater.read_bytes(), archive.read_bytes())
+            self.assertEqual(Path(str(updater) + ".sig").read_bytes(), signature)
+            with tarfile.open(updater, "r:gz") as stream:
+                archived_app = {member.name: stream.extractfile(member).read()
+                                for member in stream.getmembers() if member.isfile()}
+            with zipfile.ZipFile(release / "kacha-1.2.3-macos-arm64.zip") as stream:
+                zipped_app = {name: stream.read(name) for name in stream.namelist()}
+            self.assertEqual(archived_app, expected_app)
+            self.assertEqual(zipped_app, archived_app)
+            checksums = read_checksums(release / "SHA256SUMS")
+            self.assertEqual(set(checksums), {
+                "kacha-1.2.3-macos-arm64.zip",
+                "kacha-1.2.3-macos-arm64.app.tar.gz",
+                "kacha-1.2.3-macos-arm64.app.tar.gz.sig",
+            })
+            for name, digest in checksums.items():
+                self.assertEqual(digest, hashlib.sha256((release / name).read_bytes()).hexdigest())
 
 
 class DetectPlatformTest(unittest.TestCase):
