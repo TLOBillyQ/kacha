@@ -12,6 +12,8 @@
 from __future__ import annotations
 
 import hashlib
+import base64
+import binascii
 import json
 import re
 import tomllib
@@ -24,6 +26,8 @@ PLATFORMS = (WIN_X64, MACOS_ARM64)
 CHECKSUMS_NAME = "SHA256SUMS"
 
 TAURI_DIR = Path("client") / "src-tauri"
+DEFAULT_BASE_URL = "http://lzxsvn:3000"
+OWNER_REPO = "qinyuanj/kacha"
 
 
 class ReleaseMetaError(RuntimeError):
@@ -64,6 +68,72 @@ def zip_name(version: str, platform: str) -> str:
     if platform not in PLATFORMS:
         raise ValueError(f"未知平台：{platform}")
     return f"{ARCHIVE_BASE}-{version}-{platform}.zip"
+
+
+def updater_name(version: str, platform: str) -> str:
+    if platform == WIN_X64:
+        return f"kacha-{version}-win-x64-setup.exe"
+    if platform == MACOS_ARM64:
+        return f"kacha-{version}-macos-arm64.app.tar.gz"
+    raise ValueError(f"未知平台：{platform}")
+
+
+def descriptor_name(platform: str) -> str:
+    platform_key(platform)
+    return f"updater-{platform}.json"
+
+
+def platform_key(platform: str) -> str:
+    return {WIN_X64: "windows-x86_64", MACOS_ARM64: "darwin-aarch64"}[platform]
+
+
+def platform_artifacts(version: str, platform: str) -> list[str]:
+    package = updater_name(version, platform)
+    names = [package, package + ".sig", descriptor_name(platform)]
+    if platform == MACOS_ARM64:
+        names.insert(0, zip_name(version, platform))
+    return names
+
+
+def expected_artifact_names(version: str) -> set[str]:
+    return {name for platform in PLATFORMS for name in platform_artifacts(version, platform)}
+
+
+def foreign_artifacts(release_dir: Path, version: str) -> list[str]:
+    expected = expected_artifact_names(version)
+    if not release_dir.is_dir():
+        return []
+    return sorted(
+        path.name for path in release_dir.iterdir()
+        if path.is_file() and path.name != CHECKSUMS_NAME
+        and path.name not in expected
+        and (path.name.startswith(("kacha-", "updater-"))
+             or path.name.endswith((".zip", ".exe", ".tar.gz", ".sig")))
+    )
+
+
+def read_signature(path: Path) -> str:
+    """Tauri .sig files contain base64-encoded minisign text, not raw signature bytes."""
+    try:
+        text = path.read_text(encoding="utf-8").strip()
+        lines = base64.b64decode(text, validate=True).decode("utf-8").splitlines()
+        if len(lines) != 4 or not lines[0].startswith("untrusted comment:"):
+            raise ValueError("minisign format")
+        if len(base64.b64decode(lines[1], validate=True)) != 74:
+            raise ValueError("minisign signature")
+        if not lines[2].startswith("trusted comment:"):
+            raise ValueError("trusted comment")
+        if len(base64.b64decode(lines[3], validate=True)) != 64:
+            raise ValueError("global signature")
+        return text
+    except (OSError, UnicodeError, ValueError, binascii.Error) as error:
+        raise ReleaseMetaError(f"签名缺失或格式无效：{path.name}") from error
+
+
+def updater_descriptor(version: str, platform: str, notes: str, pub_date: str,
+                       url: str, signature: str) -> dict:
+    return {"version": version, "notes": notes, "pub_date": pub_date,
+            "platforms": {platform_key(platform): {"url": url, "signature": signature}}}
 
 
 def expected_zip_names(version: str) -> set[str]:

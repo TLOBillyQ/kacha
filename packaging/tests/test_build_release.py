@@ -27,11 +27,11 @@ class DetectPlatformTest(unittest.TestCase):
 
 
 class CommandAndPathTest(unittest.TestCase):
-    def test_windows_builds_without_bundle(self) -> None:
-        self.assertEqual(build_release.tauri_build_args("win-x64"), ["tauri", "build", "--no-bundle", "--target", "x86_64-pc-windows-msvc"])
+    def test_windows_builds_signed_nsis_bundle(self) -> None:
+        self.assertEqual(build_release.tauri_build_args("win-x64"), ["tauri", "build", "--bundles", "nsis", "--target", "x86_64-pc-windows-msvc"])
         self.assertEqual(
-            build_release.product_path(Path("/repo"), "win-x64"),
-            Path("/repo/client/src-tauri/target/x86_64-pc-windows-msvc/release/kacha.exe"),
+            build_release.product_path(Path("/repo"), "win-x64", "1.2.3"),
+            Path("/repo/client/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/Kacha_1.2.3_x64-setup.exe"),
         )
 
     def test_macos_builds_app_bundle_for_apple_silicon(self) -> None:
@@ -49,10 +49,10 @@ class ReleaseDirTest(unittest.TestCase):
     def test_refuses_zip_of_another_version(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             release_dir = make_release_dir(Path(temp), "0.1.0", "win-x64")
+            (release_dir / "kacha-0.1.0-win-x64.zip").write_bytes(b"stale")
             with self.assertRaises(SystemExit) as ctx:
-                build_release.ensure_no_foreign_zips(release_dir, "0.2.0")
-            self.assertIn("0.1.0", str(ctx.exception))
-            build_release.ensure_no_foreign_zips(release_dir, "0.1.0")
+                build_release.ensure_no_foreign_zips(release_dir, "0.1.0")
+            self.assertIn("kacha-0.1.0-win-x64.zip", str(ctx.exception))
 
     def test_windows_zip_contains_single_exe(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -74,29 +74,31 @@ class ReleaseDirTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             release_dir = make_release_dir(Path(temp), "0.2.0", "macos-arm64")
             mac = "kacha-0.2.0-macos-arm64.zip"
+            updater = "kacha-0.2.0-macos-arm64.app.tar.gz"
             win = "kacha-0.2.0-win-x64.zip"
             # 旧 SHA256SUMS 里还有一个已不存在的条目，应被丢弃。
             with (release_dir / "SHA256SUMS").open("a", encoding="utf-8") as stream:
                 stream.write(f"{'c' * 64}  kacha-0.1.0-win-x64.zip\n")
             (release_dir / win).write_bytes(b"new win build")
             checksums = build_release.update_checksums(release_dir, "0.2.0")
-            expected = {
-                mac: hashlib.sha256(b"fake zip macos-arm64").hexdigest(),
-                win: hashlib.sha256(b"new win build").hexdigest(),
-            }
+            expected = read_checksums(release_dir / "SHA256SUMS")
+            self.assertIn(mac, expected)
+            self.assertIn(updater, expected)
+            self.assertIn(updater + ".sig", expected)
+            self.assertNotIn(win, expected)
+            self.assertNotIn("kacha-0.1.0-win-x64.zip", expected)
             self.assertEqual(checksums, expected)
             self.assertEqual(read_checksums(release_dir / "SHA256SUMS"), expected)
 
     def test_checksums_rewritten_after_rebuild(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             release_dir = make_release_dir(Path(temp), "0.2.0", "win-x64")
-            win = release_dir / "kacha-0.2.0-win-x64.zip"
+            win = release_dir / "kacha-0.2.0-win-x64-setup.exe"
             win.write_bytes(b"rebuilt")
             build_release.update_checksums(release_dir, "0.2.0")
-            self.assertEqual(
-                read_checksums(release_dir / "SHA256SUMS"),
-                {win.name: hashlib.sha256(b"rebuilt").hexdigest()},
-            )
+            checksums = read_checksums(release_dir / "SHA256SUMS")
+            self.assertEqual(checksums[win.name], hashlib.sha256(b"rebuilt").hexdigest())
+            self.assertIn(win.name + ".sig", checksums)
 
 
 if __name__ == "__main__":

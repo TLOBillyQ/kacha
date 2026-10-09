@@ -57,6 +57,12 @@ class TauriVersionTest(unittest.TestCase):
 
 
 class NamingTest(unittest.TestCase):
+    def test_official_updater_platform_protocol(self) -> None:
+        self.assertEqual(release_meta.updater_name("1.2.3", "win-x64"), "kacha-1.2.3-win-x64-setup.exe")
+        self.assertEqual(release_meta.updater_name("1.2.3", "macos-arm64"), "kacha-1.2.3-macos-arm64.app.tar.gz")
+        self.assertEqual(release_meta.descriptor_name("win-x64"), "updater-win-x64.json")
+        self.assertEqual(release_meta.platform_key("macos-arm64"), "darwin-aarch64")
+
     def test_zip_names(self) -> None:
         self.assertEqual(zip_name("0.2.0", "win-x64"), "kacha-0.2.0-win-x64.zip")
         self.assertEqual(zip_name("0.2.0", "macos-arm64"), "kacha-0.2.0-macos-arm64.zip")

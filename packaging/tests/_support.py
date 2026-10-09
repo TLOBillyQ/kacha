@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import base64
 import json
 import sys
 from pathlib import Path
@@ -36,14 +37,34 @@ def make_repo(root: Path, version: str = "1.2.3", conf_version: str | None = Non
 
 
 def make_release_dir(root: Path, version: str, *platforms: str) -> Path:
-    """模拟一台构建机的 release/：平台 zip + 本机 SHA256SUMS。"""
+    """Signed release fixture; names/schema are independent literals from the spec."""
     release_dir = root / "release"
     release_dir.mkdir(parents=True, exist_ok=True)
     lines: list[str] = []
     for platform in platforms:
-        name = f"kacha-{version}-{platform}.zip"
-        data = f"fake zip {platform}".encode("utf-8")
-        (release_dir / name).write_bytes(data)
-        lines.append(f"{hashlib.sha256(data).hexdigest()}  {name}")
+        name = (f"kacha-{version}-win-x64-setup.exe" if platform == "win-x64"
+                else f"kacha-{version}-macos-arm64.app.tar.gz")
+        signature = base64.b64encode((
+            "untrusted comment: signature from tauri secret key\n"
+            + base64.b64encode(b"ED" + b"k" * 8 + b"s" * 64).decode() + "\n"
+            + "trusted comment: timestamp:1791504000\n"
+            + base64.b64encode(b"g" * 64).decode() + "\n"
+        ).encode()).decode()
+        files = {name: f"fake updater {platform}".encode(), name + ".sig": signature.encode()}
+        if platform == "macos-arm64":
+            files[f"kacha-{version}-{platform}.zip"] = f"fake zip {platform}".encode()
+        descriptor = {
+            "version": version,
+            "notes": f"# Kacha {version}\n\n首次运行：更多信息 → 仍要运行；macOS 右键「打开」。",
+            "pub_date": "2026-10-09T00:00:00Z",
+            "platforms": {("windows-x86_64" if platform == "win-x64" else "darwin-aarch64"): {
+                "url": f"http://lzxsvn:3000/qinyuanj/kacha/releases/download/v{version}/{name}",
+                "signature": signature,
+            }},
+        }
+        files[f"updater-{platform}.json"] = json.dumps(descriptor, ensure_ascii=False).encode()
+        for filename, data in files.items():
+            (release_dir / filename).write_bytes(data)
+            lines.append(f"{hashlib.sha256(data).hexdigest()}  {filename}")
     (release_dir / "SHA256SUMS").write_text("\n".join(lines) + "\n", encoding="utf-8")
     return release_dir

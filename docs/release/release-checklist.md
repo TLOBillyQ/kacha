@@ -1,8 +1,9 @@
 # 发布验收清单（v2 Tauri 客户端）
 
-分发决策见 `docs/adr/0007-gitea-release-as-sole-distribution-channel.md`。
-Gitea Release 只挂三个附件：`kacha-<版本>-win-x64.zip`、
-`kacha-<版本>-macos-arm64.zip`、`SHA256SUMS`，tag 为 `v<版本>`。
+分发与 updater 决策见 `docs/adr/0007-gitea-release-as-sole-distribution-channel.md`、
+`docs/adr/0017-tauri-official-updater-for-desktop-updates.md`。
+Gitea Release（tag `v<版本>`）包含 Windows 安装器及签名、`updater-win-x64.json`、
+macOS 首次安装 zip、`.app.tar.gz` 及签名、`updater-macos-arm64.json`、`SHA256SUMS`。
 执行人逐条勾选，并在末尾「记录」表中留痕。
 
 ## 1. 定版本
@@ -29,20 +30,21 @@ Gitea Release 只挂三个附件：`kacha-<版本>-win-x64.zip`、
 
 Tauri 不能交叉构建，Windows 包在 Windows x64 机器上构建，macOS 包在 Apple Silicon Mac 上构建：
 
+    # 先提供两端共享的无密码 updater 私钥（见 packaging/README.md），不要打印其内容
     python3 packaging/build_release.py                # 默认先在 client/ 下 npm ci
     python3 packaging/build_release.py --skip-npm-ci  # 已装好依赖时
 
-- [ ] 构建前 `release/` 中没有旧版本压缩包（脚本会拒绝）。
-- [ ] Windows：`release/kacha-<版本>-win-x64.zip` 内只有 `kacha.exe`。
+- [ ] 构建前 `release/` 中没有旧版本发布产物（脚本会拒绝）。
+- [ ] Windows：`release/kacha-<版本>-win-x64-setup.exe` 与 `.sig` 齐全；安装范围是当前用户。
 - [ ] macOS：`codesign --verify --deep --strict` 通过；`release/kacha-<版本>-macos-arm64.zip`
-      由 `ditto` 生成，访达双击解压后得到 `Kacha.app`。
-- [ ] `release/SHA256SUMS` 列出本机压缩包。
+      由 `ditto` 生成，updater 更新包 `.app.tar.gz` 与 `.sig` 齐全。
+- [ ] `release/SHA256SUMS` 列出本机发布材料；平台描述由发布脚本生成，不手工维护。
 
 ## 4. 发布说明
 
 - [ ] 复制 `docs/release/release-notes-template.md` 为 `docs/release/release-notes-<版本>.md`，
       替换 `{{版本}}`、填写本版变化，删除模板头部注释；随版本提交合入。
-- [ ] 内容包含：下载表（三个附件）、SHA256 校验命令、WebView2 说明与官方链接、
+- [ ] 内容包含：下载表、SHA256 校验命令、WebView2 说明与官方链接、
       SmartScreen「更多信息 → 仍要运行」、macOS Gatekeeper 放行方式、打开画板方式（不登记双击关联）、
       数据位置与诊断导出入口。
 
@@ -52,30 +54,30 @@ Tauri 不能交叉构建，Windows 包在 Windows x64 机器上构建，macOS �
     python3 packaging/publish_release.py
 
 - [ ] 脚本本地核对通过（SHA256SUMS 一致、无其他版本压缩包、发布说明存在）后才上传。
-- [ ] 第二台机器发布后，同一 Release 下恰好三个附件，无重复。
-- [ ] 重复执行只替换附件，不产生重复。
+- [ ] 第二台机器发布后，同一 Release 下双端发布集合齐全且无重复。
+- [ ] 重复执行只替换本端附件：先撤下本端旧描述，附件与校验文件替换完成后重新发布本端描述。
 
 ## 6. 下载核对
 
 在一台干净的机器上从 Gitea Release 页面下载全部附件：
 
-- [ ] Windows：`Get-FileHash -Algorithm SHA256 -Path .\kacha-<版本>-win-x64.zip` 与 `SHA256SUMS` 一致。
+- [ ] Windows：`Get-FileHash -Algorithm SHA256 -Path .\kacha-<版本>-win-x64-setup.exe` 与 `SHA256SUMS` 一致。
 - [ ] macOS：`shasum -a 256 -c SHA256SUMS --ignore-missing` 显示 `OK`。
-- [ ] `SHA256SUMS` 同时包含两个平台的压缩包条目。
+- [ ] `SHA256SUMS` 同时包含两个平台的全部发布产物条目。
 - [ ] Release 正文与 `release-notes-<版本>.md` 一致。
 
 ## 7. 冒烟测试
 
 ### Windows（Win10 21H2+ 与 Win11 各一台为佳）
 
-- [ ] 解压后双击 exe 可启动；SmartScreen 按发布说明「更多信息 → 仍要运行」可放行。
-- [ ] 中文路径下解压运行正常；非管理员账户可运行。
+- [ ] 安装器可按当前用户安装并可启动；SmartScreen 按发布说明「更多信息 → 仍要运行」可放行。
+- [ ] 中文路径下运行正常；非管理员账户可运行。
 - [ ] **WebView2 缺失提示**：在未装 WebView2 的机器（或卸载运行时的虚拟机）上启动，弹窗说明并给出
       <https://developer.microsoft.com/microsoft-edge/webview2/> 链接，不闪退、不白屏。
 - [ ] **打开画板**：把 `.ugcboard.json` 拖到 exe 图标上可启动并打开该画板；应用运行时拖到窗口、
       或拖到 exe 图标上（转交已运行实例）都能打开。
 - [ ] 文生图、图片编辑、画板保存/重新打开各跑通一次。
-- [ ] 覆盖升级：用新 exe 覆盖旧 exe 后，设置、API 密钥与最近画板仍在。
+- [ ] 首次迁移：旧免安装版用户安装本版后，设置、API 密钥与最近画板仍在。
 
 ### macOS（Apple Silicon）
 
@@ -106,7 +108,7 @@ Tauri 不能交叉构建，Windows 包在 Windows x64 机器上构建，macOS �
 | 构建日期 |  |
 | Windows 构建机 / 工具链版本 |  |
 | macOS 构建机 / 工具链版本 |  |
-| Gitea Release tag / 附件核对 | v<版本>，3 个附件齐全 |
+| Gitea Release tag / 附件核对 | v<版本>，双端发布集合齐全 |
 | Win10 冒烟机器 |  |
 | Win11 冒烟机器 |  |
 | macOS 冒烟机器 |  |
