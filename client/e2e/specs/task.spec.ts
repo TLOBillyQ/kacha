@@ -42,6 +42,126 @@ async function expand(page: Page, nodeId: string) {
 const toolbarRun = (page: Page) => page.getByRole("toolbar", { name: "画板工具栏" }).getByRole("button", { name: /运行/ });
 const REF = "导入参考图/cat.png";
 
+test.describe("Issue #1 单图默认引用与多图点击插入引导", () => {
+  const openSingleImage = async (page: Page, prompt: string, files: Record<string, { b64: string }> = { [`${OUTPUT_ROOT}/${REF}`]: { b64: png(1024, 1024) } }, edges: unknown[] = [edge("p1", "t1", "positive"), edge("r1", "t1", "image:0")]) => {
+    const text = board("单图", [promptNode("p1", prompt), referenceNode("r1", REF), taskNode("t1", { image_ports: 1 })], edges);
+    const errors = await openApp(page, boardScenario("单图", text, { files }));
+    return errors;
+  };
+
+  test("单图省略图1：提交发送确认补写与参考图，无未引用警告；用户提示词原文不变", async ({ page }) => {
+    const errors = await openSingleImage(page, "把衣服改成红色");
+    const bodies = await captureGeneration(page);
+    await task(page, "t1").locator(".task-actions button.primary").click();
+    await expect(page.getByRole("dialog", { name: "确认运行" })).toHaveCount(0);
+    await expect.poll(() => bodies.length).toBe(1);
+    const record = JSON.parse((await e2eText(page, (await taskRecords(page))[0]))!);
+    const body = bodies[0];
+    expect(record.send_text).toContain("本次提供一张参考图，编号为图1。请依据图1的视觉内容执行下方用户指令；指令中省略编号的图片指代均指图1。");
+    expect(record.send_text).toContain("用户指令：\n把衣服改成红色");
+    expect(record.prompt).toBe("把衣服改成红色");
+    expect(body.prompt).toBe(record.send_text);
+    expect(body.input.messages[0].content.filter((c: { image?: string }) => c.image)).toHaveLength(1);
+    expect(errors).toEqual([]);
+  });
+
+  test("单图风格参考：按指定用途使用图1；显式 @图2 仍硬阻断", async ({ page }) => {
+    const errors = await openSingleImage(page, "参考这张图的风格画一座城堡");
+    await openMenu(page, "t1", "查看发送文本");
+    const shown = (await page.getByRole("dialog", { name: "查看发送文本" }).locator("pre.send-text").first().textContent())!;
+    expect(shown).toContain("用户指定参考用途时，按指定用途使用图1。用户要求修改图片时，以图1为编辑基础");
+    expect(shown).toContain("用户指令：\n参考这张图的风格画一座城堡");
+    await page.getByRole("button", { name: "关闭" }).click();
+    expect(errors).toEqual([]);
+
+    const out = board("越界", [promptNode("p1", "按@图2 改"), referenceNode("r1", REF), taskNode("t1", { image_ports: 1 })], [edge("p1", "t1", "positive"), edge("r1", "t1", "image:0")]);
+    await openApp(page, boardScenario("越界", out, { files: { [`${OUTPUT_ROOT}/${REF}`]: { b64: png(1024, 1024) } } }));
+    await task(page, "t1").locator(".task-actions button.primary").click();
+    await expect(page.getByRole("dialog", { name: "确认运行" })).toHaveCount(0);
+    await expect(page.locator(".toast")).toContainText("无法运行：提示词引用了图2，但只接了 1 张参考图");
+  });
+
+  test("单图带区域：单图补写与区域说明共同生效；叠加图不产生未引用警告", async ({ page }) => {
+    await openSingleImage(page, "把区域1 改成红色", { [`${OUTPUT_ROOT}/${REF}`]: { b64: png(1024, 1024) } }, [
+      edge("p1", "t1", "positive"),
+      edge("r1", "t1", "image:0", { region: { rects: [[0.1, 0.1, 0.5, 0.5]], render: "highlight_overlay" } }),
+    ]);
+    await task(page, "t1").getByRole("button", { name: "展开" }).click();
+    await expect(task(page, "t1").locator(".warn-list")).toHaveCount(0);
+    await expect(task(page, "t1").locator(".port-unreferenced")).toHaveCount(0);
+    await openMenu(page, "t1", "查看发送文本");
+    const shown = (await page.getByRole("dialog", { name: "查看发送文本" }).locator("pre.send-text").first().textContent())!;
+    expect(shown).toContain("本次提供一张参考图，编号为图1。");
+    expect(shown).toContain("用户指令：\n把紫色区域 改成红色");
+    expect(shown).toContain("图2 是图1 的标注版，紫色半透明高亮标出的是要修改的区域");
+  });
+
+  test("提示词下方按任务分组展示缩略图，光标处点击插入；共享提示词分组说明与编辑选择保留", async ({ page }) => {
+    const ref2 = "导入参考图/dog.png";
+    const text = board(
+      "共享",
+      [promptNode("p1", "把", [0, 0]), referenceNode("r1", REF), referenceNode("r2", ref2, [0, 400]), taskNode("t1", { image_ports: 2 }, [450, 0]), taskNode("t2", { image_ports: 1 }, [450, 430])],
+      [edge("p1", "t1", "positive"), edge("p1", "t2", "positive"), edge("r1", "t1", "image:0"), edge("r2", "t1", "image:1"), edge("r2", "t2", "image:0")],
+    );
+    const files = { [`${OUTPUT_ROOT}/${REF}`]: { b64: png(1024, 1024, { rgb: [200, 30, 30] }) }, [`${OUTPUT_ROOT}/${ref2}`]: { b64: png(1024, 1024, { rgb: [30, 30, 220] }) } };
+    const errors = await openApp(page, boardScenario("共享", text, { files }));
+    const prompt = page.locator('.react-flow__node[data-id="p1"]');
+    await expect(prompt.getByText("此提示词供多个任务使用，图片编号按各任务的连接分别解释。")).toBeVisible();
+    const groups = prompt.locator(".reference-guide-task");
+    await expect(groups).toHaveCount(2);
+    await expect(groups.nth(0)).toContainText("qwen-image-3.0-pro");
+    await expect(groups.nth(0).getByText("点击参考图，将引用插入提示词。")).toBeVisible();
+    await expect(groups.nth(0).getByRole("button", { name: /图1/ })).toBeVisible();
+    await expect(groups.nth(0).getByRole("button", { name: /图2/ })).toBeVisible();
+    await expect(groups.nth(1).getByRole("button", { name: /图1/ })).toBeVisible();
+    await expect(prompt.locator(".reference-guide-thumb img")).toHaveCount(3);
+
+    const textarea = prompt.locator("textarea");
+    await textarea.click();
+    await textarea.evaluate((el) => ((el as HTMLTextAreaElement).setSelectionRange(2, 2)));
+    await groups.nth(0).getByRole("button", { name: /图2/ }).click();
+    await expect(textarea).toHaveValue("把@图2");
+    await expect.poll(async () => textarea.evaluate((el) => (el as HTMLTextAreaElement).selectionStart)).toBe(4);
+    await expect(groups.nth(0)).toBeVisible();
+    expect(errors).toEqual([]);
+  });
+
+  test("多图未引用警告包含插入引用与描述用途的引导；叠加图不作为可点击参考图", async ({ page }) => {
+    const ref2 = "导入参考图/dog.png";
+    const text = board(
+      "多图",
+      [promptNode("p1", "把图1 调亮"), referenceNode("r1", REF), referenceNode("r2", ref2, [0, 400]), taskNode("t1", { image_ports: 2, transparent_background: true })],
+      [edge("p1", "t1", "positive"), edge("r1", "t1", "image:0"), edge("r2", "t1", "image:1", { region: { rects: [[0, 0, 0.5, 0.5]], render: "highlight_overlay" } })],
+    );
+    const files = { [`${OUTPUT_ROOT}/${REF}`]: { b64: png(1024, 1024) }, [`${OUTPUT_ROOT}/${ref2}`]: { b64: png(1024, 1024) } };
+    await openApp(page, boardScenario("多图", text, { files }));
+    await task(page, "t1").locator(".node-task").hover();
+    await task(page, "t1").getByRole("button", { name: "展开" }).click();
+    await expect(task(page, "t1").locator(".error-list")).toContainText("模型不支持透明背景");
+    const guide = page.locator('.react-flow__node[data-id="p1"] .reference-guide-task');
+    await expect(guide.getByRole("button")).toHaveCount(2);
+    await expect(guide.getByRole("button", { name: /图2/ }).locator(".reference-guide-rect")).toHaveCount(1);
+  });
+
+  test("重新生成按当前单图规则重算：请求、展示与任务记录一致", async ({ page }) => {
+    const errors = await openSingleImage(page, "把衣服改成红色");
+    const bodies = await captureGeneration(page);
+    await task(page, "t1").locator(".task-actions button.primary").click();
+    await expect.poll(() => bodies.length).toBe(1);
+    await openMenu(page, "t1", "重新生成");
+    await expect.poll(() => bodies.length).toBe(2);
+    expect(bodies[1].prompt).toBe(bodies[0].prompt);
+    await openMenu(page, "t1", "查看发送文本");
+    const shown = (await page.getByRole("dialog", { name: "查看发送文本" }).locator("pre.send-text").first().textContent())!;
+    expect(shown).toBe(bodies[1].prompt);
+    const records = await taskRecords(page);
+    expect(records.length).toBe(2);
+    const texts = await Promise.all(records.map((p) => e2eText(page, p).then((t) => JSON.parse(t!).send_text)));
+    expect(new Set(texts).size).toBe(1);
+    expect(errors).toEqual([]);
+  });
+});
+
 test("#1 带区域的图片编辑：查看发送文本、task.json 的 send_text、请求文本三者一致", async ({ page }) => {
   const text = board(
     "区域",

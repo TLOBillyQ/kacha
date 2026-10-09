@@ -15,8 +15,8 @@ const noPhrases: ModelCapability = { ...qwenPro, region_hint_phrasing: {} };
 const image = (port: number, userPort: number): SlotRef => ({ kind: "image", port, userPort, sourcePort: null, regionCount: 0 });
 const overlay = (port: number, userPort: number, sourcePort: number, regionCount: number): SlotRef => ({ kind: "overlay", port, userPort, sourcePort, regionCount });
 
-/** 去掉数量顺序前缀那一行，只看改写后的提示词。 */
-const rewritten = (prompt: string, slots: SlotRef[]) => planSend(noPhrases, slots, prompt, "").text.split("\n").slice(1).join("\n");
+/** 去掉参考说明，只看改写后的用户指令。 */
+const rewritten = (prompt: string, slots: SlotRef[]) => planSend(noPhrases, slots, prompt, "").text.split(/用户指令：\n|User instructions:\n/).at(-1)!.split("\n").slice(slots.filter((s) => s.kind === "image").length === 1 ? 0 : 1).join("\n");
 
 const PHRASE_ZH = (overlay: number, source: number, colors: string) =>
   `图${overlay} 是图${source} 的标注版，${colors}半透明高亮标出的是要修改的区域。只修改图${source} 中高亮区域内的内容，高亮区域之外的所有内容保持完全不变，输出图里不要出现任何高亮颜色。`;
@@ -44,8 +44,8 @@ const CASES: Case[] = [
     name: "1 图",
     slots: [image(1, 1)],
     workflow: "image_edit",
-    zh: { prompt: "把@图1 调亮", head: "本次提供 1 张参考图。\n把图1 调亮", tail: "" },
-    en: { prompt: "Make @图1 brighter", head: "This request provides 1 reference image.\nMake Image 1 brighter", tail: "" },
+    zh: { prompt: "把@图1 调亮", head: "本次提供一张参考图，编号为图1。请依据图1的视觉内容执行下方用户指令；指令中省略编号的图片指代均指图1。\n\n用户指定参考用途时，按指定用途使用图1。用户要求修改图片时，以图1为编辑基础，保留与修改要求无关的内容。\n\n用户指令：\n把图1 调亮", tail: "" },
+    en: { prompt: "Make @图1 brighter", head: "This request provides one reference image, identified as Image 1. Use the visual content of Image 1 to follow the user instructions below; image references without a number in those instructions refer to Image 1.\n\nWhen the user specifies a reference purpose, use Image 1 for that purpose. When the user asks to modify the image, use Image 1 as the editing base and preserve content unrelated to the requested changes.\n\nUser instructions:\nMake Image 1 brighter", tail: "" },
   },
   {
     name: "2 图",
@@ -58,8 +58,8 @@ const CASES: Case[] = [
     name: "1 图带区域",
     slots: [image(1, 1), overlay(2, 1, 1, 1)],
     workflow: "image_edit",
-    zh: { prompt: "把@图1 的区域1 改成红色", head: "本次提供 2 张参考图，按顺序为图1、图2。\n把图1 的紫色区域 改成红色", tail: `\n${PHRASE_ZH(2, 1, "紫色")}` },
-    en: { prompt: "Paint region 1 of @图1 red", head: "This request provides 2 reference images, in order: Image 1, Image 2.\nPaint the purple region of Image 1 red", tail: `\n${PHRASE_EN(2, 1, "purple")}` },
+    zh: { prompt: "把@图1 的区域1 改成红色", head: "本次提供一张参考图，编号为图1。请依据图1的视觉内容执行下方用户指令；指令中省略编号的图片指代均指图1。\n\n用户指定参考用途时，按指定用途使用图1。用户要求修改图片时，以图1为编辑基础，保留与修改要求无关的内容。\n\n用户指令：\n把图1 的紫色区域 改成红色", tail: `\n${PHRASE_ZH(2, 1, "紫色")}` },
+    en: { prompt: "Paint region 1 of @图1 red", head: "This request provides one reference image, identified as Image 1. Use the visual content of Image 1 to follow the user instructions below; image references without a number in those instructions refer to Image 1.\n\nWhen the user specifies a reference purpose, use Image 1 for that purpose. When the user asks to modify the image, use Image 1 as the editing base and preserve content unrelated to the requested changes.\n\nUser instructions:\nPaint the purple region of Image 1 red", tail: `\n${PHRASE_EN(2, 1, "purple")}` },
   },
   {
     name: "2 图带多区域（图1 两个区域、图2 一个）",
@@ -87,6 +87,16 @@ const MODELS: { model: ModelCapability; native: boolean }[] = [
 ];
 
 const NEGATIVE = { zh: { text: "模糊", line: "\n避免出现：模糊" }, en: { text: "blurry", line: "\nAvoid: blurry" } };
+
+it("单张用户参考图默认引用，按已确认文本说明参考用途与编辑基础", () => {
+  const prompt = "把衣服改成红色";
+  const plan = planSend(qwenPro, [image(1, 1)], prompt, "");
+  expect(plan.text).toBe(
+    "本次提供一张参考图，编号为图1。请依据图1的视觉内容执行下方用户指令；指令中省略编号的图片指代均指图1。\n\n用户指定参考用途时，按指定用途使用图1。用户要求修改图片时，以图1为编辑基础，保留与修改要求无关的内容。\n\n用户指令：\n把衣服改成红色",
+  );
+  expect(plan.referenceProblems).toEqual({ issues: [], warnings: [], unreferenced: [] });
+  expect(plan.referenceCount).toBe(1);
+});
 
 describe("发送计划：4 个内置模型 × 参考图与区域 × 语言 × 负向", () => {
   for (const { model, native } of MODELS) {
@@ -168,11 +178,11 @@ describe("发送计划：区域改写与固定句", () => {
   });
 
   it("没有叠加槽时「区域N」是普通文字，不改写", () => {
-    expect(planSend(qwenPro, [image(1, 1)], "把@图1 的区域1 调亮", "").text).toBe("本次提供 1 张参考图。\n把图1 的区域1 调亮");
+    expect(planSend(qwenPro, [image(1, 1)], "把@图1 的区域1 调亮", "").text).toBe("本次提供一张参考图，编号为图1。请依据图1的视觉内容执行下方用户指令；指令中省略编号的图片指代均指图1。\n\n用户指定参考用途时，按指定用途使用图1。用户要求修改图片时，以图1为编辑基础，保留与修改要求无关的内容。\n\n用户指令：\n把图1 的区域1 调亮");
   });
 
   it("模型没有固定句模板时不追加固定句", () => {
-    expect(planSend(noPhrases, [image(1, 1), overlay(2, 1, 1, 1)], "改区域1", "").text).toBe("本次提供 2 张参考图，按顺序为图1、图2。\n改紫色区域");
+    expect(planSend(noPhrases, [image(1, 1), overlay(2, 1, 1, 1)], "改区域1", "").text).toBe("本次提供一张参考图，编号为图1。请依据图1的视觉内容执行下方用户指令；指令中省略编号的图片指代均指图1。\n\n用户指定参考用途时，按指定用途使用图1。用户要求修改图片时，以图1为编辑基础，保留与修改要求无关的内容。\n\n用户指令：\n改紫色区域");
   });
 
   it("越界的区域编号原样保留", () => {
@@ -205,7 +215,7 @@ describe("发送计划：引用问题", () => {
   it("引用序号 > 已接参考图数 = 红；有线未被引用 = 黄", () => {
     expect(problems("把@图3 的颜色用到@图1 上", images(2))).toEqual({
       issues: ["提示词引用了图3，但只接了 2 张参考图"],
-      warnings: ["图2 已接线但提示词未引用"],
+      warnings: ["图2 已连接，尚未说明它的用途。可在提示词中点击参考图插入引用，并描述如何使用它。"],
       unreferenced: [2],
     });
   });
@@ -240,7 +250,7 @@ describe("发送计划：引用问题", () => {
   });
 
   it("模型缺失时也能算：没有固定句参与", () => {
-    expect(referenceProblemsOf(undefined, [image(1, 1), image(2, 2)], "@图1")).toEqual({ issues: [], warnings: ["图2 已接线但提示词未引用"], unreferenced: [2] });
+    expect(referenceProblemsOf(undefined, [image(1, 1), image(2, 2)], "@图1")).toEqual({ issues: [], warnings: ["图2 已连接，尚未说明它的用途。可在提示词中点击参考图插入引用，并描述如何使用它。"], unreferenced: [2] });
     expect(referenceProblemsOf(qwenPro, [image(1, 1), image(2, 2)], "@图1")).toEqual(problems("@图1", images(2)));
   });
 });

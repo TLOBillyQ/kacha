@@ -317,7 +317,7 @@ describe("生成尺寸与宽高比", () => {
 describe("警告与未引用序号", () => {
   it("有线未被引用：黄色警告，给出未引用的用户序号", () => {
     const v = view(ready({}, ["r1", "r2"], "把@图1 调亮"));
-    expect(v.warnings).toEqual(["图2 已接线但提示词未引用"]);
+    expect(v.warnings).toEqual(["图2 已连接，尚未说明它的用途。可在提示词中点击参考图插入引用，并描述如何使用它。"]);
     expect(v.unreferenced).toEqual([2]);
     expect(v.reasons).toEqual([]);
   });
