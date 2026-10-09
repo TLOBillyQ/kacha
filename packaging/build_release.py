@@ -31,7 +31,6 @@ import platform as platform_module
 import shutil
 import subprocess
 import sys
-import zipfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -55,7 +54,6 @@ from release_meta import (  # noqa: E402
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CLIENT_DIR = REPO_ROOT / "client"
 PRODUCT_NAME = "Kacha"
-MAIN_BINARY = "kacha"
 # 显式指定 MSVC 目标：Windows 用 MSVC 工具链正式构建，避免误用 GNU 工具链。
 WINDOWS_TARGET = "x86_64-pc-windows-msvc"
 MACOS_TARGET = "aarch64-apple-darwin"
@@ -108,16 +106,6 @@ def ensure_no_foreign_zips(release_dir: Path, version: str) -> None:
             f"release/ 存在与版本 {version} 不一致的压缩包：{', '.join(stale)}。"
             "版本号唯一来源是 client/src-tauri/Cargo.toml；请清理旧产物或先 bump 版本。"
         )
-
-
-def make_windows_zip(exe_path: Path, out_zip: Path) -> None:
-    """把单个 exe 压成 zip，包内文件名固定为 kacha.exe（无顶层目录）。"""
-    if not exe_path.is_file():
-        raise SystemExit(f"构建产物缺失：{exe_path}")
-    if out_zip.exists():
-        out_zip.unlink()
-    with zipfile.ZipFile(out_zip, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
-        archive.write(exe_path, f"{MAIN_BINARY}.exe")
 
 
 def update_checksums(release_dir: Path, version: str) -> dict[str, str]:

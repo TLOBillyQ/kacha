@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import tempfile
 import unittest
-import zipfile
 from pathlib import Path
 
 from _support import make_release_dir
@@ -53,22 +52,6 @@ class ReleaseDirTest(unittest.TestCase):
             with self.assertRaises(SystemExit) as ctx:
                 build_release.ensure_no_foreign_zips(release_dir, "0.1.0")
             self.assertIn("kacha-0.1.0-win-x64.zip", str(ctx.exception))
-
-    def test_windows_zip_contains_single_exe(self) -> None:
-        with tempfile.TemporaryDirectory() as temp:
-            exe = Path(temp) / "built.exe"
-            exe.write_bytes(b"MZ fake exe")
-            out_zip = Path(temp) / "out.zip"
-            out_zip.write_bytes(b"old")
-            build_release.make_windows_zip(exe, out_zip)
-            with zipfile.ZipFile(out_zip) as archive:
-                self.assertEqual(archive.namelist(), ["kacha.exe"])
-                self.assertEqual(archive.read("kacha.exe"), b"MZ fake exe")
-
-    def test_windows_zip_requires_product(self) -> None:
-        with tempfile.TemporaryDirectory() as temp:
-            with self.assertRaises(SystemExit):
-                build_release.make_windows_zip(Path(temp) / "missing.exe", Path(temp) / "out.zip")
 
     def test_checksums_keep_other_platform_zip_and_drop_stale_entries(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
