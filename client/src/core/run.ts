@@ -334,6 +334,8 @@ export async function executeJob(
             if (sniffImage(bytes)?.ext !== "png" || decoded.hasAlpha() !== true) throw new GatewayError("invalid_response", "图层必须为带 alpha 的 PNG");
             if (!validLayerBox(bbox) || !baseSize || bbox.absolute[2] > baseSize.width || bbox.absolute[3] > baseSize.height) throw new GatewayError("invalid_response", "图层定位超出底图");
           }
+        } finally { decoded.close(); }
+      }
       if (job.input.model.request_shape === "seedream_flash_images_generations" && job.plan.transparentBackground) {
         if (sniffImage(bytes)?.ext !== "png" || !deps.imageCodec) throw new GatewayError("invalid_response", "透明背景结果必须为带透明通道的 PNG");
         let decoded;
