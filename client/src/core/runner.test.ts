@@ -3,6 +3,58 @@ import type { BoardNode } from "./board";
 import { parseOutcome } from "./taskDir";
 import { board, harness, settle } from "./testing/runnerHarness";
 
+describe("Flash 失败政策", () => {
+  it.each([401, 400, 500])("HTTP %i 不重发，保留失败", async (status) => {
+    const h = harness();
+    const b = board();
+    for (const node of b.nodes) if (node.type === "task") node.model = "doubao-seedream-5-0-flash-260915";
+    h.replies.push({ status, body: "{}" });
+    await h.runner.submit(h.target(), b, ["t1"]);
+    await settle();
+    expect(h.statuses().t1.kind).toBe("failed");
+    h.advance(300000);
+    await settle();
+    expect(h.requests).toHaveLength(1);
+  });
+  it.each([
+    { data: [] },
+    { data: [{ url: "https://result.test/a" }, { url: "https://result.test/b" }] },
+    { data: [{ b64_json: "not-valid!" }] },
+  ])("坏响应失败，不产出结果节点", async (body) => {
+    const h = harness();
+    const b = board();
+    for (const node of b.nodes) if (node.type === "task") node.model = "doubao-seedream-5-0-flash-260915";
+    h.replies.push({ status: 200, body: JSON.stringify(body) });
+    await h.runner.submit(h.target(), b, ["t1"]);
+    await settle();
+    expect(h.statuses().t1).toEqual({ kind: "failed", label: "响应无效" });
+    expect(h.changes.filter((c) => c.change.kind === "runResult")).toEqual([]);
+    expect(h.requests).toHaveLength(1);
+  });
+  it("URL 下载拒绝明确失败且不重发生成", async () => {
+    const h = harness();
+    const b = board();
+    for (const node of b.nodes) if (node.type === "task") node.model = "doubao-seedream-5-0-flash-260915";
+    h.replies.push({ status: 200, body: JSON.stringify({ data: [{ url: "https://result.test/a" }] }) }, { status: 403, body: "denied" });
+    await h.runner.submit(h.target(), b, ["t1"]);
+    await settle();
+    expect(h.statuses().t1).toEqual({ kind: "failed", label: "网关拒绝" });
+    expect(h.requests).toEqual(["http://gw/v1/images/generations", "https://result.test/a"]);
+    expect(h.changes.filter((c) => c.change.kind === "runResult")).toEqual([]);
+  });
+  it("429 明确失败，不自动退避重发或换模型", async () => {
+    const h = harness();
+    const b = board();
+    for (const node of b.nodes) if (node.type === "task") node.model = "doubao-seedream-5-0-flash-260915";
+    h.replies.push({ status: 429, body: "{}" });
+    await h.runner.submit(h.target(), b, ["t1"]);
+    await settle();
+    expect(h.statuses().t1).toEqual({ kind: "failed", label: "网关限流" });
+    expect(h.requests).toHaveLength(1);
+    expect(h.transitions()).not.toContain("t1:running→backoff");
+  });
+});
+
 describe("任务运行器：成功", () => {
   it("先后产出「提交记录」「运行结果」两条系统变更，状态清空", async () => {
     const h = harness();

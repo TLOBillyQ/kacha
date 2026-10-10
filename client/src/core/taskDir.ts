@@ -5,7 +5,7 @@ import type { FittedRecord } from "./fitImage";
 import type { LayerRecord, RegionRender } from "./board";
 
 export type { LayerRecord };
-import type { ReferenceImage } from "./gateway";
+import type { ReferenceImage, OutputOptions } from "./gateway";
 import { joinPath } from "./paths";
 import type { SendPlan } from "./sendPlan";
 import type { SizeSpec } from "./size";
@@ -67,6 +67,11 @@ export function sniffImage(bytes: Uint8Array): { ext: string; mediaType: string 
   if (starts([0xff, 0xd8, 0xff])) return { ext: "jpg", mediaType: "image/jpeg" };
   if (ascii("RIFF") && ascii("WEBP", 8)) return { ext: "webp", mediaType: "image/webp" };
   if (ascii("GIF87a") || ascii("GIF89a")) return { ext: "gif", mediaType: "image/gif" };
+  if (ascii("ftyp", 4)) {
+    const brands = [8, ...Array.from({ length: Math.max(0, Math.floor((Math.min(bytes.length, 64) - 16) / 4)) }, (_, i) => 16 + i * 4)];
+    if (brands.some((offset) => ["heic", "heix", "hevc", "hevx"].some((brand) => ascii(brand, offset)))) return { ext: "heic", mediaType: "image/heic" };
+    if (brands.some((offset) => ["mif1", "msf1"].some((brand) => ascii(brand, offset)))) return { ext: "heif", mediaType: "image/heif" };
+  }
   if (ascii("BM")) return { ext: "bmp", mediaType: "image/bmp" };
   if (starts([0x49, 0x49, 0x2a, 0x00]) || starts([0x4d, 0x4d, 0x00, 0x2a])) return { ext: "tiff", mediaType: "image/tiff" };
   return null;
@@ -107,6 +112,7 @@ export interface SubmissionPlan {
   size: { width: number; height: number };
   layerDecomposition: boolean;
   transparentBackground: boolean;
+  outputOptions?: OutputOptions;
   capabilityFormatVersion: number;
   capabilityTableSha256: string;
   /** 按参考图序号排列；叠加图紧随其原图。bytes 是发给模型的快照；fitted = 按模型规则处理过。 */
@@ -145,6 +151,7 @@ export interface TaskRecord {
   size: { width: number; height: number };
   layer_decomposition: boolean;
   transparent_background: boolean;
+  output_options?: OutputOptions;
   /** 按发送序号排列。 */
   references: TaskRecordReference[];
 }
@@ -176,6 +183,7 @@ export async function writeSubmission(fs: Pick<TaskFs, "writeNewFile">, outputRo
     size_spec: plan.sizeSpec,
     size: plan.size,
     layer_decomposition: plan.layerDecomposition,
+    ...(plan.outputOptions ? { output_options: plan.outputOptions } : {}),
     transparent_background: plan.transparentBackground,
     references,
   };

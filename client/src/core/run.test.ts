@@ -51,6 +51,44 @@ const regen = async (d: RunDeps, args: Parameters<typeof prepareRegenerate>[1]) 
 
 const ok = () => ({ status: 200, body: JSON.stringify({ metadata: { output: { choices: [{ message: { content: [{ image: PNG_B64 }] } }] } } }) });
 
+describe("Flash 普通任务", () => {
+  it("实际输入边界逐项校验，合法 15px 边长和比例边界可提交", async () => {
+    const { d } = deps(ok);
+    const b = board(true);
+    (b.nodes.find((n) => n.type === "task") as TaskNode).model = "doubao-seedream-5-0-flash-260915";
+    const args = { board: b, table: BUILTIN_TABLE, tableSha256: "x", outputRoot: "/root", taskNodeId: "t" };
+    for (const [width, height, allowed] of [[15, 15, true], [15, 240, true], [240, 15, true], [14, 100, false], [241, 15, false], [15, 241, false]] as const) {
+      d.imageCodec = { decode: async () => ({ width, height, hasAlpha: () => false, encode: async () => { throw new Error("不应处理"); }, close: () => undefined }) };
+      if (allowed) expect((await prepareJob(d, args)).job.plan.references).toHaveLength(1);
+      else await expect(prepareJob(d, args)).rejects.toThrow(/参考图/);
+    }
+  });
+  it("实际 Flash 快照不合规或处理失败时拒绝提交，不发送原字节", async () => {
+    const { d, requests } = deps(ok);
+    const b = board(true);
+    (b.nodes.find((n) => n.type === "task") as TaskNode).model = "doubao-seedream-5-0-flash-260915";
+    const args = { board: b, table: BUILTIN_TABLE, tableSha256: "x", outputRoot: "/root", taskNodeId: "t" };
+    d.imageCodec = { decode: async () => ({ width: 14, height: 100, hasAlpha: () => false, encode: async () => PNG, close: () => undefined }) };
+    await expect(prepareJob(d, args)).rejects.toThrow(/参考图/);
+    d.imageCodec = { decode: async () => ({ width: 10000, height: 10000, hasAlpha: () => false, encode: async () => { throw new Error("编码失败"); }, close: () => undefined }) };
+    await expect(prepareJob(d, args)).rejects.toThrow(/参考图/);
+    expect(requests).toEqual([]);
+  });
+  it("输出选项写入任务目录，重新生成沿用历史选项", async () => {
+    const { d, files } = deps(ok);
+    const b = board(false);
+    const task = b.nodes.find((n) => n.type === "task") as TaskNode;
+    task.model = "doubao-seedream-5-0-flash-260915";
+    task.output_options = { output_format: "jpeg", response_format: "b64_json", watermark: true };
+    const prepared = await prepare(d, { board: b, table: BUILTIN_TABLE, tableSha256: "x", outputRoot: "/root", taskNodeId: "t" });
+    const written = await writeJob(d, "/root", prepared.job);
+    expect(JSON.parse(new TextDecoder().decode(files.get(`/root/${written.relDir}/task.json`))).output_options).toEqual(task.output_options);
+    task.output_options = { output_format: "png", response_format: "url", watermark: false };
+    const again = await regen(d, { board: prepared.board, table: BUILTIN_TABLE, tableSha256: "x", outputRoot: "/root", taskNodeId: "t" });
+    expect(again.job.input.outputOptions).toEqual({ output_format: "jpeg", response_format: "b64_json", watermark: true });
+  });
+});
+
 describe("单任务端到端", () => {
   it("图片编辑：提交只改 last_submitted；派发时写任务目录，调网关，存结果并加结果节点", async () => {
     const { d, files, requests } = deps(ok);

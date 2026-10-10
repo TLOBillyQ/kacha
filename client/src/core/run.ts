@@ -4,7 +4,7 @@ import type { Board, ResultRecord, TaskNode } from "./board";
 import { findModel, type CapabilityTable, type InputImageRule, type ModelCapability } from "./capabilities";
 import { fitImage, type FittedBytes, type ImageCodec } from "./fitImage";
 import { ERROR_CATEGORY_LABELS, fetchResultImage, GatewayError, generate, type FetchLike, type GenerationInput } from "./gateway";
-import { imagePortSlots, imageSources, workflowOf } from "./graph";
+import { imagePortSlots, imageSources, imageRuleViolations, workflowOf } from "./graph";
 import type { RunResult } from "./layout";
 import { firstRegionOf, slotsFromReferences } from "./region";
 import { planSend } from "./sendPlan";
@@ -61,8 +61,25 @@ export function failureLabel(error: unknown): string {
 }
 
 /** 发给模型的那份按规则处理；画板上的原文件不动。 */
-function fitForModel(deps: RunDeps, bytes: Uint8Array, rule: InputImageRule): Promise<FittedBytes> {
-  return deps.imageCodec ? fitImage(bytes, rule, deps.imageCodec) : Promise.resolve({ bytes });
+async function fitForModel(deps: RunDeps, bytes: Uint8Array, model: ModelCapability): Promise<FittedBytes> {
+  const rule = model.input_image_rule;
+  const fitted = deps.imageCodec ? await fitImage(bytes, rule, deps.imageCodec) : { bytes };
+  if (model.request_shape === "seedream_flash_images_generations") await validateFlashReference(deps, fitted.bytes, rule);
+  return fitted;
+}
+
+async function validateFlashReference(deps: RunDeps, bytes: Uint8Array, rule: InputImageRule): Promise<void> {
+  if (!deps.imageCodec) throw new LocalError("Flash 参考图需要实际图片解码校验");
+  const kind = sniffImage(bytes);
+  if (!kind) throw new LocalError("Flash 参考图格式无法识别");
+  let decoded;
+  try { decoded = await deps.imageCodec.decode(bytes); }
+  catch { throw new LocalError("Flash 参考图无法解码"); }
+  try {
+    if (!Number.isInteger(decoded.width) || !Number.isInteger(decoded.height) || decoded.width <= 0 || decoded.height <= 0) throw new LocalError("Flash 参考图尺寸无效");
+    const violations = imageRuleViolations({ format: kind.ext === "jpg" ? "jpeg" : kind.ext, bytes: bytes.length, width: decoded.width, height: decoded.height }, rule);
+    if (violations.length) throw new LocalError(`Flash 参考图不合规：${violations.join("；")}`);
+  } finally { decoded.close(); }
 }
 
 function readError(label: string, e: unknown): LocalError {
@@ -93,6 +110,7 @@ export async function prepareJob(
 
   const sources = imageSources(board, taskNodeId, outputRoot);
   const slots = imagePortSlots(board, table, taskNodeId);
+  if (model.request_shape === "seedream_flash_images_generations" && slots.length > 10) throw new LocalError("Flash 参考图最多 10 张");
   // 先按用户连线读全部源图，再按展开槽组装：叠加槽由其原图合成。
   // 读到即按该任务模型的输入规则处理成参考图快照；叠加图从处理后的快照合成，两者尺寸一致。
   const sourceBytes: FittedBytes[] = [];
@@ -103,7 +121,7 @@ export async function prepareJob(
     } catch (e) {
       throw readError(`图${i + 1}（${src.label}）`, e);
     }
-    sourceBytes.push(await fitForModel(deps, bytes, model.input_image_rule));
+    sourceBytes.push(await fitForModel(deps, bytes, model));
   }
   const references: SubmissionPlan["references"] = [];
   const firstRegion = firstRegionOf(slots);
@@ -122,7 +140,7 @@ export async function prepareJob(
       const sourcePort = slot.sourcePort!;
       const region = slot.edge.region!;
       const composed = await deps.composeOverlay(sourceBytes[sourcePort - 1].bytes, region.rects, firstRegion.get(slot.port)!);
-      const overlay = await fitForModel(deps, composed, model.input_image_rule);
+      const overlay = await fitForModel(deps, composed, model);
       references.push({ ...overlay, source: { kind: "overlay", of: sourcePort }, region: { rects: region.rects, render: "highlight_overlay", source_port: sourcePort } });
     }
   }
@@ -138,6 +156,7 @@ export async function prepareJob(
     sizeSpec: snapshot.size_spec,
     size,
     layerDecomposition: snapshot.layer_decomposition,
+    ...(snapshot.output_options ? { outputOptions: snapshot.output_options } : {}),
     transparentBackground: snapshot.transparent_background,
     capabilityFormatVersion: table.format_version,
     capabilityTableSha256: args.tableSha256,
@@ -147,16 +166,18 @@ export async function prepareJob(
 }
 
 function jobOf(taskNodeId: string, plan: SubmissionPlan, model: ModelCapability): PreparedJob {
+  if (model.request_shape === "seedream_flash_images_generations" && (plan.layerDecomposition || plan.transparentBackground)) throw new LocalError("Flash 透明背景与图层拆分通路尚未实现");
   return {
     taskNodeId,
     taskId: plan.taskId,
     plan,
-    input: { model, text: plan.send.text, nativeNegativePrompt: plan.send.nativeNegativePrompt, size: plan.size, references: [], transparentBackground: plan.transparentBackground },
+    input: { model, text: plan.send.text, nativeNegativePrompt: plan.send.nativeNegativePrompt, size: plan.size, references: [], outputOptions: plan.outputOptions, transparentBackground: plan.transparentBackground },
     record: {
       model: plan.model,
       prompt: plan.prompt,
       negative_prompt: plan.negativePrompt,
       size_spec: plan.sizeSpec,
+      ...(plan.outputOptions ? { output_options: plan.outputOptions } : {}),
       submitted_at: plan.submittedAt.toISOString(),
     },
   };
@@ -184,6 +205,10 @@ export async function prepareRegenerate(
   if (!model) throw new LocalError(`模型 ${previous.model} 已不在能力表内`);
   // 快照已按规则处理过，原样重发，不再处理；本次没处理，新任务记录不带 fitted。
   const references: SubmissionPlan["references"] = previous.references.map((ref, i) => ({ bytes: snapshots[i], source: ref.source, ...(ref.region ? { region: ref.region } : {}) }));
+  if (model.request_shape === "seedream_flash_images_generations") {
+    if (references.length > 10) throw new LocalError("Flash 参考图最多 10 张");
+    for (const ref of references) await validateFlashReference(deps, ref.bytes, model.input_image_rule);
+  }
   // 按当前规则重算发送计划，不重放 task.json 里的 send_text：旧任务可能按「叠加图占用户序号」的旧口径存（#113），
   // 固定句也要按当前能力表模板重建。
   const send = planSend(model, slotsFromReferences(previous.references), previous.prompt, previous.negative_prompt);
@@ -207,6 +232,7 @@ export async function prepareRegenerate(
     send,
     ...sized,
     layerDecomposition: previous.layer_decomposition,
+    ...(previous.output_options ? { outputOptions: previous.output_options } : {}),
     transparentBackground: previous.transparent_background,
     capabilityFormatVersion: args.table.format_version,
     capabilityTableSha256: args.tableSha256,

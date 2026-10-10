@@ -3,7 +3,7 @@
 // 换模型绝不自动删线或改设置，只报告原因。
 import type { Board, TaskNode } from "./board";
 import { findModel, isSupported, type CapabilityTable, type ModelCapability } from "./capabilities";
-import { isRequestShapeImplemented } from "./gateway";
+import { flashFeatureImplemented, isRequestShapeImplemented } from "./gateway";
 import { imageEdges, imagePortSlots, imageSources, promptText, workflowOf } from "./graph";
 import { MAX_REGIONS } from "./overlay";
 import { effectiveRegionRender, expandImageEdges } from "./region";
@@ -89,7 +89,7 @@ export function taskView(board: Board, table: CapabilityTable, taskId: string, f
   const model = findModel(table, task.model);
   const refs = imageRefProblems(board, table, taskId);
   const transparent = transparentBlock(board, model, taskId, facts);
-  const layer = model && !isSupported(model.workflows[workflowOf(board, taskId)].layer_decomposition) ? "模型不支持拆分图层" : null;
+  const layer = model && !flashFeatureImplemented(model, "layers") ? "Flash 图层拆分通路尚未实现" : model && !isSupported(model.workflows[workflowOf(board, taskId)].layer_decomposition) ? "模型不支持拆分图层" : null;
   const reasons = [
     ...promptReasons(board, taskId),
     ...(model ? [...availabilityReasons(table, facts.discovery, model), ...modelReasons(board, model, task)] : [reason("modelUnknown", `模型 ${task.model} 不在能力表内`)]),
@@ -130,6 +130,7 @@ function modelLabel(table: CapabilityTable, discovery: Discovery, modelId: strin
  */
 function transparentBlock(board: Board, model: ModelCapability | undefined, taskId: string, facts: TaskFacts): { kind: ReasonKind; text: string; hint: string } | null {
   if (!model) return null;
+  if (!flashFeatureImplemented(model, "transparent")) return { kind: "transparentUnsupported", text: "Flash 透明背景通路尚未实现", hint: "通路尚未实现" };
   if (!isSupported(model.transparent_background)) return { kind: "transparentUnsupported", text: "模型不支持透明背景", hint: "模型不支持透明背景" };
   const edges = imageEdges(board, taskId);
   if (edges.length !== 1) return { kind: "transparentNeedsOneImage", text: "透明背景需要恰好一条图片线", hint: "需要恰好一条图片线" };

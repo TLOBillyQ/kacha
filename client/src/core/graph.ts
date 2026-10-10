@@ -9,6 +9,7 @@ import {
   type InputImageRule,
   type WorkflowName,
 } from "./capabilities";
+import { flashFeatureImplemented } from "./gateway";
 import { resolveFromRoot } from "./paths";
 import { effectiveRegionRender, expandImageEdges, type PortSlot } from "./region";
 import { layerFileName } from "./taskDir";
@@ -236,8 +237,8 @@ export function taskPorts(board: Board, table: CapabilityTable, taskId: string):
     // 空位露出同样按展开后名额：区域叠加图占满后不再给新空位。
     imageSlots: expanded < maxReferences ? count + 1 : count,
     maxReferences,
-    layerDecomposition: isSupported(wf.layer_decomposition) || task.layer_decomposition,
-    transparentBackground: isSupported(model.transparent_background) || task.transparent_background,
+    layerDecomposition: (isSupported(wf.layer_decomposition) && flashFeatureImplemented(model, "layers")) || task.layer_decomposition,
+    transparentBackground: (isSupported(model.transparent_background) && flashFeatureImplemented(model, "transparent")) || task.transparent_background,
   };
 }
 

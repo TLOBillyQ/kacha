@@ -117,7 +117,7 @@ describe("模型发现", () => {
   });
 
   it("从未发现过时列出上架清单", () => {
-    expect(availableModels(BUILTIN_TABLE, { source: "none" }).map((m) => m.model_id)).toEqual(["qwen-image-3.0-pro", "doubao-seedream-5-0-pro-260628", "qwen-image-3.0", "doubao-seedream-5-0-lite-260128"]);
+    expect(availableModels(BUILTIN_TABLE, { source: "none" }).map((m) => m.model_id)).toEqual(["qwen-image-3.0-pro", "doubao-seedream-5-0-pro-260628", "qwen-image-3.0", "doubao-seedream-5-0-lite-260128", "doubao-seedream-5-0-flash-260915"]);
   });
 
   it("已发现但网关没有该模型时，任务标红原因", () => {

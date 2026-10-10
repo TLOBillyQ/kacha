@@ -56,7 +56,7 @@ export function board(title: string, nodes: unknown[], edges: unknown[]) {
   return JSON.stringify({ format_version: 1, title, viewport: { zoom: 1, x: 0, y: 0 }, nodes, edges }, null, 2);
 }
 
-export const MODELS = ["qwen-image-3.0-pro", "qwen-image-3.0", "doubao-seedream-5-0-pro-260628", "doubao-seedream-5-0-lite-260128"];
+export const MODELS = ["qwen-image-3.0-pro", "qwen-image-3.0", "doubao-seedream-5-0-pro-260628", "doubao-seedream-5-0-lite-260128", "doubao-seedream-5-0-flash-260915"];
 export const GW = "http://localhost:1421/gw";
 
 /** 打开单个画板的场景：画板文件 + ui_state + 网关设置 + 模型缓存 + API 密钥。 */

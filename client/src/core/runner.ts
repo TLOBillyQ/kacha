@@ -259,7 +259,7 @@ export function createRunner(ports: RunnerPorts): Runner {
       setFinished(job, null);
     } catch (e) {
       if (aborted() || e instanceof CancelledError) return;
-      if (e instanceof GatewayError && e.category === "rate_limited") rateLimited(job, e);
+      if (e instanceof GatewayError && e.category === "rate_limited" && job.prepared?.input.model.request_shape !== "seedream_flash_images_generations") rateLimited(job, e);
       else fail(job, e);
     } finally {
       if (!aborted()) pump();

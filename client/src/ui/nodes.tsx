@@ -685,6 +685,12 @@ export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskF
               ⓘ
             </HoverButton>
           </div>
+          {model?.request_shape === "seedream_flash_images_generations" && (
+            <div className="field nodrag">
+              <label>输出格式 <select aria-label="输出格式" value={node.output_options?.output_format ?? "png"} disabled={locked} onChange={(e) => apply({ kind: "setOutputOptions", taskId: node.id, options: { output_format: e.target.value as "png" | "jpeg", response_format: node.output_options?.response_format ?? "url", watermark: node.output_options?.watermark ?? false } })}><option value="png">PNG</option><option value="jpeg">JPEG</option></select></label>
+              <label><input type="checkbox" checked={node.output_options?.watermark ?? false} disabled={locked} onChange={(e) => apply({ kind: "setOutputOptions", taskId: node.id, options: { output_format: node.output_options?.output_format ?? "png", response_format: node.output_options?.response_format ?? "url", watermark: e.target.checked } })} />水印</label>
+            </div>
+          )}
           {infoOpen && <ModelInfo modelId={node.model} onClose={() => setInfoOpen(false)} />}
 
           {(ports.layerDecomposition || ports.transparentBackground) && (

@@ -1,6 +1,8 @@
 // 画板编辑：画板变更的唯一负责方（ADR 0014）。编辑(画板, 画板变更, 环境) → 新画板 + 撤销步 + 提示 + 建议选中。
 // 同步、纯：弹确认框、选文件、读图片宽高与 sha 等副作用由界面先做完，把事实放进变更；时钟不进来，撤销步由 sessions 落账。
 // 规则都在这里：变更属于哪一类、撤销步描述与归并键（由变更种类决定）、后置管线（图片端口同步 → 自动宽高比）、运行期锁定。
+import type { OutputOptions } from "./gateway";
+import { outputOptions } from "./gateway";
 import { syncAutoRatios } from "./autoRatio";
 import type { Board, BoardEdge, PortRef, PromptNode, Region, TaskNode } from "./board";
 import { findModel, type CapabilityTable } from "./capabilities";
@@ -78,6 +80,7 @@ export type BoardChange =
   | { kind: "setTier"; taskId: string; tier: string }
   /** ratio = null 为自动（跟随参考图，同一次变更里算好），否则为手动的具体值。 */
   | { kind: "setRatio"; taskId: string; ratio: string | null }
+  | { kind: "setOutputOptions"; taskId: string; options: OutputOptions }
   | { kind: "setTaskFlag"; taskId: string; flag: "layer_decomposition" | "transparent_background"; value: boolean }
   /** 切换任务节点的模型，并记为画板最近选择。 */
   | { kind: "setModel"; taskId: string; model: string }
@@ -272,6 +275,8 @@ function draft(board: Board, change: BoardChange, env: EditEnv): Draft {
         }),
         step: { label: "修改尺寸" },
       };
+    case "setOutputOptions":
+      return { board: mapTask(board, change.taskId, (t) => ({ ...t, output_options: outputOptions(change.options) })), step: { label: "修改输出选项" } };
     case "setTaskFlag":
       return {
         board: mapTask(board, change.taskId, (t) => (t[change.flag] === change.value ? t : { ...t, [change.flag]: change.value })),

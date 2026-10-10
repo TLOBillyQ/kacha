@@ -218,7 +218,9 @@ export function parseCapabilityTable(raw: unknown): ParseResult {
 function loadBuiltin(): CapabilityTable {
   const result = parseCapabilityTable(builtinJson);
   if (!result.ok) throw new Error(`内置能力表无效：${result.errors.join("；")}`);
-  return result.table;
+  // 本票仅新增可手动选择的 Flash，保持既有上架顺序与默认模型（默认切换由停用票处理）。
+  const models = result.table.models;
+  return { ...result.table, models: [...models.slice(1), models[0]] };
 }
 
 export const BUILTIN_TABLE: CapabilityTable = loadBuiltin();

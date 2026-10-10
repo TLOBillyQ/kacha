@@ -4,6 +4,17 @@ import { autoRatioLabel, autoSizeSpec, commitRatioInput, inferRatio, isAutoRatio
 
 const rule = BUILTIN_TABLE.models[0].workflows.text_to_image.size_rule;
 
+describe("Flash 生成尺寸边界", () => {
+  const flash = BUILTIN_TABLE.models.find((m) => m.model_id === "doubao-seedream-5-0-flash-260915")!.workflows.text_to_image.size_rule;
+  it("默认 2K，官方常用尺寸与合法精确尺寸", () => {
+    expect(sizeTiersOf(flash)).toEqual(["2K", "1K", "1.5K"]);
+    expect(resolveSize(flash, { tier: "2K", ratio: "16:9", width: null, height: null })).toEqual({ width: 2816, height: 1584 });
+    for (const [width, height] of [[960, 960], [2330, 1984], [3840, 240], [240, 3840]]) expect(resolveSize(flash, { tier: null, ratio: null, width, height })).toEqual({ width, height });
+    for (const [width, height] of [[959, 960], [2331, 1984], [3841, 240], [0, 1024], [1024.5, 1024]]) expect(resolveSize(flash, { tier: null, ratio: null, width, height })).toBeNull();
+    expect(resolveSize(flash, { tier: "3K", ratio: "1:1", width: null, height: null })).toBeNull();
+  });
+});
+
 describe("分辨率档 × 宽高比 → 像素", () => {
   it("分辨率档按表声明顺序，宽高比随分辨率档变化", () => {
     expect(sizeTiersOf(rule)).toEqual(["1K", "2K"]);

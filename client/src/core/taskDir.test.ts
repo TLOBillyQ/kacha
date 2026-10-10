@@ -10,6 +10,17 @@ const WEBP = new TextEncoder().encode("RIFF\0\0\0\0WEBPVP8 ");
 
 const now = new Date("2026-09-16T09:15:00.123Z");
 
+describe("HEIC/HEIF 参考图签名", () => {
+  it("识别 ftyp 主品牌及兼容品牌，AVIF/任意字符串不能冒充", () => {
+    const encode = (s: string) => new TextEncoder().encode(s);
+    expect(sniffImage(encode("\0\0\0\u0018ftypheic\0\0\0\0mif1heic"))).toEqual({ ext: "heic", mediaType: "image/heic" });
+    expect(sniffImage(encode("\0\0\0\u0018ftypmif1\0\0\0\0mif1heix"))).toEqual({ ext: "heic", mediaType: "image/heic" });
+    expect(sniffImage(encode("\0\0\0\u0014ftypmif1\0\0\0\0mif1"))).toEqual({ ext: "heif", mediaType: "image/heif" });
+    expect(sniffImage(encode("\0\0\0\u0014ftypavif\0\0\0\0avif"))).toBeNull();
+    expect(sniffImage(encode("random heic"))).toBeNull();
+  });
+});
+
 describe("任务编号与目录", () => {
   it("task_id = UTC 时间戳 + 8 位十六进制；目录 = <UTC 日期>/<task_id>", () => {
     const id = newTaskId(now, () => 0x3f9c2a1b);

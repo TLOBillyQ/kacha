@@ -1,0 +1,53 @@
+# Seedream 5.0 Flash 接入与能力依据
+
+2026-10-09：沿用 Lite / Pro 的团队网关接入。完整模型 ID 为 `doubao-seedream-5-0-flash-260915`，独立加入经济档；模型发现与上架清单仍按完整 ID 求交集。
+
+## 官方参数
+
+本次直接重新读取火山引擎文档中心公开接口：
+
+`GET https://www.volcengine.com/api/doc/getDocDetail?LibraryCode=ark&DocumentCode=image-generation-api`
+
+对应[图片生成 API](https://docs.volcengine.com/docs/ark/image-generation-api)，`Result.MDContent` 原始 UTF-8 的 SHA-256：
+
+`e350ac947953b00d7bc42f8e29ca3242687f848b6ff2838a81011827d2ad4b0b`
+
+- 普通生成支持文生图与图片编辑，最多 10 张参考图；单次普通生成产生一张图片。
+- 生成尺寸为 1K / 1.5K / 2K，或精确 `WxH`；像素范围 921,600–4,624,220，宽高比 1/16–16。24 项预设像素逐项采用 Flash 官方表，不能复制 Lite 的 2K / 3K / 4K。
+- 输入格式 jpeg/png/webp/bmp/tiff/gif/heic/heif，单图不超过 30MB，像素 196–36,000,000，宽高两边均大于 14。Flash 的本地字节上限按保守的十进制 30,000,000 配置。
+- 发送 `response_format:"url"`、`output_format:"png"`、`watermark:false`。不发送 Flash 不支持的 `sequential_image_generation`，也不增加未公开的 `n`、`negative_prompt` 或原生 mask 字段。负向提示词继续由发送计划拼入发送文本。
+- `background:"transparent"` 只用于单张带 alpha 的参考图，输出必须 PNG。
+- 官方支持图上标记、坐标编辑和图层拆分；2026-10-10 的最终 Resolution 取代原研究「网关未测即 untested」准入。官方明确支持事实记为 supported，客户端尚未实现的专用通路保持实现门控，由后续票完成；不将网关未测冒称实测。
+
+## 当前团队网关实测
+
+夹具：[2026-10-09-team-gateway-flash](../../contracts/fixtures/2026-10-09-team-gateway-flash/manifest.json)。
+
+使用 Kacha 已保存的系统凭据，经 `http://lzxsvn:3001` 发出三次合成图生成，不自动重发。鉴权不落盘，正式夹具不含提示词、输入图片字节、有效结果 URL 或密钥。响应头 `X-New-Api-Version` 为 `v0.0.0`，不据此推断具体部署版本。
+
+| 实测 | 请求与响应 | 图片核对 |
+| --- | --- | --- |
+| 文生图 | `POST /v1/images/generations`，1024x1024，HTTP 200，`input_images=0`、`generated_images=1`，`data[].url` | 下载为 1024x1024 RGB PNG |
+| 高亮叠加编辑 | 顶层有序 `image` data-URL 数组，共 2 张，2400x800；HTTP 200，`input_images=2`、`generated_images=1` | 5 个蓝色方块中仅第 4 个变黄；其他方块仍蓝色，无紫色高亮残留 |
+| 透明背景 | 单张 RGBA 参考图、`background:"transparent"`，1536x1536；HTTP 200，`input_images=1`、`generated_images=1` | 下载为 RGBA PNG，alpha 范围 0–255，透明通道真实存在 |
+
+以上支持启用 Seedream 请求形态、普通参考图编辑、英文参考图措辞、高亮叠加区域指示和透明背景。文件格式、单图输入限额及参考图上限的数值依据官方文档；本轮没有逐一发起边界探测，自动化测试验证客户端在提交前执行这些约束，不将其写成网关边界实测。
+
+没有核实后台实际供应商/接入点映射、Lite 的渠道退役安排、限流阈值或生成质量。这些不影响本次按用户指示沿用现有团队网关的 Flash 接入。
+
+## 2026-10-10 客户端 #15 与分层证据
+
+研究和四份原始脱敏 JSON 从固定提交 `c3646077d5d9a252c541ae8434308f947030127e` 取回，仅本研究追加现行政策；原始夹具保持不变。以上视觉观察来自 2026-10-09 原采集者，本轮未独立视觉核验、未调用付费网关。
+
+| 能力 | 官方依据 | 当前网关实测 | 客户端 #15 |
+| --- | --- | --- | --- |
+| 普通 0/1/多参考图，最多 10 张 | 图片生成 API | 0 图、2 图夹具；10 图未测 | 有序 image、实际快照校验、0/1/多图及上限自动化 |
+| 1K/1.5K/2K 与精确尺寸 | 图片生成 API；921600–4624220，1/16–16 | 1024²、2400×800、1536² | 默认 2K、24 个常用映射、精确尺寸上下界与越界拒绝 |
+| 普通输入格式/30MB/像素/边长/比例 | 图片生成 API | 只测 PNG/RGBA | 保守 30000000 字节；实际发送快照重新解码校验，失败明确报错。WebView 不可解码的 TIFF/HEIF 等明确失败，不盲发 |
+| url/b64_json、png/jpeg、水印 | 图片生成 API | url/png/false | 默认保持 url/png/false；选项保存到任务记录、重新生成沿用；URL 立即落盘，base64 合成回放 |
+| standard 提示优化 | 图片生成 API | 本夹具省略字段 | 固定 standard；fast 禁止 |
+| 区域指示 | 编辑指南明确 Flash 支持 | 高亮叠加夹具 | 复用现有高亮；坐标与其它扩展由后续票完成 |
+| 透明背景 | 图片生成 API | transparent 真实夹具 | 支持事实已记录，#18 专用通路完成前门控 |
+| 图层拆分 | 图片生成 API 与共享能力页明确 Flash 支持 | 未测 | 支持事实已记录，#19 专用通路完成前门控 |
+
+准入只对本次 Flash 放宽：官方明确支持、客户端实现、自动化验证三者齐备即可开放；网关未测单独记录。官方未知协议仍未知，其他模型保留原规则。普通失败包括 429 不自动重试或换模型。测试的替代字节、浏览器 PNG/JPEG 与合成响应仅证明客户端行为；真实脱敏响应回放不证明新生成质量或编辑视觉语义。

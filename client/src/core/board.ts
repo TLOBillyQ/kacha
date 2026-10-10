@@ -1,5 +1,6 @@
 // 画板文件：输出根目录/画板/<标题>.ugcboard.json。
 // 任务目录是真源、画板只是视图；本模块只负责文件格式的读写、版本与未知字段保留、文件名派生。
+import { outputOptions, type OutputOptions } from "./gateway";
 import type { AutoRatio, SizeSpec } from "./size";
 
 export const BOARD_FORMAT_VERSION = 1;
@@ -44,6 +45,8 @@ export interface TaskNode extends NodeBase {
   image_ports: number;
   layer_decomposition: boolean;
   transparent_background: boolean;
+  /** 缺省沿用 url/png/false；仅适用于 Flash。 */
+  output_options?: OutputOptions;
   /** 脏判据快照；未提交过为 null。本切片只读写不解释。 */
   last_submitted: Json | null;
 }
@@ -168,7 +171,7 @@ function autoRatio(raw: unknown): AutoRatio | null {
 const NODE_KEYS = {
   prompt: ["id", "type", "pos", "size", "text"],
   reference: ["id", "type", "pos", "size", "path", "sha256", "display_name"],
-  task: ["id", "type", "pos", "size", "model", "size_spec", "image_ports", "layer_decomposition", "transparent_background", "last_submitted"],
+  task: ["id", "type", "pos", "size", "model", "size_spec", "image_ports", "layer_decomposition", "transparent_background", "output_options", "last_submitted"],
   result: ["id", "type", "pos", "size", "task_id", "file", "path", "layer_count", "record"],
 } as const;
 
@@ -192,6 +195,7 @@ function parseNode(raw: unknown): BoardNode {
         image_ports: num(o, "image_ports"),
         layer_decomposition: bool(o, "layer_decomposition"),
         transparent_background: bool(o, "transparent_background"),
+        ...(o.output_options === undefined ? {} : { output_options: outputOptions(o.output_options as OutputOptions) }),
         last_submitted: nullableObj(o, "last_submitted"),
       };
     default: {
@@ -263,7 +267,7 @@ export function parseBoard(text: string): ParsedBoard {
     if (o.last_model !== undefined && o.last_model !== null) board.last_model = str(o, "last_model");
     return { kind: "ok", board };
   } catch (error) {
-    if (error instanceof Corrupt) return { kind: "corrupt", reason: error.message };
+    if (error instanceof Corrupt || (error instanceof Error && error.message === "输出选项无效")) return { kind: "corrupt", reason: error.message };
     throw error;
   }
 }

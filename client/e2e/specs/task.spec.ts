@@ -42,6 +42,30 @@ async function expand(page: Page, nodeId: string) {
 const toolbarRun = (page: Page) => page.getByRole("toolbar", { name: "画板工具栏" }).getByRole("button", { name: /运行/ });
 const REF = "导入参考图/cat.png";
 
+test("Issue #15 用户手动选择 Flash，设置 JPEG/水印并运行普通任务", async ({ page }) => {
+  const text = board("Flash", [promptNode("p1", "一只猫"), taskNode("t1")], [edge("p1", "t1", "positive")]);
+  const flash = "doubao-seedream-5-0-flash-260915";
+  const errors = await openApp(page, boardScenario("Flash", text, { modelsCache: JSON.stringify({ base_url: GW, model_ids: ["qwen-image-3.0-pro", flash], fetched_at: new Date().toISOString() }) }));
+  const bodies: Record<string, any>[] = [];
+  await page.route(`${GW}/v1/images/generations`, (route) => {
+    bodies.push(JSON.parse(route.request().postData()!));
+    return route.fulfill({ json: { data: [{ b64_json: RESULT_PNG }] } });
+  });
+  await expand(page, "t1");
+  await task(page, "t1").getByRole("combobox", { name: "模型", exact: true }).selectOption(flash);
+  await task(page, "t1").getByRole("combobox", { name: "分辨率档" }).selectOption("2K");
+  await task(page, "t1").getByRole("combobox", { name: "输出格式" }).selectOption("jpeg");
+  await task(page, "t1").getByRole("checkbox", { name: "水印" }).check();
+  await task(page, "t1").locator(".task-actions button.primary").click();
+  await expect.poll(() => bodies.length).toBe(1);
+  expect(bodies[0]).toMatchObject({ model: flash, size: "2048x2048", output_format: "jpeg", watermark: true, response_format: "url", optimize_prompt_options: { mode: "standard" } });
+  expect(Object.keys(bodies[0]).sort()).toEqual(["model", "optimize_prompt_options", "output_format", "prompt", "response_format", "size", "watermark"]);
+  await expect(page.locator(".react-flow__node-result")).toHaveCount(1);
+  const record = JSON.parse((await e2eText(page, (await taskRecords(page))[0]))!);
+  expect(record.output_options).toEqual({ output_format: "jpeg", response_format: "url", watermark: true });
+  expect(errors).toEqual([]);
+});
+
 test.describe("Issue #1 单图默认引用与多图点击插入引导", () => {
   const openSingleImage = async (page: Page, prompt: string, files: Record<string, { b64: string }> = { [`${OUTPUT_ROOT}/${REF}`]: { b64: png(1024, 1024) } }, edges: unknown[] = [edge("p1", "t1", "positive"), edge("r1", "t1", "image:0")]) => {
     const text = board("单图", [promptNode("p1", prompt), referenceNode("r1", REF), taskNode("t1", { image_ports: 1 })], edges);

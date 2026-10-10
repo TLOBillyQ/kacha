@@ -1,4 +1,6 @@
 // 提交前的纯函数：脏判据快照、运行范围、二次确认清单。
+import type { OutputOptions } from "./gateway";
+import { outputOptions } from "./gateway";
 import type { Board, Region, TaskNode } from "./board";
 import { findModel, type CapabilityTable } from "./capabilities";
 import { imageEdges, imageSources, promptText } from "./graph";
@@ -19,6 +21,7 @@ export interface Snapshot {
   size_spec: SizeSpec;
   layer_decomposition: boolean;
   transparent_background: boolean;
+  output_options?: OutputOptions;
   images: SnapshotImage[];
 }
 
@@ -42,6 +45,7 @@ export function snapshotOf(board: Board, taskId: string): Snapshot | null {
     model: task.model,
     size_spec: { tier: task.size_spec.tier, ratio: task.size_spec.ratio, width: task.size_spec.width, height: task.size_spec.height },
     layer_decomposition: task.layer_decomposition,
+    ...(task.model === "doubao-seedream-5-0-flash-260915" ? { output_options: outputOptions(task.output_options) } : {}),
     transparent_background: task.transparent_background,
     images,
   };
@@ -57,7 +61,7 @@ function canonical(value: unknown): string {
   return JSON.stringify(value) ?? "null";
 }
 
-const SNAPSHOT_KEYS: (keyof Snapshot)[] = ["prompt", "negative_prompt", "model", "size_spec", "layer_decomposition", "transparent_background", "images"];
+const SNAPSHOT_KEYS: (keyof Snapshot)[] = ["prompt", "negative_prompt", "model", "size_spec", "layer_decomposition", "transparent_background", "output_options", "images"];
 
 export function isDirty(board: Board, taskId: string): boolean {
   const task = findTask(board, taskId);

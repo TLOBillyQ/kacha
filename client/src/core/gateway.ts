@@ -2,7 +2,13 @@
 // 路径、载荷与出图解析全部来自 contracts/fixtures 实测夹具；生成请求只发一次，不重发、不用幂等键、不查任务。
 // HTTP 由调用方注入（壳里是 tauri-plugin-http 的 fetch，测试里是夹具回放）。
 // 发什么由发送计划（sendPlan.ts）决定；这里只把发送文本与原生负向放进请求体。
+import { withinPixelRange } from "./size";
 import { isSupported, type ModelCapability } from "./capabilities";
+
+export function flashFeatureImplemented(model: ModelCapability | undefined, _feature: "transparent" | "layers"): boolean {
+  // 能力事实保留；专用透明/图层契约由后续票接入后在此开放。
+  return model?.request_shape !== "seedream_flash_images_generations";
+}
 
 export const MODELS_PATH = "/v1/models";
 export const TEXT_TO_IMAGE_PATH = "/v1/images/generations";
@@ -59,6 +65,20 @@ export interface ReferenceImage {
   bytes: Uint8Array;
 }
 
+export interface OutputOptions {
+  output_format: "png" | "jpeg";
+  response_format: "url" | "b64_json";
+  watermark: boolean;
+}
+
+export const DEFAULT_OUTPUT_OPTIONS: OutputOptions = { output_format: "png", response_format: "url", watermark: false };
+
+export function outputOptions(value?: OutputOptions): OutputOptions {
+  const options = value ?? DEFAULT_OUTPUT_OPTIONS;
+  if (!["png", "jpeg"].includes(options.output_format) || !["url", "b64_json"].includes(options.response_format) || typeof options.watermark !== "boolean") throw new GatewayError("config", "输出选项无效");
+  return { ...options };
+}
+
 export interface GenerationInput {
   model: ModelCapability;
   /** 发送文本（发送计划的 text），原样作为请求里的提示文本。 */
@@ -70,6 +90,7 @@ export interface GenerationInput {
   references: ReferenceImage[];
   /** 透明背景开关；只对能力表支持透明背景的模型生效。 */
   transparentBackground?: boolean;
+  outputOptions?: OutputOptions;
 }
 
 export type GeneratedImage = ({ kind: "url"; url: string } | { kind: "bytes"; bytes: Uint8Array }) & {
@@ -135,8 +156,24 @@ const buildSeedreamImagesGenerations: RequestShape["build"] = (input) => {
   return { path: TEXT_TO_IMAGE_PATH, body };
 };
 
+const buildFlashImagesGenerations: RequestShape["build"] = (input) => {
+  if (input.references.length > 10) throw new GatewayError("config", "Flash 参考图最多 10 张");
+  if (!withinPixelRange({ min_total_pixels: 921600, max_total_pixels: 4624220, min_aspect_ratio: 1 / 16, max_aspect_ratio: 16 }, input.size.width, input.size.height)) throw new GatewayError("config", "Flash 生成尺寸超出范围");
+  const options = outputOptions(input.outputOptions);
+  if (input.transparentBackground) throw new GatewayError("config", "Flash 透明背景通路尚未实现");
+  return { path: TEXT_TO_IMAGE_PATH, body: {
+    model: input.model.model_id,
+    prompt: input.text,
+    size: `${input.size.width}x${input.size.height}`,
+    ...options,
+    optimize_prompt_options: { mode: "standard" },
+    ...(input.references.length ? { image: input.references.map(dataUrl) } : {}),
+  } };
+};
+
 /** 按能力表 request_shape 选择请求形态。 */
 const REQUEST_SHAPES: Record<string, RequestShape> = {
+  seedream_flash_images_generations: { build: buildFlashImagesGenerations, parse: parseFlashImage },
   qwen_images_edits: { build: buildQwenImagesEdits, parse: parseGeneratedImages },
   seedream_images_generations: { build: buildSeedreamImagesGenerations, parse: parseImageUrls },
 };
@@ -246,6 +283,17 @@ export function parseImageUrls(body: unknown): GeneratedImage[] {
   return data.flatMap((item): GeneratedImage[] => (typeof item?.url === "string" && /^https?:\/\//i.test(item.url) ? [{ kind: "url", url: item.url }] : []));
 }
 
+function parseFlashImage(body: unknown): GeneratedImage[] {
+  const data = (body as { data?: unknown })?.data;
+  if (!Array.isArray(data) || data.length !== 1) throw new GatewayError("invalid_response", "Flash 普通生成必须返回恰好一张图片");
+  const item = data[0];
+  if (!item || typeof item !== "object" || item.error || (item.url !== undefined && item.b64_json !== undefined)) throw new GatewayError("invalid_response", "Flash 图片响应无效");
+  if (typeof item.url === "string" && /^https?:\/\//i.test(item.url)) return [{ kind: "url", url: item.url }];
+  const bytes = typeof item.b64_json === "string" ? decodeBase64(item.b64_json) : null;
+  if (bytes?.length) return [{ kind: "bytes", bytes }];
+  throw new GatewayError("invalid_response", "Flash 图片响应无效");
+}
+
 /** 提交一个生成任务；图层拆分时可能返回多张（首张为合成结果）。 */
 export async function generate(config: GatewayConfig, input: GenerationInput): Promise<{ images: GeneratedImage[]; requestId: string | null }> {
   const shape = requestShapeOf(input.model);
@@ -267,5 +315,9 @@ export async function fetchResultImage(fetch: FetchLike, image: GeneratedImage):
     throw new GatewayError("network", "下载结果图失败：网络不可达");
   }
   if (response.status >= 400) throw new GatewayError(categoryForStatus(response.status), `下载结果图失败：HTTP ${response.status}`, response.status);
-  return new Uint8Array(await response.arrayBuffer());
+  let bytes: Uint8Array;
+  try { bytes = new Uint8Array(await response.arrayBuffer()); }
+  catch { throw new GatewayError("network", "下载结果图失败：无法读取响应"); }
+  if (!bytes.length) throw new GatewayError("invalid_response", "下载结果图为空");
+  return bytes;
 }

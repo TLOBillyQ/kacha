@@ -31,6 +31,7 @@ export function ratiosForSizeTier(rule: SizeRule, tier: string): string[] {
 }
 
 export function withinPixelRange(range: PixelRange, width: number, height: number): boolean {
+  if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0) return false;
   const total = width * height;
   const ratio = width / height;
   return (

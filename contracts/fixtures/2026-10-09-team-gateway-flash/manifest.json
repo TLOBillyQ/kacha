@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "verified_at": "2026-10-09",
+  "gateway": {
+    "base_url": "http://lzxsvn:3001",
+    "version": "X-New-Api-Version: v0.0.0",
+    "authentication": { "header": "Authorization", "scheme": "Bearer" },
+    "response_headers": ["X-Oneapi-Request-Id"]
+  },
+  "interfaces": {
+    "text_to_image": {
+      "path": "/v1/images/generations",
+      "method": "POST",
+      "exchanges": [
+        {
+          "evidence": "text.json",
+          "summary": "Flash text-to-image: HTTP 200, one 1024x1024 PNG, data[].url, usage.input_images=0."
+        }
+      ]
+    },
+    "image_edit": {
+      "path": "/v1/images/generations",
+      "method": "POST",
+      "exchanges": [
+        {
+          "evidence": "overlay.json",
+          "summary": "Two ordered data-URL inputs adopted (usage.input_images=2); one 2400x800 PNG. Visual check: only the fourth of five blue rectangles turns yellow, no purple highlight remains."
+        },
+        {
+          "evidence": "transparent.json",
+          "summary": "One RGBA input and background:transparent: HTTP 200, one 1536x1536 RGBA PNG, alpha extrema [0,255]."
+        }
+      ]
+    }
+  },
+  "behaviors": {
+    "idempotency_key": { "status": "unknown" },
+    "cancel_running": { "status": "unknown" },
+    "task_query": { "status": "unknown" },
+    "retry_after": { "status": "unknown" },
+    "partial_failure": { "status": "unknown" }
+  }
+}

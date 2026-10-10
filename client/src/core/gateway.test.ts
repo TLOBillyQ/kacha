@@ -12,6 +12,70 @@ import {
   type GenerationInput,
 } from "./gateway";
 
+describe("Flash 普通请求", () => {
+  it("输出 JPEG/base64 与水印选项贯穿实际载荷", () => {
+    const model = findModel(BUILTIN_TABLE, "doubao-seedream-5-0-flash-260915")!;
+    const { body } = buildGenerationRequest({ model, text: "猫", nativeNegativePrompt: null, size: { width: 1024, height: 1024 }, references: [], outputOptions: { output_format: "jpeg", response_format: "b64_json", watermark: true } });
+    expect(body).toMatchObject({ output_format: "jpeg", response_format: "b64_json", watermark: true });
+  });
+  it("base64 普通响应产生一个结果，多项或混合坏项整体拒绝", async () => {
+    const model = findModel(BUILTIN_TABLE, "doubao-seedream-5-0-flash-260915")!;
+    const input: GenerationInput = { model, text: "猫", nativeNegativePrompt: null, size: { width: 1024, height: 1024 }, references: [] };
+    const config = (body: unknown) => ({ baseUrl: "https://gateway.test", apiKey: "test", fetch: (async () => ({ status: 200, headers: { get: () => null }, text: async () => JSON.stringify(body), arrayBuffer: async () => new ArrayBuffer(0) })) as FetchLike });
+    expect((await generate(config({ data: [{ b64_json: PNG_BASE64 }] }), input)).images).toEqual([{ kind: "bytes", bytes: PNG_BYTES }]);
+    for (const data of [[{ url: "https://result.test/a" }, { url: "https://result.test/b" }], [{ url: "https://result.test/a" }, {}], [{ b64_json: "%%%" }], [{ url: "https://result.test/a", b64_json: PNG_BASE64 }]]) {
+      await expect(generate(config({ data }), input)).rejects.toMatchObject({ category: "invalid_response" });
+    }
+  });
+  it.each([0, 1, 3, 10])("普通参考图 %i 张保持顺序", (count) => {
+    const model = findModel(BUILTIN_TABLE, "doubao-seedream-5-0-flash-260915")!;
+    const references = Array.from({ length: count }, (_, i) => ({ mediaType: "image/png", bytes: new Uint8Array([i + 1]) }));
+    const request = buildGenerationRequest({ model, text: "猫", nativeNegativePrompt: null, size: { width: 1024, height: 1024 }, references });
+    if (count === 0) expect(request.body).not.toHaveProperty("image");
+    else expect(request.body.image).toEqual(["data:image/png;base64,AQ==", "data:image/png;base64,Ag==", "data:image/png;base64,Aw==", "data:image/png;base64,BA==", "data:image/png;base64,BQ==", "data:image/png;base64,Bg==", "data:image/png;base64,Bw==", "data:image/png;base64,CA==", "data:image/png;base64,CQ==", "data:image/png;base64,Cg=="].slice(0, count));
+  });
+  it("拒绝超过参考图上限或非法实际生成尺寸", () => {
+    const model = findModel(BUILTIN_TABLE, "doubao-seedream-5-0-flash-260915")!;
+    const input: GenerationInput = { model, text: "猫", nativeNegativePrompt: null, size: { width: 1024, height: 1024 }, references: [] };
+    expect(() => buildGenerationRequest({ ...input, references: Array.from({ length: 11 }, () => ({ mediaType: "image/png", bytes: PNG_BYTES })) })).toThrow(/10/);
+    expect(() => buildGenerationRequest({ ...input, size: { width: 100, height: 100 } })).toThrow(/尺寸/);
+  });
+  it("使用专用接口、单结果默认选项及有序顶层参考图", () => {
+    const model = findModel(BUILTIN_TABLE, "doubao-seedream-5-0-flash-260915")!;
+    const request = buildGenerationRequest({ model, text: "图1 与图2", nativeNegativePrompt: "不发送原生负向", size: { width: 2048, height: 2048 }, references: [{ mediaType: "image/png", bytes: new Uint8Array([1]) }, { mediaType: "image/jpeg", bytes: new Uint8Array([2]) }] });
+    expect(request).toEqual({ path: "/v1/images/generations", body: { model: model.model_id, prompt: "图1 与图2", size: "2048x2048", response_format: "url", output_format: "png", watermark: false, optimize_prompt_options: { mode: "standard" }, image: ["data:image/png;base64,AQ==", "data:image/jpeg;base64,Ag=="] } });
+  });
+});
+
+describe("Flash 真实脱敏夹具回放（替代字节为合成，不证明视觉语义）", () => {
+  for (const file of ["text.json", "overlay.json", "transparent.json"]) it(file, async () => {
+    const exchange = loadFixture("2026-10-09-team-gateway-flash", file);
+    const body = exchange.request.body as Record<string, any>;
+    const calls: Recorded[] = [];
+    const config = { baseUrl: "http://fixture.test", apiKey: "test", fetch: (async (url, init) => {
+      calls.push({ url, method: init.method, headers: init.headers, body: init.body ? JSON.parse(init.body) : undefined });
+      return { status: exchange.response.status, headers: { get: (name: string) => exchange.response.headers[name] ?? null }, text: async () => JSON.stringify(exchange.response.body), arrayBuffer: async () => PNG_BYTES.slice().buffer };
+    }) as FetchLike };
+    const model = findModel(BUILTIN_TABLE, body.model)!;
+    if (file === "transparent.json") {
+      // 已保存证据含透明参数；#18 尚未开放，不以普通请求冒充透明实现。
+      expect(body.background).toBe("transparent");
+      expect((exchange.response.body as any).data).toHaveLength(1);
+      expect(model.transparent_background).toBe("supported");
+      return;
+    }
+    const [width, height] = body.size.split("x").map(Number);
+    const references = (body.image ?? []).map(() => ({ mediaType: "image/png", bytes: PNG_BYTES }));
+    const result = await generate(config, { model, text: body.prompt, nativeNegativePrompt: null, size: { width, height }, references });
+    const actual = calls[0].body as Record<string, unknown>;
+    const { optimize_prompt_options, ...recordedFields } = actual;
+    expectMatchesFixture(recordedFields, body);
+    expect(optimize_prompt_options).toEqual({ mode: "standard" });
+    expect(result.images).toEqual([{ kind: "url", url: "https://example.invalid/redacted" }]);
+    expect(await fetchResultImage(config.fetch, result.images[0])).toEqual(PNG_BYTES);
+  });
+});
+
 const FIXTURE_DIRS = [
   "2026-08-17-team-gateway",
   "2026-08-29-team-gateway-edit-json",
