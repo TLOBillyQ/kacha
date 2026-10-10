@@ -164,7 +164,7 @@ function replay(exchange: Exchange, images: (url: string) => Uint8Array | undefi
 
 const qwenPro = findModel(BUILTIN_TABLE, "qwen-image-3.0-pro")!;
 const seedreamPro = findModel(BUILTIN_TABLE, "doubao-seedream-5-0-pro-260628")!;
-const seedreamLite = findModel(BUILTIN_TABLE, "doubao-seedream-5-0-lite-260128")!;
+const seedreamFlash = findModel(BUILTIN_TABLE, "doubao-seedream-5-0-flash-260915")!;
 const png = { mediaType: "image/png", bytes: PNG_BYTES };
 
 const textInput = (patch: Partial<GenerationInput> = {}): GenerationInput => ({
@@ -266,13 +266,11 @@ describe("网关适配器：Seedream 请求形态对照夹具", () => {
   }
 
   it("纯文生图 POST /v1/images/generations：顶层 model / prompt / size(WxH) / response_format:url + fixed_params，不带 image", async () => {
-    const fixture = loadFixture(SEEDREAM_DIR, "lite-burst10-0.json");
-    const { fetch, calls } = replay(fixture);
-    await generate({ baseUrl: BASE, apiKey: "sk-test", fetch }, textInput({ model: seedreamLite, size: { width: 2048, height: 2048 } }));
-    expect(calls[0].url).toBe(`${BASE}/v1/images/generations`);
-    expectMatchesFixture(calls[0].headers, fixture.request.headers, "headers");
-    expectSeedreamBody(calls[0].body as Record<string, unknown>, fixture, 0);
-    expect(calls[0].body).toMatchObject({ prompt: "一只橘猫", size: "2048x2048", sequential_image_generation: "disabled" });
+    const { body, path } = buildGenerationRequest(textInput({ model: seedreamFlash, size: { width: 2048, height: 2048 } }));
+    expect(path).toBe("/v1/images/generations");
+    expect(body).toMatchObject({ model: "doubao-seedream-5-0-flash-260915", prompt: "一只橘猫", size: "2048x2048", response_format: "url" });
+    expect(body).not.toHaveProperty("sequential_image_generation");
+    expect(body).not.toHaveProperty("image");
   });
 
   it("参考图按序进顶层 image（data-URL 数组），发送文本原样进顶层 prompt", () => {
@@ -289,11 +287,10 @@ describe("网关适配器：Seedream 请求形态对照夹具", () => {
   });
 
   it("区域指示：叠加图紧随原图进顶层 image", () => {
-    const fixture = loadFixture(SEEDREAM_DIR, "lite-region-overlay-1.json");
     const overlay = { mediaType: "image/png", bytes: new Uint8Array([9]) };
     const text = "本次提供 2 张参考图，按顺序为图1、图2。\n把紫色区域改成红色\n图2 是图1 的标注版";
-    const { body } = buildGenerationRequest(textInput({ model: seedreamLite, text, size: { width: 3456, height: 1152 }, references: [png, overlay] }));
-    expectSeedreamBody(body, fixture, 2);
+    const { body } = buildGenerationRequest(textInput({ model: seedreamFlash, text, size: { width: 2048, height: 2048 }, references: [png, overlay] }));
+    expect((body.image as string[]).length).toBe(2);
     expect((body.image as string[])[1]).toBe("data:image/png;base64,CQ==");
     expect(body.prompt).toBe(text);
   });
@@ -313,11 +310,10 @@ describe("网关适配器：Seedream 请求形态对照夹具", () => {
     const edit = buildGenerationRequest(textInput({ model: seedreamPro, text: "本次提供 1 张参考图。\n一只橘猫\n避免出现：模糊", references: [png] })).body;
     expect(edit.prompt).toBe("本次提供 1 张参考图。\n一只橘猫\n避免出现：模糊");
     expect(edit).not.toHaveProperty("negative_prompt");
-    expect(buildGenerationRequest(textInput({ model: seedreamLite })).body).not.toHaveProperty("negative_prompt");
+    expect(buildGenerationRequest(textInput({ model: seedreamFlash })).body).not.toHaveProperty("negative_prompt");
   });
 
-  it("透明背景：能力表不支持的模型（lite、qwen）即使开关打开也不发 background", () => {
-    expect(buildGenerationRequest(textInput({ model: seedreamLite, references: [png], transparentBackground: true })).body).not.toHaveProperty("background");
+  it("透明背景：能力表不支持的 qwen 即使开关打开也不发 background", () => {
     expect(JSON.stringify(buildGenerationRequest(textInput({ references: [png], transparentBackground: true })).body)).not.toContain("transparent");
   });
 
@@ -342,7 +338,7 @@ describe("网关适配器：Seedream 请求形态对照夹具", () => {
 function replayInput(name: string, exchange: Exchange): GenerationInput {
   const body = exchange.request.body as Record<string, unknown>;
   if (name.startsWith(`${SEEDREAM_DIR}/`)) {
-    return textInput({ model: name.includes("/lite-") ? seedreamLite : seedreamPro, references: "image" in body ? [png] : [] });
+    return textInput({ model: seedreamPro, references: "image" in body ? [png] : [] });
   }
   return textInput({ references: exchange.request.path === "/v1/images/edits" ? [png] : [] });
 }
@@ -350,7 +346,8 @@ function replayInput(name: string, exchange: Exchange): GenerationInput {
 describe("网关适配器：夹具响应回放", () => {
   const expectations: Record<number, string> = { 400: "rejected", 401: "auth", 503: "server" };
 
-  for (const { name, exchange } of allExchanges) {
+  // Lite 夹具保留为历史证据，不再作为当前产品运行用例回放。
+  for (const { name, exchange } of allExchanges.filter(({ name }) => !name.includes("/lite-"))) {
     it(name, async () => {
       const { fetch } = replay(exchange, (url) => (url.startsWith("https://example.invalid/") ? PNG_BYTES : undefined));
       const config = { baseUrl: BASE, apiKey: "k", fetch };

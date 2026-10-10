@@ -103,7 +103,7 @@ export interface ModelsCache {
   model_ids: string[];
 }
 
-export type Discovery = { source: "live" | "cached"; ids: string[]; fetchedAt: string } | { source: "none" };
+export type Discovery = { source: "live" | "cached"; ids: string[]; fetchedAt: string } | { source: "none"; failed?: boolean };
 
 export function parseModelsCache(text: string | null): ModelsCache | null {
   if (text === null) return null;
@@ -133,27 +133,28 @@ function shelved(table: CapabilityTable): ModelCapability[] {
 
 /** 任务节点模型列表 = 发现结果 ∩ 上架清单；从未发现过时退回上架清单。 */
 export function availableModels(table: CapabilityTable, discovery: Discovery): ModelCapability[] {
-  if (discovery.source === "none") return shelved(table);
+  if (discovery.source === "none") return discovery.failed ? [] : shelved(table);
   const ids = new Set(discovery.ids);
   return shelved(table).filter((m) => ids.has(m.model_id));
 }
 
 /** 已发现模型列表但网关没有该模型时的标红原因。 */
 export function modelAvailabilityIssue(table: CapabilityTable, discovery: Discovery, modelId: string): string | null {
-  if (discovery.source === "none" || discovery.ids.includes(modelId)) return null;
+  if (modelId === PREFERRED_TASK_MODEL && (discovery.source === "none" ? discovery.failed : !discovery.ids.includes(modelId))) return "Flash 不可用，请刷新模型列表或手动选择其它可用模型";
+  if (discovery.source === "none") return discovery.failed ? "模型发现失败，请刷新模型列表" : null;
+  if (discovery.ids.includes(modelId)) return null;
   const name = table.models.find((m) => m.model_id === modelId)?.display_name ?? modelId;
   return `网关未提供模型 ${name}`;
 }
 
 /** 画板没有最近选择时的首选模型。 */
-export const PREFERRED_TASK_MODEL = "doubao-seedream-5-0-lite-260128";
+export const PREFERRED_TASK_MODEL = "doubao-seedream-5-0-flash-260915";
 
-/** 新建任务节点的模型：画板级最近选择（仍可用时）→ 首选模型（可用时）→ 可用列表第一个 → 上架清单第一个；都没有为 null。 */
+/** 新建任务节点沿用有效最近选择，否则保留 Flash 身份；不可用由任务视图明确阻止，不自动替代。 */
 export function defaultTaskModel(table: CapabilityTable, discovery: Discovery, lastModel: string | null | undefined): string | null {
   const available = availableModels(table, discovery);
   if (lastModel && available.some((m) => m.model_id === lastModel)) return lastModel;
-  if (available.some((m) => m.model_id === PREFERRED_TASK_MODEL)) return PREFERRED_TASK_MODEL;
-  return available[0]?.model_id ?? shelved(table)[0]?.model_id ?? null;
+  return PREFERRED_TASK_MODEL;
 }
 
 /** 迭代动作用的默认编辑模型：工具栏模型（支持图片编辑时）→ 可用列表里第一个支持图片编辑的 → 上架清单里第一个；都没有为 null。 */
@@ -251,6 +252,7 @@ export async function refreshModels(ports: SettingsPorts, baseUrl: string, apiKe
     const gateway = e instanceof GatewayError ? e : null;
     ports.log("connection", { stage: "list_models", ok: false, category: gateway?.category ?? "unknown", status_code: gateway?.status, message: gateway?.message ?? String(e) });
     const message = gateway ? `${ERROR_CATEGORY_LABELS[gateway.category]}：${gateway.message}` : null;
-    return { ok: false, message, discovery: discoveryFromCache(cache, baseUrl) };
+    const cached = discoveryFromCache(cache, baseUrl);
+    return { ok: false, message, discovery: cached.source === "none" ? { source: "none", failed: true } : cached };
   }
 }

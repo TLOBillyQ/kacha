@@ -3,6 +3,35 @@ import type { BoardNode } from "./board";
 import { parseOutcome } from "./taskDir";
 import { board, harness, settle } from "./testing/runnerHarness";
 
+describe("Lite 停用", () => {
+  it("普通运行明确阻止，不调用网关或写入任务目录", async () => {
+    const h = harness();
+    const b = board();
+    for (const node of b.nodes) if (node.type === "task") node.model = "doubao-seedream-5-0-lite-260128";
+    expect(await h.runner.submit(h.target(), b, ["t1"])).toEqual(["Lite 已停用，请切换到 Flash"]);
+    await settle();
+    expect(h.requests).toEqual([]);
+    expect(h.files.size).toBe(0);
+    expect(h.changes).toEqual([]);
+  });
+  it.each([undefined, "20260916T091500Z-deadbeef"])("历史 Lite 重新生成/变体在当前节点已改 Flash 后仍阻止且不改历史 (%s)", async (fromTaskId) => {
+    const h = harness();
+    const b = board();
+    const t = b.nodes.find((n) => n.type === "task")!;
+    if (t.type !== "task") throw new Error("task");
+    const taskId = "20260916T091500Z-deadbeef";
+    const path = `/root/2026-09-16/${taskId}/task.json`;
+    const old = new TextEncoder().encode(JSON.stringify({ task_id: taskId, submitted_at: "2026-09-16T09:15:00Z", workflow: "text_to_image", model: "doubao-seedream-5-0-lite-260128", capability_format_version: 1, capability_table_sha256: "a".repeat(64), prompt: "旧猫", negative_prompt: "", send_text: "旧猫", size_spec: { tier: "3K", ratio: "1:1", width: null, height: null }, size: { width: 3072, height: 3072 }, layer_decomposition: false, transparent_background: false, references: [] }));
+    h.files.set(path, old);
+    t.model = "doubao-seedream-5-0-flash-260915";
+    t.last_submitted = { task_id: taskId, model: "doubao-seedream-5-0-lite-260128", prompt: "旧猫", negative_prompt: "", size_spec: { tier: "3K", ratio: "1:1", width: null, height: null }, layer_decomposition: false, transparent_background: false, images: [] };
+    expect(await h.runner.regenerate(h.target(), b, "t1", fromTaskId)).toBe("Lite 已停用，请切换到 Flash");
+    expect(h.requests).toEqual([]);
+    expect(h.files.size).toBe(1);
+    expect(h.files.get(path)).toEqual(old);
+  });
+});
+
 describe("Flash 失败政策", () => {
   it.each([401, 400, 500])("HTTP %i 不重发，保留失败", async (status) => {
     const h = harness();

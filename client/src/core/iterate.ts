@@ -1,7 +1,7 @@
 // 迭代动作：以此继续编辑、加为参考图；以及谱系高亮与通用复制粘贴。
 // 全部是 Board → Board 的纯函数；「生成变体」只是父任务按该结果的任务目录重跑，见 run.ts。
 import type { Board, BoardEdge, BoardNode, PromptNode, ResultNode, TaskNode } from "./board";
-import { findModel, isSupported, type CapabilityTable, type ModelCapability } from "./capabilities";
+import { findModel, isRetiredModel, isSupported, type CapabilityTable, type ModelCapability } from "./capabilities";
 import { canConnect, connect, IMAGE_PORT_PREFIX, imageEdges, syncImagePorts, type Verdict } from "./graph";
 import { COLUMN_GAP, placeNear, PROMPT_NODE_SIZE, ROW_GAP, TASK_NODE_SIZE } from "./layout";
 import { defaultEditModel, type Discovery } from "./settings";
@@ -51,13 +51,13 @@ export function continueEditing(
   const producer = trigger.type === "result" ? producerOf(board, trigger.id) : undefined;
   const inherited: { model: string; size_spec: SizeSpec } | null =
     trigger.type === "reference" ? null : producer ? { model: producer.model, size_spec: producer.size_spec } : { model: trigger.record.model, size_spec: trigger.record.size_spec };
+  const retired = inherited !== null && isRetiredModel(inherited.model);
   const inheritedModel = inherited && findModel(table, inherited.model);
-  const model: ModelCapability | null = inheritedModel && inheritedModel.workflows.image_edit.max_references > 0 ? inheritedModel : defaultEditModel(table, discovery, board.last_model);
-  if (!model) return { ok: false, reason: "上架清单中没有支持图片编辑的模型" };
-  const rule = model.workflows.image_edit.size_rule;
-  const size_spec = defaultSizeSpec(rule, inherited?.size_spec.tier ?? null);
-  const limit = model.workflows.image_edit.max_references;
-  if (sources.length > limit) return { ok: false, reason: `${model.display_name} 最多接 ${limit} 张参考图，选中了 ${sources.length} 张` };
+  const model: ModelCapability | null = retired ? null : inheritedModel && inheritedModel.workflows.image_edit.max_references > 0 ? inheritedModel : defaultEditModel(table, discovery, board.last_model);
+  if (!model && !retired) return { ok: false, reason: "上架清单中没有支持图片编辑的模型" };
+  const size_spec = retired ? { ...inherited!.size_spec, auto_ratio: { ratio: inherited!.size_spec.ratio ?? "1:1", image: null, source: null } } : defaultSizeSpec(model!.workflows.image_edit.size_rule, inherited?.size_spec.tier ?? null);
+  const limit = model?.workflows.image_edit.max_references;
+  if (limit !== undefined && sources.length > limit) return { ok: false, reason: `${model!.display_name} 最多接 ${limit} 张参考图，选中了 ${sources.length} 张` };
 
   const right = Math.max(...sources.map((n) => n.pos[0] + n.size[0]));
   const taskPos = taskAt ?? placeNear(board, [right + COLUMN_GAP, trigger.pos[1]], TASK_NODE_SIZE);
@@ -67,7 +67,7 @@ export function continueEditing(
     pos: taskPos,
     size: TASK_NODE_SIZE,
     extra: {},
-    model: model.model_id,
+    model: retired ? inherited!.model : model!.model_id,
     size_spec,
     image_ports: 0,
     layer_decomposition: false,
@@ -88,7 +88,7 @@ export function continueEditing(
     ...sources.map((s, i) => ({ ...userEdge(s.id, "out", task.id, `${IMAGE_PORT_PREFIX}${i}`), source_layer: sourceLayers?.get(s.id) ?? null })),
   ];
   const negative = producer && board.edges.find((e) => e.to[0] === producer.id && e.to[1] === "negative");
-  if (negative && isSupported(model.workflows.image_edit.supports_negative_prompt)) edges.push(userEdge(negative.from[0], negative.from[1], task.id, "negative"));
+  if (negative && (retired || model && isSupported(model.workflows.image_edit.supports_negative_prompt))) edges.push(userEdge(negative.from[0], negative.from[1], task.id, "negative"));
 
   return { ok: true, board: syncImagePorts({ ...board, nodes: [...board.nodes, prompt, task], edges }) };
 }

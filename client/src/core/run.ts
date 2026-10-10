@@ -1,7 +1,7 @@
 // 单个任务从提交到出结果的内部件：读参考图（提交）→ 写任务目录（派发，不可变）→ 调网关 → 存结果图。
 // 副作用全部由调用方注入；调用顺序与状态由任务运行器（runner.ts）负责，界面不直接调用。
 import type { Board, ResultRecord, TaskNode } from "./board";
-import { findModel, type CapabilityTable, type InputImageRule, type ModelCapability } from "./capabilities";
+import { findModel, isRetiredModel, LITE_RETIRED_HINT, type CapabilityTable, type InputImageRule, type ModelCapability } from "./capabilities";
 import { fitImage, type FittedBytes, type ImageCodec } from "./fitImage";
 import { ERROR_CATEGORY_LABELS, fetchResultImage, GatewayError, generate, type FetchLike, type GenerationInput } from "./gateway";
 import { imagePortSlots, imageSources, imageRuleViolations, workflowOf } from "./graph";
@@ -102,6 +102,7 @@ export async function prepareJob(
 ): Promise<Prepared> {
   const { board, table, outputRoot, taskNodeId } = args;
   const task = board.nodes.find((n) => n.id === taskNodeId);
+  if (task?.type === "task" && isRetiredModel(task.model)) throw new LocalError(LITE_RETIRED_HINT);
   const snapshot = snapshotOf(board, taskNodeId);
   const model = task?.type === "task" ? findModel(table, task.model) : undefined;
   if (task?.type !== "task" || !snapshot || !model) throw new LocalError("任务节点或模型不存在");
@@ -201,6 +202,7 @@ export async function prepareRegenerate(
   if (!last || typeof fromTaskId !== "string" || !taskDirOfTaskId(fromTaskId)) throw new LocalError("任务节点没有可重新生成的提交");
 
   const { record: previous, references: snapshots } = await readSubmission(deps, outputRoot, fromTaskId);
+  if (isRetiredModel(previous.model)) throw new LocalError(LITE_RETIRED_HINT);
   const model = findModel(args.table, previous.model);
   if (!model) throw new LocalError(`模型 ${previous.model} 已不在能力表内`);
   // 快照已按规则处理过，原样重发，不再处理；本次没处理，新任务记录不带 fitted。

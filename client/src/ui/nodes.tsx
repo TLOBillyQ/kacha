@@ -678,7 +678,7 @@ export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskF
           <div className="field nodrag">
             <span className="field-label">模型</span>
             <select value={node.model} onChange={(e) => apply({ kind: "setModel", taskId: node.id, model: e.target.value })} disabled={locked} aria-label="模型">
-              {!listed && <option value={node.model}>{modelLabel}</option>}
+              {!listed && <option disabled value={node.model}>{modelLabel}</option>}
               <ModelOptions table={table} available={availableModels} />
             </select>
             <HoverButton className="icon" aria-label="模型说明" info={textHoverInfo("模型说明")} onClick={() => setInfoOpen((v) => !v)} disabled={!model}>

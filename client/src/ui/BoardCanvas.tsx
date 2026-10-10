@@ -847,6 +847,7 @@ export function BoardCanvas({
                   onChange={(e) => apply({ kind: "lastModel", model: e.target.value })}
                   aria-label="新建任务模型"
                 >
+                  {!actions.availableModels.some((m) => m.model_id === defaultTaskModel(table, discovery, board.last_model)) && <option disabled value={defaultTaskModel(table, discovery, board.last_model) ?? ""}>Flash 不可用，请刷新模型列表</option>}
                   <ModelOptions table={table} available={actions.availableModels} />
                 </select>
               }

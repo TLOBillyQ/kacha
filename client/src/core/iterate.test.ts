@@ -68,6 +68,15 @@ function ok(r: ReturnType<typeof continueEditing>): Board {
 const find = <T extends BoardNode>(b: Board, id: string) => b.nodes.find((n) => n.id === id) as T;
 
 describe("以此继续编辑", () => {
+  it("旧 Lite 结果继续编辑保留停用身份与分辨率档，不静默换 Flash", () => {
+    const source = result("old", [0, 0], "doubao-seedream-5-0-lite-260128");
+    if (source.type !== "result") throw new Error("result");
+    source.record.size_spec = { tier: "3K", ratio: "16:9", width: null, height: null };
+    const before = board([source]);
+    const b = ok(continueEditing(before, BUILTIN_TABLE, NONE, ["old"], "old", ids));
+    expect(find<TaskNode>(b, "new-task")).toMatchObject({ model: "doubao-seedream-5-0-lite-260128", size_spec: { tier: "3K" }, image_ports: 1 });
+    expect(find(b, "old")).toEqual(source);
+  });
   // 源任务 src（经济档 2K 16:9，接了负向）产出结果 res。
   const lineage = () =>
     board(
@@ -120,7 +129,7 @@ describe("以此继续编辑", () => {
 
   it("触发于参考图节点：用工具栏模型，不接负向", () => {
     const b = ok(continueEditing(board([reference("r")]), BUILTIN_TABLE, NONE, ["r"], "r", ids));
-    expect(find<TaskNode>(b, "new-task").model).toBe("doubao-seedream-5-0-lite-260128");
+    expect(find<TaskNode>(b, "new-task").model).toBe("doubao-seedream-5-0-flash-260915");
     expect(b.edges.some((e) => e.to[1] === "negative")).toBe(false);
     const picked = ok(continueEditing({ ...board([reference("r")]), last_model: "qwen-image-3.0" }, BUILTIN_TABLE, NONE, ["r"], "r", ids));
     expect(find<TaskNode>(picked, "new-task").model).toBe("qwen-image-3.0");
@@ -129,7 +138,7 @@ describe("以此继续编辑", () => {
   it("源模型与工具栏模型都不支持图片编辑：换默认编辑模型，尺寸不在其尺寸表内时用默认尺寸", () => {
     const b0 = lineage();
     const src = find<TaskNode>(b0, "src");
-    src.model = "doubao-seedream-5-0-lite-260128";
+    src.model = "doubao-seedream-5-0-flash-260915";
     const t = structuredClone(BUILTIN_TABLE);
     t.models.find((m) => m.model_id === src.model)!.workflows.image_edit.max_references = 0;
     const b = ok(continueEditing(b0, t, NONE, ["res"], "res", ids));

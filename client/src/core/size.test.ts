@@ -43,12 +43,12 @@ describe("Seedream 5.0 分辨率档 × 宽高比按官方映射表（API 参考 
   const RATIOS = ["1:1", "4:3", "3:4", "16:9", "9:16", "3:2", "2:3", "21:9"];
   const seedream = (id: string) => BUILTIN_TABLE.models.find((m) => m.model_id === id)!;
   const pro = seedream("doubao-seedream-5-0-pro-260628");
-  const lite = seedream("doubao-seedream-5-0-lite-260128");
+  const flash = seedream("doubao-seedream-5-0-flash-260915");
 
-  it("pro：1K / 1.5K / 2K，lite：2K / 3K / 4K，各 8 个宽高比；文生图与图片编辑同表", () => {
+  it("pro 与 Flash：1K / 1.5K / 2K，各 8 个宽高比；文生图与图片编辑同表", () => {
     for (const [model, tiers] of [
       [pro, ["1K", "1.5K", "2K"]],
-      [lite, ["2K", "3K", "4K"]],
+      [flash, ["2K", "1K", "1.5K"]],
     ] as const) {
       const { text_to_image, image_edit } = model.workflows;
       expect(image_edit.size_rule).toEqual(text_to_image.size_rule);
@@ -63,14 +63,14 @@ describe("Seedream 5.0 分辨率档 × 宽高比按官方映射表（API 参考 
     expect(at(pro, "1.5K", "21:9")).toEqual({ width: 2352, height: 1008 });
     expect(at(pro, "2K", "16:9")).toEqual({ width: 2816, height: 1584 });
     expect(at(pro, "2K", "3:4")).toEqual({ width: 1776, height: 2368 });
-    expect(at(lite, "2K", "16:9")).toEqual({ width: 2848, height: 1600 });
-    expect(at(lite, "3K", "4:3")).toEqual({ width: 3456, height: 2592 });
-    expect(at(lite, "4K", "9:16")).toEqual({ width: 3040, height: 5504 });
-    expect(at(lite, "4K", "21:9")).toEqual({ width: 6240, height: 2656 });
+    expect(at(flash, "2K", "16:9")).toEqual({ width: 2816, height: 1584 });
+    expect(at(flash, "1.5K", "4:3")).toEqual({ width: 1792, height: 1344 });
+    expect(at(flash, "1K", "9:16")).toEqual({ width: 800, height: 1424 });
+    expect(at(flash, "2K", "21:9")).toEqual({ width: 3136, height: 1344 });
   });
 
   it("每个分辨率档的像素都落在该模型像素模式的总像素与宽高比区间内，宽高比与标称一致（±2%）", () => {
-    for (const model of [pro, lite]) {
+    for (const model of [pro, flash]) {
       const rule = model.workflows.text_to_image.size_rule;
       for (const [tier, ratios] of Object.entries(rule.tiers)) {
         for (const [ratio, [w, h]] of Object.entries(ratios)) {
@@ -87,7 +87,7 @@ describe("自动宽高比：吸附、钳制、像素换算", () => {
   const model = (id: string) => BUILTIN_TABLE.models.find((m) => m.model_id === id)!.workflows.image_edit.size_rule;
   const qwen = model("qwen-image-3.0");
   const pro = model("doubao-seedream-5-0-pro-260628");
-  const lite = model("doubao-seedream-5-0-lite-260128");
+  const flash = model("doubao-seedream-5-0-flash-260915");
   const auto = (r: typeof qwen, tier: string, image: number | null, source: [number, number] | null) => autoSizeSpec(r, tier, image, source);
 
   it("与预设宽高比相差 ±3% 内吸附到预设，发送像素查表", () => {
@@ -111,8 +111,8 @@ describe("自动宽高比：吸附、钳制、像素换算", () => {
       [qwen, "2K"],
       [pro, "1K"],
       [pro, "2K"],
-      [lite, "2K"],
-      [lite, "4K"],
+      [flash, "1.5K"],
+      [flash, "2K"],
     ] as const) {
       const spec = auto(r, tier, 1, [1000, 700]);
       expect(spec.ratio).toBe("10:7");
@@ -134,7 +134,7 @@ describe("自动宽高比：吸附、钳制、像素换算", () => {
       [qwen, "1K"],
       [qwen, "2K"],
       [pro, "1K"],
-      [lite, "4K"],
+      [flash, "2K"],
     ] as const) {
       const px = resolveSize(r, auto(r, tier, 1, [4000, 200]))!;
       expect(withinPixelRange(r.custom!, px.width, px.height)).toBe(true);

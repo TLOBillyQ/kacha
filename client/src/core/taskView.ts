@@ -2,7 +2,7 @@
 // 生成任务节点与二次确认（buildConfirmItems）消费同一份，「节点标红 ≡ 运行被拦」由构造保证。
 // 换模型绝不自动删线或改设置，只报告原因。
 import type { Board, TaskNode } from "./board";
-import { findModel, isSupported, type CapabilityTable, type ModelCapability } from "./capabilities";
+import { findModel, isRetiredModel, isSupported, LITE_RETIRED_HINT, type CapabilityTable, type ModelCapability } from "./capabilities";
 import { flashFeatureImplemented, isRequestShapeImplemented } from "./gateway";
 import { imageEdges, imagePortSlots, imageSources, promptText, workflowOf } from "./graph";
 import { MAX_REGIONS } from "./overlay";
@@ -16,6 +16,7 @@ export type ReasonKind =
   | "positiveMissing"
   | "positiveEmpty"
   | "modelUnknown"
+  | "modelRetired"
   | "modelUnshelved"
   | "modelNotFromGateway"
   | "requestShapeMissing"
@@ -92,7 +93,7 @@ export function taskView(board: Board, table: CapabilityTable, taskId: string, f
   const layer = model && !flashFeatureImplemented(model, "layers") ? "Flash 图层拆分通路尚未实现" : model && !isSupported(model.workflows[workflowOf(board, taskId)].layer_decomposition) ? "模型不支持拆分图层" : null;
   const reasons = [
     ...promptReasons(board, taskId),
-    ...(model ? [...availabilityReasons(table, facts.discovery, model), ...modelReasons(board, model, task)] : [reason("modelUnknown", `模型 ${task.model} 不在能力表内`)]),
+    ...(isRetiredModel(task.model) ? [reason("modelRetired", LITE_RETIRED_HINT)] : model ? [...availabilityReasons(table, facts.discovery, model), ...modelReasons(board, model, task)] : [reason("modelUnknown", `模型 ${task.model} 不在能力表内`)]),
     ...(task.layer_decomposition && layer ? [reason("layerUnsupported", layer)] : []),
     ...(task.transparent_background && transparent ? [reason(transparent.kind, transparent.text)] : []),
     ...refs.issues.map((text) => reason("referenceOutOfRange", text)),
@@ -118,6 +119,7 @@ export function taskView(board: Board, table: CapabilityTable, taskId: string, f
 }
 
 function modelLabel(table: CapabilityTable, discovery: Discovery, modelId: string): TaskView["model"] {
+  if (isRetiredModel(modelId)) return { state: "unknown", label: "Lite（已停用，请切换到 Flash）" };
   const model = findModel(table, modelId);
   if (!model) return { state: "unknown", label: `${modelId}（未知模型）` };
   if (availableModels(table, discovery).some((m) => m.model_id === modelId)) return { state: "ok", label: model.display_name };

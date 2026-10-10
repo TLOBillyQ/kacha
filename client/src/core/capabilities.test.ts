@@ -24,16 +24,19 @@ describe("Flash 输入政策", () => {
 });
 
 describe("内置能力表", () => {
+  it("Lite 不再提供运行能力或模型选择入口", () => {
+    expect(BUILTIN_TABLE.models.some((m) => m.model_id === "doubao-seedream-5-0-lite-260128")).toBe(false);
+  });
   it("通过自身 schema 校验，顶层整数 format_version", () => {
     expect(BUILTIN_TABLE.format_version).toBe(1);
-    expect(BUILTIN_TABLE.models.length).toBe(5);
+    expect(BUILTIN_TABLE.models.length).toBe(4);
   });
 
   it("pro 为旗舰、非 pro 为经济：qwen 与 Seedream 各两个上架", () => {
     const groups = modelsByTier(BUILTIN_TABLE);
     expect(groups.map((g) => [g.tier, g.models.map((m) => m.model_id)])).toEqual([
       ["flagship", ["qwen-image-3.0-pro", "doubao-seedream-5-0-pro-260628"]],
-      ["economy", ["qwen-image-3.0", "doubao-seedream-5-0-lite-260128", "doubao-seedream-5-0-flash-260915"]],
+      ["economy", ["qwen-image-3.0", "doubao-seedream-5-0-flash-260915"]],
     ]);
   });
 
@@ -82,12 +85,17 @@ describe("解析与校验", () => {
 });
 
 describe("覆盖文件按模型合并", () => {
+  it("覆盖文件不能重新引入停用 Lite，即使声明全套有效能力", () => {
+    const retired = { ...structuredClone(qwenPro()), model_id: "doubao-seedream-5-0-lite-260128" };
+    const merged = mergeOverride(BUILTIN_TABLE, { format_version: 1, models: [retired] });
+    expect(merged.models.some((m) => m.model_id === retired.model_id)).toBe(false);
+  });
   it("同 model_id 整条替换内置，新模型追加，其余不动", () => {
     const override = structuredClone(qwenPro());
     override.workflows.image_edit.max_references = 5;
     const added = { ...structuredClone(qwenPro()), model_id: "new-model", tier: null };
     const merged = mergeOverride(BUILTIN_TABLE, { format_version: 1, models: [override, added] });
-    expect(merged.models.length).toBe(6);
+    expect(merged.models.length).toBe(5);
     expect(merged.models.find((m) => m.model_id === "qwen-image-3.0-pro")!.workflows.image_edit.max_references).toBe(5);
     expect(merged.models.find((m) => m.model_id === "qwen-image-3.0")!.workflows.image_edit.max_references).toBe(3);
     expect(merged.models.at(-1)!.model_id).toBe("new-model");

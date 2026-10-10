@@ -183,7 +183,7 @@ describe("二次确认清单", () => {
   });
 
   it("Seedream 无原生负向：负向拼进发送文本末尾", () => {
-    const b = board([prompt("p", "一只橘猫"), prompt("n", "模糊"), task("t", { model: "doubao-seedream-5-0-lite-260128" })], [edge("p", "t", "positive"), edge("n", "t", "negative")]);
+    const b = board([prompt("p", "一只橘猫"), prompt("n", "模糊"), task("t", { model: "doubao-seedream-5-0-flash-260915" })], [edge("p", "t", "positive"), edge("n", "t", "negative")]);
     const [item] = buildConfirmItems(b, BUILTIN_TABLE, ["t"], ctx);
     expect(item.send?.text).toBe("一只橘猫\n避免出现：模糊");
     expect(item.send?.negativeInlined).toBe(true);
@@ -216,7 +216,7 @@ describe("二次确认清单", () => {
   });
 
   it("Seedream 请求形态已接入，不因请求形态标红", () => {
-    const b = board([prompt("p", "一只橘猫"), task("t", { model: "doubao-seedream-5-0-lite-260128" })], [edge("p", "t", "positive")]);
+    const b = board([prompt("p", "一只橘猫"), task("t", { model: "doubao-seedream-5-0-flash-260915" })], [edge("p", "t", "positive")]);
     const [item] = buildConfirmItems(b, BUILTIN_TABLE, ["t"], { discovery: { source: "none" }, missingNodes: new Set(), alphaByNode: new Map() });
     expect(texts(item).join()).not.toContain("请求形态");
   });
@@ -274,11 +274,11 @@ describe("二次确认：「图N」校验与提示", () => {
 
   it("英文序号未验证的模型：英文提示词带参考图时提示", () => {
     const b = board(
-      [prompt("p", "Put @图1 on a beach"), reference("r1"), task("t", { model: "doubao-seedream-5-0-lite-260128" })],
+      [prompt("p", "Put @图1 on a beach"), reference("r1"), task("t", { model: "doubao-seedream-5-0-flash-260915" })],
       [edge("p", "t", "positive"), edge("r1", "t", "image:0")],
     );
     const t = structuredClone(BUILTIN_TABLE);
-    t.models.find((m) => m.model_id === "doubao-seedream-5-0-lite-260128")!.reference_phrasing.en_verified = "untested";
+    t.models.find((m) => m.model_id === "doubao-seedream-5-0-flash-260915")!.reference_phrasing.en_verified = "untested";
     const [item] = buildConfirmItems(b, t, ["t"], ctx);
     expect(item.warnings).toContain("该模型英文序号未验证");
     expect(item.send?.text).toBe("This request provides one reference image, identified as Image 1. Use the visual content of Image 1 to follow the user instructions below; image references without a number in those instructions refer to Image 1.\n\nWhen the user specifies a reference purpose, use Image 1 for that purpose. When the user asks to modify the image, use Image 1 as the editing base and preserve content unrelated to the requested changes.\n\nUser instructions:\nPut Image 1 on a beach");

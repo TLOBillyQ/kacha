@@ -74,6 +74,7 @@ interface Case {
 }
 
 const CASES: Case[] = [
+  { name: "Lite 停用明确提示", board: ready({ model: "doubao-seedream-5-0-lite-260128" }, [], "猫"), expected: [["modelRetired", "error"]] },
   { name: "正向提示词未连接：未就绪", board: board([task("t")]), expected: [["positiveMissing", "notReady"]] },
   { name: "合法任务无原因", board: ready({}, [], "一只橘猫"), expected: [] },
   { name: "编辑工作流低于最少参考图数不算原因（文生图 0 张合法）", board: ready({}, [], "猫"), expected: [] },
@@ -323,10 +324,10 @@ describe("警告与未引用序号", () => {
   });
 
   it("英文提示词 + 参考图 + 英文序号未验证的模型：黄色警告，不阻断", () => {
-    const lite = "doubao-seedream-5-0-lite-260128";
+    const flash = "doubao-seedream-5-0-flash-260915";
     const t = structuredClone(BUILTIN_TABLE);
-    t.models.find((m) => m.model_id === lite)!.reference_phrasing.en_verified = "untested";
-    const patch = { model: lite, size_spec: { tier: "2K", ratio: "1:1", width: null, height: null } };
+    t.models.find((m) => m.model_id === flash)!.reference_phrasing.en_verified = "untested";
+    const patch = { model: flash, size_spec: { tier: "2K", ratio: "1:1", width: null, height: null } };
     const v = view(ready(patch, ["r1"], "Put @图1 on a beach"), t);
     expect(v.warnings).toEqual(["该模型英文序号未验证"]);
     expect(v.reasons).toEqual([]);
