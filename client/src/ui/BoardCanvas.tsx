@@ -204,7 +204,7 @@ export function BoardCanvas({
 
   // 每个图片源节点的透明通道（导入 / 定位时已有缓存，未读的批量补读）；未知不进入 Map。
   const imageNodes = useMemo(() => board.nodes.filter((n) => n.type === "reference" || n.type === "result"), [board.nodes]);
-  const imageAbsPaths = useMemo(() => imageNodes.map((n) => resolveFromRoot(outputRoot, n.path)), [imageNodes, outputRoot]);
+  const imageAbsPaths = useMemo(() => imageNodes.flatMap((n) => [resolveFromRoot(outputRoot, n.path), ...(n.type === "result" ? (n.record.layers ?? []).map(layer => resolveFromRoot(outputRoot, `${n.path.slice(0, n.path.length - n.file.length)}${layer.file}`)) : [])]), [imageNodes, outputRoot]);
   const imageInfos = useImageInfos(imageAbsPaths);
   // 图片宽高晚于画板变更读到（刚打开画板、刚重新定位）、任务结束解除锁定、能力表或输出根目录变化时补算自动宽高比：
   // 系统变更，不构成撤销步；环境经 apply 取最新，这里的依赖只决定何时补算。
@@ -213,9 +213,13 @@ export function BoardCanvas({
   }, [board, imageInfos, locked, table, outputRoot, applyChange]);
   const alphaByNode = useMemo(() => {
     const map = new Map<string, boolean>();
-    imageNodes.forEach((n, i) => {
-      const info = imageInfos.get(imageAbsPaths[i]);
+    imageNodes.forEach((n) => {
+      const info = imageInfos.get(resolveFromRoot(outputRoot, n.path));
       if (info) map.set(n.id, info.has_alpha);
+      if (n.type === "result") (n.record.layers ?? []).forEach((layer, i) => {
+        const layerInfo = imageInfos.get(resolveFromRoot(outputRoot, `${n.path.slice(0, n.path.length - n.file.length)}${layer.file}`));
+        if (layerInfo) map.set(`${n.id}:layer:${i + 1}`, layerInfo.has_alpha);
+      });
     });
     return map;
   }, [imageNodes, imageAbsPaths, imageInfos]);
