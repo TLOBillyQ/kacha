@@ -2,13 +2,51 @@ import { describe, expect, it } from "vitest";
 import type { BoardEdge } from "./board";
 import { BUILTIN_TABLE, findModel, type ModelCapability, type WorkflowName } from "./capabilities";
 import { applyHighlightOverlay, REGION_COLORS } from "./overlay";
-import { expandImageEdges, firstRegionOf, type SlotRef } from "./region";
+import { expandImageEdges, firstRegionOf, slotsFromReferences, type SlotRef } from "./region";
 import { planSend, promptLanguage, referenceProblemsOf } from "./sendPlan";
+
+const flash = findModel(BUILTIN_TABLE, "doubao-seedream-5-0-flash-260915")!;
+
+it("Flash 跨图坐标区域按输入顺序用图N，提示坐标端点为0–999", () => {
+  const edges: BoardEdge[] = [
+    { from: ["a", "out"], to: ["t", "image:0"], source_layer: null, system: false, extra: {}, region: { rects: [[0, 0, 1, 1]], render: "bbox_tag" } },
+    { from: ["b", "out"], to: ["t", "image:1"], source_layer: null, system: false, extra: {}, region: { rects: [[0.25, 0.25, 0.75, 0.75]], render: "bbox_tag", coordinate_kind: "point" } },
+  ];
+  const plan = planSend(flash, expandImageEdges(edges, "highlight_overlay"), "Copy region 2 of Image 2 into region 1 of @图1, keep the rest unchanged", "");
+  expect(plan.referenceCount).toBe(2);
+  expect(plan.text).toContain("图1 <bbox>0 0 999 999</bbox>");
+  expect(plan.text).toContain("图2 <point>500 500</point>");
+  expect(plan.text).toContain("keep the rest unchanged");
+  expect(plan.text).not.toContain("Image ");
+});
+
+it("Flash 同时编号坐标与叠加区域，双图展开后重建一致且拒绝坏坐标及引用", () => {
+  const refs = [
+    { source: { kind: "reference" }, region: { rects: [[0, 0, 1, 1] as [number, number, number, number]], render: "bbox_tag" as const, source_port: 1 } },
+    { source: { kind: "reference" } },
+    { source: { kind: "overlay" }, region: { rects: [[0.1, 0.1, 0.5, 0.5] as [number, number, number, number]], render: "highlight_overlay" as const, source_port: 2 } },
+  ];
+  const slots = slotsFromReferences(refs);
+  const plan = planSend(flash, slots, "图2 的区域2复制到区域1，其余不变", "");
+  expect(plan.text).toContain("图2 的黄色区域复制到图1 <bbox>0 0 999 999</bbox>");
+  expect(plan.referenceCount).toBe(3);
+  expect(plan.referenceProblems.issues).toEqual([]);
+  expect(planSend(flash, slots, "图3，Image 0，区域3", "").referenceProblems.issues).toHaveLength(3);
+  refs[0].region!.rects = [[-0.1, 0, 1, 1]];
+  expect(planSend(flash, slotsFromReferences(refs), "图1", "").referenceProblems.issues).toContain("图1 的区域坐标无效，需要0–1范围内的非空矩形");
+});
+
+it("Flash 单图叠加的说明使用实际两图数量，所有区域输入拒绝坏坐标", () => {
+  const slots = [image(1, 1), overlay(2, 1, 1, 1)];
+  const plan = planSend(flash, slots, "把区域1改为红色", "");
+  expect(plan.text).toContain("本次提供 2 张参考图，按顺序为图1、图2。");
+  const edge: BoardEdge = { from: ["a", "out"], to: ["t", "image:0"], source_layer: null, system: false, extra: {}, region: { rects: [[0.8, 0, 0.2, 1]], render: "highlight_overlay" } };
+  expect(planSend(flash, expandImageEdges([edge], "highlight_overlay"), "图1", "").referenceProblems.issues).toContain("图1 的区域坐标无效，需要0–1范围内的非空矩形");
+});
 
 const qwenPro = findModel(BUILTIN_TABLE, "qwen-image-3.0-pro")!;
 const qwen = findModel(BUILTIN_TABLE, "qwen-image-3.0")!;
 const seedreamPro = findModel(BUILTIN_TABLE, "doubao-seedream-5-0-pro-260628")!;
-const seedreamLite = findModel(BUILTIN_TABLE, "doubao-seedream-5-0-lite-260128")!;
 /** 没有区域固定句模板：发送文本 = 前缀 + 改写后的提示词，便于单看改写。 */
 const noPhrases: ModelCapability = { ...qwenPro, region_hint_phrasing: {} };
 
@@ -83,7 +121,6 @@ const MODELS: { model: ModelCapability; native: boolean }[] = [
   { model: qwenPro, native: true },
   { model: qwen, native: true },
   { model: seedreamPro, native: false },
-  { model: seedreamLite, native: false },
 ];
 
 const NEGATIVE = { zh: { text: "模糊", line: "\n避免出现：模糊" }, en: { text: "blurry", line: "\nAvoid: blurry" } };
@@ -98,7 +135,7 @@ it("单张用户参考图默认引用，按已确认文本说明参考用途与�
   expect(plan.referenceCount).toBe(1);
 });
 
-describe("发送计划：4 个内置模型 × 参考图与区域 × 语言 × 负向", () => {
+describe("发送计划：3 个内置模型 × 参考图与区域 × 语言 × 负向", () => {
   for (const { model, native } of MODELS) {
     for (const c of CASES) {
       for (const language of ["zh", "en"] as const) {

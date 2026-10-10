@@ -232,7 +232,7 @@ export function BoardCanvas({
         const port = imagePortIndex(e.to[1])! + 1;
         const modelName = findModel(table, task.model)?.display_name ?? task.model;
         const firstRegion = firstRegionOfEdge(boardRef.current, task.id, e.to[1]);
-        return [{ label: `${modelName} 的图${port}`, edgeRef: { from: e.from, to: e.to }, rects: e.region?.rects ?? [], render, firstRegion }];
+        return [{ label: `${modelName} 的图${port}`, edgeRef: { from: e.from, to: e.to }, rects: e.region?.rects ?? [], render: e.region?.render ?? render, coordinateKind: e.region?.coordinate_kind, coordinateAvailable: findModel(table, task.model)?.request_shape === "seedream_flash_images_generations", firstRegion }];
       }),
     [table],
   );

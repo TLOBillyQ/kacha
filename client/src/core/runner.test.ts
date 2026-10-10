@@ -3,6 +3,44 @@ import type { BoardNode } from "./board";
 import { parseOutcome } from "./taskDir";
 import { board, harness, settle } from "./testing/runnerHarness";
 
+import { createRunner } from "./runner";
+import { BUILTIN_TABLE } from "./capabilities";
+import { memoryTaskFs } from "./testing/memoryTaskFs";
+import { sendPlanOf } from "./taskView";
+
+it("Flash 区域发送文本、原图/叠加图顺序及任务记录经runner保持一致，重新生成还原坐标", async () => {
+  const fs = memoryTaskFs();
+  const b = board(["t1"], true);
+  const t = b.nodes.find((n) => n.type === "task")!;
+  if (t.type !== "task") throw new Error("task");
+  t.model = "doubao-seedream-5-0-flash-260915";
+  const image = b.edges.find((e) => e.to[1] === "image:0")!;
+  image.region = { rects: [[0, 0, 1, 1]], render: "bbox_tag", coordinate_kind: "point" };
+  const png = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="), c => c.charCodeAt(0));
+  fs.files.set("/root/refs/cat.png", png);
+  const bodies: any[] = [];
+  const r = createRunner({ concurrency: 1, log: () => {}, apply: (_, c) => { if (c.kind === "submitted") t.last_submitted = c.lastSubmitted; }, deps: {
+    ...fs, now: () => new Date("2026-10-10T10:00:00Z"), schedule: () => () => {},
+    imageCodec: { decode: async () => ({ width: 1024, height: 1024, hasAlpha: () => true, encode: async () => png, close() {} }) },
+    fetch: async (_, init) => { bodies.push(JSON.parse(String(init?.body))); return { status: 200, headers: { get: () => null }, text: async () => JSON.stringify({ data: [{ b64_json: btoa(String.fromCharCode(...png)) }] }), arrayBuffer: async () => png.buffer as ArrayBuffer }; },
+  }});
+  const target = { boardKey: "A", boardFile: "A", table: BUILTIN_TABLE, outputRoot: "/root", baseUrl: "http://gw", apiKey: "k" };
+  const shown = sendPlanOf(b, BUILTIN_TABLE, "t1")!;
+  expect(await r.submit(target, b, ["t1"])).toEqual([]);
+  await settle();
+  const records = [...fs.files].filter(([p]) => p.endsWith("/task.json")).map(([, bytes]) => JSON.parse(new TextDecoder().decode(bytes)));
+  expect(records[0].send_text).toBe(shown.text);
+  expect(bodies[0].prompt).toBe(shown.text);
+  expect(bodies[0].image).toHaveLength(1);
+  expect(records[0].references[0].region).toEqual({ rects: [[0, 0, 1, 1]], render: "bbox_tag", coordinate_kind: "point", source_port: 1 });
+  expect(await r.regenerate(target, b, "t1")).toBeNull();
+  await settle();
+  expect(bodies[1].prompt).toBe(shown.text);
+  image.region!.rects = [[-1, 0, 1, 1]];
+  expect(await r.submit(target, b, ["t1"])).toHaveLength(1);
+  expect(bodies).toHaveLength(2);
+});
+
 describe("Flash 失败政策", () => {
   it.each([401, 400, 500])("HTTP %i 不重发，保留失败", async (status) => {
     const h = harness();

@@ -22,6 +22,8 @@ export interface RegionTarget {
   edgeRef: { from: PortRef; to: PortRef };
   rects: Rect01[];
   render: RegionRender;
+  coordinateKind?: "point" | "bbox";
+  coordinateAvailable?: boolean;
   /** 这条线第一个区域的区域编号（0 起）；区域N 的颜色由它推导。 */
   firstRegion: number;
 }
@@ -59,6 +61,7 @@ export function PreviewDialog({ req, toast, onClose }: Props) {
   const { apply, addAsReference, continueEditing } = useBoardActions();
   const stage = useRef<HTMLImageElement>(null);
   const [editing, setEditing] = useState<RegionTarget | null>(req.edit ?? null);
+  const [regionMode, setRegionMode] = useState(req.edit?.render === "bbox_tag" ? req.edit.coordinateKind ?? "bbox" : "overlay");
   const [rects, setRects] = useState<Rect01[]>(() => (req.edit ? req.edit.rects.map((r) => [...r] as Rect01) : []));
   const [selected, setSelected] = useState<number | null>(null);
   const [drag, setDrag] = useState<Drag | null>(null);
@@ -80,6 +83,7 @@ export function PreviewDialog({ req, toast, onClose }: Props) {
 
   const startEdit = (target: RegionTarget) => {
     setEditing(target);
+    setRegionMode(target.render === "bbox_tag" ? target.coordinateKind ?? "bbox" : "overlay");
     setRects(target.rects.map((r) => [...r] as Rect01));
     setSelected(null);
     setSolo(null);
@@ -143,7 +147,7 @@ export function PreviewDialog({ req, toast, onClose }: Props) {
   };
   const saveRegion = () => {
     if (!editing) return;
-    apply({ kind: "setRegion", edge: editing.edgeRef, region: rects.length ? { rects, render: editing.render } : null });
+    apply({ kind: "setRegion", edge: editing.edgeRef, region: rects.length ? { rects, render: regionMode === "overlay" ? "highlight_overlay" : "bbox_tag", ...(regionMode !== "overlay" ? { coordinate_kind: regionMode as "point" | "bbox" } : {}) } : null });
     onClose();
   };
 
@@ -181,6 +185,15 @@ export function PreviewDialog({ req, toast, onClose }: Props) {
         <div className="modal-head">
           <strong>{req.title}</strong>
           {editing && <span className="badge">编辑区域：{editing.label}</span>}
+          {editing?.coordinateAvailable && (
+            <label className="small">区域表达
+              <select aria-label="区域表达" value={regionMode} onChange={(e) => setRegionMode(e.target.value)}>
+                <option value="overlay">高亮叠加</option>
+                <option value="bbox">坐标框</option>
+                <option value="point">坐标点（框中心）</option>
+              </select>
+            </label>
+          )}
           {solo !== null && <span className="badge">单层：图层{solo + 1}</span>}
           {outlines.length > 0 && !editing && (
             <label className="small" title="本次编辑框选的修改区域（只读描边，来自产出任务的提交快照）">
@@ -224,7 +237,7 @@ export function PreviewDialog({ req, toast, onClose }: Props) {
                       top: `${r[1] * 100}%`,
                       width: `${(r[2] - r[0]) * 100}%`,
                       height: `${(r[3] - r[1]) * 100}%`,
-                      background: regionCss(first + i, 0.5),
+                      background: regionMode === "overlay" ? regionCss(first + i, 0.5) : "transparent",
                       borderColor: regionCss(first + i, 0.9),
                     }}
                   >
@@ -311,7 +324,7 @@ export function PreviewDialog({ req, toast, onClose }: Props) {
           {editing ? (
             <>
               <span className={first + rects.length > MAX_REGIONS ? "region-limit-exceeded" : "muted"}>
-                拖拽空白处画新矩形；拖动矩形移动，拖动角柄缩放。提示词里写「区域N」指代对应颜色的区域，每个任务最多 {MAX_REGIONS} 个
+                拖拽空白处画新矩形；拖动矩形移动，拖动角柄缩放。提示词里写「区域N」指代对应区域，每个任务最多 {MAX_REGIONS} 个。{regionMode === "point" && "坐标点取每个框的中心，影响范围由模型判断。"}
               </span>
               <button disabled={selected === null} onClick={removeSelected}>
                 删除选中

@@ -110,6 +110,8 @@ export async function prepareJob(
 
   const sources = imageSources(board, taskNodeId, outputRoot);
   const slots = imagePortSlots(board, table, taskNodeId);
+  const send = planSend(model, slots, snapshot.prompt, snapshot.negative_prompt);
+  if (model.request_shape === "seedream_flash_images_generations" && send.referenceProblems.issues.length) throw new LocalError(send.referenceProblems.issues.join("；"));
   if (model.request_shape === "seedream_flash_images_generations" && slots.length > 10) throw new LocalError("Flash 参考图最多 10 张");
   // 先按用户连线读全部源图，再按展开槽组装：叠加槽由其原图合成。
   // 读到即按该任务模型的输入规则处理成参考图快照；叠加图从处理后的快照合成，两者尺寸一致。
@@ -134,12 +136,12 @@ export async function prepareJob(
         image.kind === "reference"
           ? { kind: "reference", path: image.path, sha256: image.sha256 }
           : { kind: "result", task_id: image.task_id, file: image.file, ...(image.source_layer !== null ? { source_layer: image.source_layer } : {}) };
-      references.push({ ...sourceBytes[i], source });
+      references.push({ ...sourceBytes[i], source, ...(slot.coordinateRegion ? { region: { ...slot.coordinateRegion, source_port: slot.port } } : {}) });
     } else {
       if (!deps.composeOverlay) throw new LocalError("框选修改区域需要叠加合成能力，当前环境不支持");
       const sourcePort = slot.sourcePort!;
       const region = slot.edge.region!;
-      const composed = await deps.composeOverlay(sourceBytes[sourcePort - 1].bytes, region.rects, firstRegion.get(slot.port)!);
+      const composed = await deps.composeOverlay(sourceBytes[slot.userPort - 1].bytes, region.rects, firstRegion.get(slot.port)!);
       const overlay = await fitForModel(deps, composed, model);
       references.push({ ...overlay, source: { kind: "overlay", of: sourcePort }, region: { rects: region.rects, render: "highlight_overlay", source_port: sourcePort } });
     }
@@ -152,7 +154,7 @@ export async function prepareJob(
     model: model.model_id,
     prompt: snapshot.prompt,
     negativePrompt: snapshot.negative_prompt,
-    send: planSend(model, slots, snapshot.prompt, snapshot.negative_prompt),
+    send,
     sizeSpec: snapshot.size_spec,
     size,
     layerDecomposition: snapshot.layer_decomposition,
@@ -212,6 +214,7 @@ export async function prepareRegenerate(
   // 按当前规则重算发送计划，不重放 task.json 里的 send_text：旧任务可能按「叠加图占用户序号」的旧口径存（#113），
   // 固定句也要按当前能力表模板重建。
   const send = planSend(model, slotsFromReferences(previous.references), previous.prompt, previous.negative_prompt);
+  if (model.request_shape === "seedream_flash_images_generations" && send.referenceProblems.issues.length) throw new LocalError(send.referenceProblems.issues.join("；"));
 
   // 自动宽高比（仅重新生成，生成变体始终按那次提交）：按节点当前的分辨率档与算出的宽高比；换算不出时仍按上次提交。
   const current = args.fromTaskId === undefined && task?.type === "task" && isAutoRatio(task.size_spec) ? task.size_spec : null;

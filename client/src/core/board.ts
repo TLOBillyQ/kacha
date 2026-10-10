@@ -15,6 +15,8 @@ export type RegionRender = "highlight_overlay" | "marked_image" | "bbox_tag";
 export interface Region {
   rects: [number, number, number, number][];
   render: RegionRender;
+  /** 坐标表达以矩形中心为 point 或矩形边界为 bbox；提示坐标为0–999。 */
+  coordinate_kind?: "point" | "bbox";
 }
 
 interface NodeBase {

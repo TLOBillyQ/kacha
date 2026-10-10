@@ -28,6 +28,10 @@ export interface SlotRef {
   sourcePort: number | null;
   /** 叠加槽：该图框出的区域数；原图槽：0。 */
   regionCount: number;
+  /** 官方提示坐标，不增加参考图名额。 */
+  coordinateRegion?: Region;
+  /** 用于提交前校验，叠加图和坐标共用用户区域数据。 */
+  regionData?: Region;
 }
 
 /** 展开后的端口槽：highlight_overlay 下有区域的用户线贡献「原图 + 紧随的叠加图」两个发送序号、一个用户序号。 */
@@ -43,9 +47,10 @@ export interface PortSlot extends SlotRef {
 export function expandImageEdges(edges: BoardEdge[], render: RegionRender | null): PortSlot[] {
   const slots: PortSlot[] = [];
   for (const [i, edge] of edges.entries()) {
-    slots.push({ port: slots.length + 1, userPort: i + 1, kind: "image", edge, sourcePort: null, regionCount: 0 });
+    const coordinateRegion = render !== null && edge.region?.render === "bbox_tag" ? edge.region : undefined;
+    slots.push({ port: slots.length + 1, userPort: i + 1, kind: "image", edge, sourcePort: null, regionCount: coordinateRegion?.rects.length ?? 0, ...(coordinateRegion ? { coordinateRegion } : {}), ...(edge.region ? { regionData: edge.region } : {}) });
     const regionCount = edge.region?.rects.length ?? 0;
-    if (render === "highlight_overlay" && regionCount > 0) {
+    if (render === "highlight_overlay" && !coordinateRegion && regionCount > 0) {
       slots.push({ port: slots.length + 1, userPort: i + 1, kind: "overlay", edge, sourcePort: slots[slots.length - 1].port, regionCount });
     }
   }
@@ -56,12 +61,12 @@ export function expandImageEdges(edges: BoardEdge[], render: RegionRender | null
  * 槽的第二个构造函数：从任务记录的 references[]（按发送序号排列，叠加图紧随原图）重建。
  * 用户序号按顺序给非叠加条目编 1..k；叠加条目沿用原图的用户序号。#113 之前的旧任务记录 references[] 形状相同，同样适用。
  */
-export function slotsFromReferences(references: { source: { kind: string }; region?: { source_port: number; rects: unknown[] } }[]): SlotRef[] {
+export function slotsFromReferences(references: { source: { kind: string }; region?: { source_port: number; rects: unknown[]; render?: string; coordinate_kind?: "point" | "bbox" } }[]): SlotRef[] {
   let userPort = 0;
   return references.map((ref, i) =>
     ref.source.kind === "overlay" && ref.region
       ? { kind: "overlay", port: i + 1, userPort, sourcePort: ref.region.source_port, regionCount: ref.region.rects.length }
-      : { kind: "image", port: i + 1, userPort: ++userPort, sourcePort: null, regionCount: 0 },
+      : { kind: "image", port: i + 1, userPort: ++userPort, sourcePort: null, regionCount: ref.region?.render === "bbox_tag" ? ref.region.rects.length : 0, ...(ref.region?.render === "bbox_tag" ? { coordinateRegion: ref.region as Region } : {}) },
   );
 }
 
@@ -70,7 +75,7 @@ export function firstRegionOf(slots: SlotRef[]): Map<number, number> {
   const out = new Map<number, number>();
   let next = 0;
   for (const s of slots) {
-    if (s.kind !== "overlay") continue;
+    if (s.kind !== "overlay" && !s.coordinateRegion) continue;
     out.set(s.port, next);
     next += s.regionCount;
   }
