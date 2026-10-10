@@ -117,6 +117,26 @@ describe("Lite 停用", () => {
     expect(h.files.size).toBe(1);
     expect(h.files.get(path)).toEqual(old);
   });
+  it("旧 Lite 结果作为 Flash 任务的参考图仍可提交，快照与谱系指向旧任务目录", async () => {
+    const png = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="), c => c.charCodeAt(0));
+    const h = harness({ imageCodec: { decode: async () => ({ width: 1024, height: 1024, hasAlpha: () => false, encode: async () => png, close: () => {} }) } });
+    h.replies.push({ status: 200, body: JSON.stringify({ data: [{ b64_json: btoa(String.fromCharCode(...png)) }] }) });
+    const b = board();
+    const t = b.nodes.find((n) => n.type === "task")!;
+    if (t.type !== "task") throw new Error("task");
+    t.model = "doubao-seedream-5-0-flash-260915";
+    t.image_ports = 1;
+    h.files.set("/root/2026-09-16/task-old/result.png", png);
+    b.nodes.push({ id: "old", type: "result", pos: [0, 200], size: [100, 100], extra: {}, task_id: "task-old", file: "result.png", path: "2026-09-16/task-old/result.png", layer_count: 0, record: { model: "doubao-seedream-5-0-lite-260128", prompt: "旧猫", negative_prompt: "", size_spec: { tier: "3K", ratio: "1:1", width: null, height: null }, submitted_at: "2026-09-16T09:15:00Z" } });
+    b.edges.push({ from: ["old", "out"], to: ["t1", "image:0"], source_layer: null, region: null, system: false, extra: {} });
+    expect(await h.runner.submit(h.target(), b, ["t1"])).toEqual([]);
+    await settle();
+    expect(h.requests).toEqual(["http://gw/v1/images/generations"]);
+    const record = [...h.files].filter(([p]) => p.endsWith("/task.json")).map(([, bytes]) => JSON.parse(new TextDecoder().decode(bytes)))[0];
+    expect(record.model).toBe("doubao-seedream-5-0-flash-260915");
+    expect(record.references[0].source).toEqual({ kind: "result", task_id: "task-old", file: "result.png" });
+    expect([...h.files].find(([p]) => p.endsWith("/reference-1.png"))![1]).toEqual(png);
+  });
 });
 
 describe("Flash 失败政策", () => {

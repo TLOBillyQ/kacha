@@ -26,6 +26,7 @@ function runnerSetup(alpha: boolean | undefined = true) {
   let downloadFails = false;
   const opaqueBytes = Uint8Array.from(Buffer.from(makePng(32, 32), "base64"));
   const deps: RunDeps = { ...fs, now: () => new Date(Date.UTC(2026, 9, 10, 0, 0, tick++)), schedule: () => () => {},
+    composeOverlay: async () => bytes,
     imageCodec: { decode: async data => ({ width: 32, height: 32, hasAlpha: () => data[25] === 2 ? false : alpha as boolean, encode: async () => bytes, close: () => {} }) },
     fetch: async (_url, init) => {
       if (init.method === "GET") return { status: 403, headers: { get: () => null }, text: async () => "denied", arrayBuffer: async () => bytes.slice().buffer };
@@ -73,6 +74,18 @@ it("透明结果若实际不带 alpha，不保存或伪造成功", async () => {
   await settle();
   expect(h.runner.getSnapshot().board("A").statuses.get("t1")).toEqual({ kind: "failed", label: "响应无效" });
   expect([...h.fs.files.keys()].some(p => p.endsWith("/result.png"))).toBe(false);
+});
+
+it("区域指示把唯一 alpha 输入展开成原图+叠加图后，运行前以同一理由阻断：零请求零写入", async () => {
+  // 组合验收（区域 × 透明）：叠加展开发生在发送计划，透明要求恰好一张实际参考图，
+  // 阻断理由必须与节点控件展示的 transparentNeedsOneImage 一致。
+  const h = runnerSetup();
+  const b = h.board();
+  b.edges[1].region = { rects: [[0, 0, 0.5, 0.5]], render: "highlight_overlay" };
+  expect(await h.runner.submit(h.target, b, ["t1"])).toContain("透明背景需要恰好一张实际参考图");
+  await settle();
+  expect(h.bodies).toEqual([]);
+  expect([...h.fs.files.keys()].some(p => p.endsWith("/task.json"))).toBe(false);
 });
 
 it.each([false, undefined])("公开运行器对实际快照 alpha=%s 拒绝发送", async alpha => {

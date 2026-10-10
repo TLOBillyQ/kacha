@@ -197,3 +197,76 @@ test("旧结果兼容：无 layers.json、旧版四元数组 bbox 的 Flash 结�
   expect(json).toEqual({ base: { file: "result.png", z_index: 0 }, layers: [{ file: "layers/01.png", z_index: 1, bounding_box: [0, 0, 64, 64] }] });
   expect(errors).toEqual([]);
 });
+
+/** 手工组装的画板包：清单 + 画板 + Flash 图层任务目录（可缺 layers/02.png）。 */
+function layerPack(boardText: string, withLayer2: boolean) {
+  const entries: Record<string, SeedFile> = {
+    "manifest.json": { text: JSON.stringify({ pack_format_version: 1, app_version: "0.9.0", boards: ["画板/包内画板.ugcboard.json"] }) },
+    "画板/包内画板.ugcboard.json": { text: boardText },
+    [`${DIR}/task.json`]: taskFiles()[`${OUTPUT_ROOT}/${DIR}/task.json`],
+    [`${DIR}/result.png`]: { b64: BASE },
+    [`${DIR}/layers.json`]: { text: layersJson() },
+    [`${DIR}/layers/01.png`]: { b64: L1 },
+    ...(withLayer2 ? { [`${DIR}/layers/02.png`]: { b64: L2 } } : {}),
+  };
+  return { entries };
+}
+
+async function importPack(page: Page, path: string) {
+  await page.evaluate((p) => window.__e2e.dialogAnswers.open.push(p), path);
+  await page.getByRole("button", { name: "画板包 ▾" }).click();
+  await page.getByRole("menuitem", { name: "导入画板包…" }).click();
+  await expect(page.locator(".toast")).toHaveText("导入 1 个任务，跳过 0 个");
+}
+
+test("画板包往返缺图层文件：导入后来源图层任务按真源校验明确阻断，不回落底图、不发送请求", async ({ page }) => {
+  const packBoard = board("包内画板", [promptNode("p1", "改一改"), flashResult("res", [0, 300]), taskNode("t1", { model: FLASH, image_ports: 1 })], [
+    edge("p1", "t1", "positive"),
+    edge("res", "t1", "image:0", { source_layer: 2 }),
+  ]);
+  // 包内缺 layers/02.png：layers.json 仍引用它，导入后按任务目录真源校验。
+  await openApp(page, boardScenario("空", board("空", [], []), { packs: { "/e2e/in/missing.ugcpack": layerPack(packBoard, false) } }));
+  await importPack(page, "/e2e/in/missing.ugcpack");
+  await task(page, "t1").getByRole("button", { name: "展开" }).click();
+  await expect(task(page, "t1")).toContainText("图1 图片缺失：result.png 图层2");
+  const bodies: Record<string, any>[] = [];
+  await page.route(`${GW}/v1/images/generations`, (route) => {
+    bodies.push(JSON.parse(route.request().postData()!));
+    return route.fulfill({ json: { data: [{ b64_json: png(64, 64) }] } });
+  });
+  await task(page, "t1").locator(".task-actions button.primary").click();
+  await expect(page.locator(".toast")).toContainText("无法运行");
+  expect(bodies).toHaveLength(0);
+});
+
+test("画板包往返后来源图层加为参考图：连线带图层身份，提交发送所选图层实际字节", async ({ page }) => {
+  const packBoard = board("包内画板", [promptNode("p1", "改成蓝色"), flashResult("res", [0, 300]), taskNode("t1", { model: FLASH, image_ports: 1 })], [
+    edge("p1", "t1", "positive"),
+  ]);
+  await openApp(page, boardScenario("空", board("空", [], []), { packs: { "/e2e/in/ref.ugcpack": layerPack(packBoard, true) } }));
+  await importPack(page, "/e2e/in/ref.ugcpack");
+  const bodies: Record<string, any>[] = [];
+  await page.route(`${GW}/v1/images/generations`, (route) => {
+    bodies.push(JSON.parse(route.request().postData()!));
+    return route.fulfill({ json: { data: [{ b64_json: png(64, 64) }] } });
+  });
+  // 先选中目标任务（点标题栏避开输入控件），再按 Shift 多选键双击结果缩略图打开预览（不挤掉任务选区）。
+  await task(page, "t1").locator(".task-title span").first().click();
+  await page.locator(`.react-flow__node[data-id="res"] img.thumb`).dblclick({ modifiers: ["Shift"] });
+  await expect(page.getByRole("dialog")).toBeVisible();
+  await page.getByRole("dialog").getByRole("combobox").selectOption("2");
+  await page.getByRole("dialog").getByRole("button", { name: "加为参考图" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "关闭" }).first().click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  // 连线带来源图层身份（等自动保存落盘后从画板文件确认）
+  await expect.poll(async () => {
+    const texts = await e2e(page, (c) => c.list("/e2e/out/画板/").filter((p) => p.endsWith(".ugcboard.json") && !p.endsWith(".bak")).map((p) => c.readText(p)));
+    return texts.some((t) => t && (JSON.parse(t).edges as { source_layer?: number }[]).some((e) => e.source_layer === 2));
+  }).toBe(true);
+  await task(page, "t1").locator(".task-actions button.primary").click();
+  await expect.poll(() => bodies.length).toBe(1);
+  expect(bodies[0].image).toEqual([`data:image/png;base64,${L2}`]);
+  const recordTexts = await e2e(page, (c) => c.list("/e2e/out").filter((p) => p.endsWith("/task.json") && !p.includes("20260916T010000Z-0000000a")).map((p) => c.readText(p)));
+  expect(recordTexts).toHaveLength(1);
+  expect(JSON.parse(recordTexts[0]!).references[0].source).toEqual({ kind: "result", task_id: TASK_ID, file: "result.png", source_layer: 2 });
+});

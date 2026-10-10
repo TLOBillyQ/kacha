@@ -7,8 +7,9 @@ macOS 首次安装 zip、`.app.tar.gz` 及签名、`updater-macos-arm64.json`、
 执行人逐条勾选，并在末尾「记录」表中留痕。
 
 首次 updater 迁移操作见 [用户指南](auto-update-user-guide.md)，#14 已验证事实与待补证据见
-[Windows 验收记录](auto-update-windows-acceptance.md)。当前迁移目标待首个带 updater 签名的正式版发布。
-本清单不授予真实上传发布权限；本次文档切片不执行真实发布，也不关闭 Issue。
+[Windows 验收记录](auto-update-windows-acceptance.md)。Windows `v0.3.0` 已于 2026-10-09 作为首个带
+updater 签名的正式版发布并验证真实下载与签名；完整安装 / 重启 / 恢复 / 迁移及 macOS 仍未验收。
+本清单不授予真实上传发布权限；Flash 接入轮（#15–#21）未执行真实发布。
 
 ## 1. 定版本
 
@@ -24,11 +25,16 @@ macOS 首次安装 zip、`.app.tar.gz` 及签名、`updater-macos-arm64.json`、
     npm ci
     npm test
     npx tsc --noEmit
+    npm run test:e2e
+    npm run build
     cargo test --manifest-path src-tauri/Cargo.toml
     cd ..
     python3 -m unittest discover -s packaging/tests
 
 - [ ] 以上命令全部通过（Windows 上 `python3` 换成 `python` 或 `py -3`，需 Python 3.11+）。
+- [ ] Flash 验收只依赖上述自动化：能力表、发送计划、区域 / 透明 / 图层通路、Lite 停用与画板包
+      往返均由单元与浏览器测试断言可观测客户端行为；不要求人工冒烟、视觉验收或逐项付费网关测试，
+      合成资产不得冒称真实网关证据（证据规则见 `docs/research/seedream-flash.md`）。
 
 ## 3. 构建（每台目标机器各一次）
 
@@ -46,13 +52,16 @@ Tauri 不能交叉构建，Windows 包在 Windows x64 机器上构建，macOS �
 
 ## 4. 发布说明
 
+发布说明（Release 正文与 updater 更新说明）按 2026-10-10 用户要求只写摘要：连同标题控制在
+200 字以内，完整步骤统一由 [自动更新用户指南](auto-update-user-guide.md) 承载（ADR 0007 补记）。
+
 - [ ] 复制 `docs/release/release-notes-template.md` 为 `docs/release/release-notes-<版本>.md`，
-      替换 `{{版本}}`、填写本版变化，删除模板头部注释；随版本提交合入。
-- [ ] 内容包含：下载表、SHA256 校验命令、WebView2 说明与官方链接、
+      替换 `{{版本}}`、填写本版变化摘要，删除模板头部注释；随版本提交合入。
+- [ ] 摘要区分 updater 签名与操作系统代码签名，并指向用户指南。
+- [ ] 用户指南为最新且覆盖：下载表与 SHA256 校验命令、WebView2 说明与官方链接、
       SmartScreen「更多信息 → 仍要运行」、macOS Gatekeeper 放行方式、打开画板方式（不登记双击关联）、
-      数据位置与诊断导出入口。
-- [ ] 内容区分 updater 签名与操作系统代码签名，说明 HTTP 仅用于可信内网或 VPN、
-      首次迁移、用户主动更新重启、队列 / 保存保护、手动安装与旧版手动恢复，以及 macOS 未验收范围。
+      数据位置与诊断导出入口、HTTP 仅用于可信内网或 VPN、首次迁移、用户主动更新重启、
+      队列 / 保存保护、手动安装与旧版手动恢复，以及 macOS 未验收范围。
 
 ## 5. 发布（每台构建机各一次）
 
@@ -122,6 +131,12 @@ Tauri 不能交叉构建，Windows 包在 Windows x64 机器上构建，macOS �
 
 自动测试与真机验证分别记录提交、命令、版本、产物及证据。既有基线为 Vitest 845、Rust 44、
 packaging 33、浏览器 E2E 43；后续 worker 最新结果尚未核验，不将这些数量当作最新测试结果。
+
+2026-10-10 #21 收口记录（集成基线 `288ca69` 加本票组合测试与文档变更，本地集成、未发布）：
+`npm run typecheck` 通过；`npm test` Vitest 36 文件 / 952 用例全部通过；`npm run test:e2e`
+浏览器 78 用例全部通过（固定 1421 端口独立实例）；`npm run build` 通过。本轮无 Rust / 桌面桥及
+打包脚本变更，Cargo（最近记录 45 通过）与 packaging unittest（最近记录 33 通过）未重跑。
+以上为自动化客户端行为验证，不含付费网关调用、人工视觉验收或真机安装更新验收。
 
 | 项目 | 值 |
 | --- | --- |
