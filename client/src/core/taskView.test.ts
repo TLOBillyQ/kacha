@@ -201,7 +201,7 @@ const CASES: Case[] = [
     facts: { ...UNKNOWN, alphaByNode: new Map([["r1", false]]) },
     expected: [["transparentNoAlpha", "error"]],
   },
-  { name: "透明通道未知（没读到）不拦", board: seedreamPro({ transparent_background: true }, ["r1"]), expected: [] },
+  { name: "透明通道未知明确阻断", board: seedreamPro({ transparent_background: true }, ["r1"]), expected: [["transparentNoAlpha", "error"]] },
 ];
 
 /** 支持透明背景的 Seedream 5.0 pro（2K · 1:1），提示词引用全部参考图。 */

@@ -6,7 +6,7 @@ import { withinPixelRange } from "./size";
 import { isSupported, type ModelCapability } from "./capabilities";
 
 export function flashFeatureImplemented(model: ModelCapability | undefined, feature: "transparent" | "layers"): boolean {
-  return model?.request_shape !== "seedream_flash_images_generations" || feature === "layers";
+  return model?.request_shape !== "seedream_flash_images_generations" || feature === "layers" || feature === "transparent";
 }
 
 export type LayerSize = "1K" | "1.5K" | "2K" | "auto";
@@ -71,6 +71,8 @@ export function categoryForStatus(status: number): GatewayErrorCategory {
 export interface ReferenceImage {
   mediaType: string;
   bytes: Uint8Array;
+  /** 运行器对实际参考图快照解码后确认；未知不能作为透明背景输入。 */
+  hasAlpha?: boolean;
 }
 
 export interface OutputOptions {
@@ -171,7 +173,11 @@ const buildFlashImagesGenerations: RequestShape["build"] = (input) => {
   if (input.layerDecomposition && (input.references.length !== 1 || !["image/png", "image/jpeg"].includes(input.references[0].mediaType) || input.references[0].bytes.length > 30000000)) throw new GatewayError("config", "Flash 图层拆分需要一张 PNG/JPEG 参考图（不超过 30MB）");
   if (input.layerDecomposition && !["1K", "1.5K", "2K", "auto"].includes(input.layerSize ?? "auto")) throw new GatewayError("config", "Flash 图层尺寸无效");
   const options = outputOptions(input.outputOptions);
-  if (input.transparentBackground) throw new GatewayError("config", "Flash 透明背景通路尚未实现");
+  if (input.transparentBackground) {
+    if (input.references.length !== 1) throw new GatewayError("config", "透明背景需要恰好一张实际参考图");
+    if (options.output_format !== "png") throw new GatewayError("config", "透明背景输出必须为 PNG");
+    if (input.references[0].hasAlpha !== true) throw new GatewayError("config", "透明背景需要已确认带透明通道的参考图快照");
+  }
   return { path: TEXT_TO_IMAGE_PATH, body: {
     model: input.model.model_id,
     ...(input.text.trim() || !input.layerDecomposition ? { prompt: input.text } : {}),
@@ -179,6 +185,7 @@ const buildFlashImagesGenerations: RequestShape["build"] = (input) => {
     ...(input.layerDecomposition ? { layer_decomposition: true } : {}),
     ...options,
     optimize_prompt_options: { mode: "standard" },
+    ...(input.transparentBackground ? { background: "transparent" } : {}),
     ...(input.references.length ? { image: input.references.map(dataUrl) } : {}),
   } };
 };

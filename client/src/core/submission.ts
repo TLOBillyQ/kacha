@@ -209,10 +209,13 @@ export async function collectRunFacts(
   const alphaByNode = new Map<string, boolean>();
   await Promise.all(
     taskIds
-      .flatMap((id) => imageSources(board, id, outputRoot))
+      .flatMap((id) => {
+        const edges = imageEdges(board, id);
+        return imageSources(board, id, outputRoot).map((src, i) => ({ ...src, alphaKey: edges[i]?.source_layer == null ? src.nodeId : `${src.nodeId}:layer:${edges[i].source_layer}` }));
+      })
       .map((src) =>
         probe.inspectImage(src.absPath).then(
-          (info) => void alphaByNode.set(src.nodeId, info.has_alpha),
+          (info) => void alphaByNode.set(src.alphaKey, info.has_alpha),
           () => void missingNodes.add(src.nodeId),
         ),
       ),

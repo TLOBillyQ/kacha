@@ -30,6 +30,7 @@ export type ReasonKind =
   | "transparentUnsupported"
   | "transparentNeedsOneImage"
   | "transparentNoAlpha"
+  | "transparentNeedsPng"
   | "referenceOutOfRange"
   | "imageMissing";
 
@@ -42,7 +43,7 @@ export interface UnrunnableReason {
   text: string;
 }
 
-/** 界面采集的事实；读不到的一律当未知，未知不拦。 */
+/** 界面采集的事实；透明背景必须明确确认 alpha，其余未知按各项规则处理。 */
 export interface TaskFacts {
   /** 图片文件缺失的参考图 / 结果节点 id。 */
   missingNodes: ReadonlySet<string>;
@@ -129,16 +130,23 @@ function modelLabel(table: CapabilityTable, discovery: Discovery, modelId: strin
 }
 
 /**
- * 透明背景的前提：模型支持、恰好一条图片线、该图带透明通道。开关能否打开与打开后的不可运行原因都出自这一条规则。
- * 透明通道未知（没读到）时不拦；模型缺失时由「不在能力表内」拦，这里不重复。
+ * 透明背景按展开后的实际参考图数、所选文件的 alpha 与输出格式校验，开关和不可运行原因共用规则。
+ * 透明通道未知时阻止启用；模型缺失时由「不在能力表内」拦。
  */
 function transparentBlock(board: Board, model: ModelCapability | undefined, taskId: string, facts: TaskFacts): { kind: ReasonKind; text: string; hint: string } | null {
   if (!model) return null;
   if (!flashFeatureImplemented(model, "transparent")) return { kind: "transparentUnsupported", text: "Flash 透明背景通路尚未实现", hint: "通路尚未实现" };
   if (!isSupported(model.transparent_background)) return { kind: "transparentUnsupported", text: "模型不支持透明背景", hint: "模型不支持透明背景" };
   const edges = imageEdges(board, taskId);
-  if (edges.length !== 1) return { kind: "transparentNeedsOneImage", text: "透明背景需要恰好一条图片线", hint: "需要恰好一条图片线" };
-  return facts.alphaByNode.get(edges[0].from[0]) === false ? { kind: "transparentNoAlpha", text: "该图不带透明通道", hint: "该图不带透明通道" } : null;
+  if (expandImageEdges(edges, effectiveRegionRender(model)).length !== 1) {
+    const text = model.request_shape === "seedream_flash_images_generations" ? "需要恰好一张实际参考图" : "需要恰好一条图片线";
+    return { kind: "transparentNeedsOneImage", text: `透明背景${text}`, hint: text };
+  }
+  const task = findTask(board, taskId)!;
+  if (model.request_shape === "seedream_flash_images_generations" && task.output_options?.output_format === "jpeg") return { kind: "transparentNeedsPng", text: "透明背景输出必须为 PNG", hint: "输出必须为 PNG" };
+  const edge = edges[0];
+  const alpha = facts.alphaByNode.get(edge.source_layer === null ? edge.from[0] : `${edge.from[0]}:layer:${edge.source_layer}`);
+  return alpha === true ? null : { kind: "transparentNoAlpha", text: alpha === false ? "该图不带透明通道" : "参考图透明通道尚未确认", hint: alpha === false ? "该图不带透明通道" : "透明通道尚未确认" };
 }
 
 /** 按画板当前内容的发送计划；模型不在能力表内时没有发送计划。 */
