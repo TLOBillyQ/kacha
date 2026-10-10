@@ -26,6 +26,7 @@ export type ReasonKind =
   | "tooManyRegions"
   | "negativeUnsupported"
   | "sizeUnsupported"
+  | "layerNeedsOneImage"
   | "layerUnsupported"
   | "transparentUnsupported"
   | "transparentNeedsOneImage"
@@ -92,8 +93,11 @@ export function taskView(board: Board, table: CapabilityTable, taskId: string, f
   const refs = imageRefProblems(board, table, taskId);
   const transparent = transparentBlock(board, model, taskId, facts);
   const layer = model && !flashFeatureImplemented(model, "layers") ? "Flash 图层拆分通路尚未实现" : model && !isSupported(model.workflows[workflowOf(board, taskId)].layer_decomposition) ? "模型不支持拆分图层" : null;
+  const flashLayers = model?.request_shape === "seedream_flash_images_generations" && task.layer_decomposition;
   const reasons = [
-    ...promptReasons(board, taskId),
+    ...(flashLayers ? [] : promptReasons(board, taskId)),
+    ...(flashLayers && imagePortSlots(board, table, taskId).length !== 1 ? [reason("layerNeedsOneImage", "图层拆分需要恰好一张 PNG/JPEG 参考图，不支持区域派生图")] : []),
+    ...(flashLayers && !["1K", "1.5K", "2K", "auto"].includes(task.layer_size ?? "auto") ? [reason("sizeUnsupported", "图层尺寸只支持 1K / 1.5K / 2K / auto")] : []),
     ...(isRetiredModel(task.model) ? [reason("modelRetired", LITE_RETIRED_HINT)] : model ? [...availabilityReasons(table, facts.discovery, model), ...modelReasons(board, model, task)] : [reason("modelUnknown", `模型 ${task.model} 不在能力表内`)]),
     ...(task.layer_decomposition && layer ? [reason("layerUnsupported", layer)] : []),
     ...(task.transparent_background && transparent ? [reason(transparent.kind, transparent.text)] : []),
@@ -103,7 +107,7 @@ export function taskView(board: Board, table: CapabilityTable, taskId: string, f
   const edgeCount = imageEdges(board, taskId).length;
   const englishUnverified = !!model && edgeCount > 0 && promptLanguage(promptText(board, taskId, "positive")) === "en" && model.reference_phrasing.en_verified === "untested";
   const rule = model?.workflows[workflowOf(board, taskId)].size_rule;
-  const size = rule ? resolveSize(rule, task.size_spec) : null;
+  const size = !flashLayers && rule ? resolveSize(rule, task.size_spec) : null;
   const { tier, ratio } = task.size_spec;
   return {
     reasons: dedupe(reasons),
@@ -152,7 +156,8 @@ export function sendPlanOf(board: Board, table: CapabilityTable, taskId: string)
   const task = findTask(board, taskId);
   const model = task && findModel(table, task.model);
   if (!model) return null;
-  return planSend(model, imagePortSlots(board, table, taskId), promptText(board, taskId, "positive"), promptText(board, taskId, "negative"));
+  const plan = planSend(model, imagePortSlots(board, table, taskId), promptText(board, taskId, "positive"), promptText(board, taskId, "negative"));
+  return model.request_shape === "seedream_flash_images_generations" && task.layer_decomposition && !promptText(board, taskId, "positive").trim() && !promptText(board, taskId, "negative").trim() ? { ...plan, text: "" } : plan;
 }
 
 /** 「图N」「区域N」的引用越界与未引用，取自发送计划；没有发送计划（模型缺失）时按无固定句算。 */
@@ -205,7 +210,7 @@ function modelReasons(board: Board, model: ModelCapability, task: TaskNode): Unr
   if (render === null && regions > 0) out.push(reason("regionUnsupported", "模型不支持框选修改区域"));
   if (render !== null && regions > MAX_REGIONS) out.push(reason("tooManyRegions", `框选了 ${regions} 个区域，最多 ${MAX_REGIONS} 个`));
   if (hasEdge(board, task.id, "negative") && !isSupported(wf.supports_negative_prompt)) out.push(reason("negativeUnsupported", "模型不支持负向提示词"));
-  if (resolveSize(wf.size_rule, task.size_spec) === null) {
+  if (!(model.request_shape === "seedream_flash_images_generations" && task.layer_decomposition) && resolveSize(wf.size_rule, task.size_spec) === null) {
     const s = task.size_spec;
     const value = ratioValue(s.ratio);
     // 只有宽高比本身越界才报范围；分辨率档不认识、或没有 custom 范围的模型仍按「不在尺寸表内」。

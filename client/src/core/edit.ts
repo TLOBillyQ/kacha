@@ -80,6 +80,7 @@ export type BoardChange =
   | { kind: "setTier"; taskId: string; tier: string }
   /** ratio = null 为自动（跟随参考图，同一次变更里算好），否则为手动的具体值。 */
   | { kind: "setRatio"; taskId: string; ratio: string | null }
+  | { kind: "setLayerSize"; taskId: string; size: import("./gateway").LayerSize }
   | { kind: "setOutputOptions"; taskId: string; options: OutputOptions }
   | { kind: "setTaskFlag"; taskId: string; flag: "layer_decomposition" | "transparent_background"; value: boolean }
   /** 切换任务节点的模型，并记为画板最近选择。 */
@@ -275,6 +276,9 @@ function draft(board: Board, change: BoardChange, env: EditEnv): Draft {
         }),
         step: { label: "修改尺寸" },
       };
+    case "setLayerSize":
+      if (!["1K", "1.5K", "2K", "auto"].includes(change.size)) return { board };
+      return { board: mapTask(board, change.taskId, (t) => ({ ...t, layer_size: change.size })), step: { label: "修改图层尺寸" } };
     case "setOutputOptions":
       return { board: mapTask(board, change.taskId, (t) => ({ ...t, output_options: outputOptions(change.options) })), step: { label: "修改输出选项" } };
     case "setTaskFlag":

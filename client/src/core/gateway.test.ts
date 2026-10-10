@@ -12,6 +12,34 @@ import {
   type GenerationInput,
 } from "./gateway";
 
+describe("Flash 图层官方契约合成回放，非网关实测", () => {
+  const model = findModel(BUILTIN_TABLE, "doubao-seedream-5-0-flash-260915")!;
+  const input = (): GenerationInput => ({ model, text: "", nativeNegativePrompt: null, size: { width: 1, height: 1 }, references: [{ mediaType: "image/png", bytes: PNG_BYTES }], layerDecomposition: true });
+  it.each([
+    [{ z_index: 1, url: "https://result.test/a" }],
+    [{ z_index: 0, url: "https://result.test/base" }, { z_index: 1, url: "https://result.test/a" }],
+    [{ z_index: 0, url: "https://result.test/base" }, { z_index: 0, url: "https://result.test/dup" }],
+    [{ url: "https://result.test/base" }],
+    [{ z_index: 0, url: "https://result.test/base" }, { z_index: 1, url: "https://result.test/a", bounding_box: { absolute: [0, 0, 10, 10], normalized: [0, 0, 1001, 10] } }],
+    Array.from({ length: 18 }, (_, z_index) => ({ z_index, url: "https://result.test/a" })),
+  ])("缺失关键字段、重复身份、坏 bbox 或超过16层整体协议失败 %#", async (...data) => {
+    const fetch: FetchLike = async () => ({ status: 200, headers: { get: () => null }, text: async () => JSON.stringify({ data }), arrayBuffer: async () => new ArrayBuffer(0) });
+    await expect(generate({ baseUrl: "https://gateway.test", apiKey: "test", fetch }, input())).rejects.toMatchObject({ category: "invalid_response" });
+  });
+  it("自动拆分省略 prompt，使用专用 auto 而非 WxH", () => {
+    expect(buildGenerationRequest(input()).body).toMatchObject({ layer_decomposition: true, size: "auto" });
+    expect(buildGenerationRequest(input()).body).not.toHaveProperty("prompt");
+    for (const layerSize of ["1K", "1.5K", "2K", "auto"] as const) expect(buildGenerationRequest({ ...input(), text: "拆分主体", layerSize }).body).toMatchObject({ size: layerSize, prompt: "拆分主体" });
+  });
+  it("乱序平铺 data 按 z_index 找底图并排序，可选名称与描述不臆造", async () => {
+    const box = { absolute: [10, 20, 110, 220], normalized: [10, 20, 110, 220] };
+    const data = [{ url: "https://result.test/two", z_index: 2, bounding_box: box, name: "主体" }, { url: "https://result.test/base", z_index: 0 }, { url: "https://result.test/one", z_index: 1, bounding_box: box }];
+    const fetch: FetchLike = async () => ({ status: 200, headers: { get: () => null }, text: async () => JSON.stringify({ data }), arrayBuffer: async () => new ArrayBuffer(0) });
+    const result = await generate({ baseUrl: "https://gateway.test", apiKey: "test", fetch }, input());
+    expect(result.images).toEqual([{ kind: "url", url: "https://result.test/base", layer: { z_index: 0 } }, { kind: "url", url: "https://result.test/one", layer: { z_index: 1, bounding_box: box } }, { kind: "url", url: "https://result.test/two", layer: { z_index: 2, bounding_box: box, name: "主体" } }]);
+  });
+});
+
 describe("Flash 普通请求", () => {
   it("输出 JPEG/base64 与水印选项贯穿实际载荷", () => {
     const model = findModel(BUILTIN_TABLE, "doubao-seedream-5-0-flash-260915")!;

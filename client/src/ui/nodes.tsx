@@ -727,7 +727,14 @@ export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskF
       )}
 
       {/* 分辨率档与宽高比常驻：收起时也能改；模型与开关只在展开区。 */}
-      <div className="field size-field nodrag">
+      {node.layer_decomposition && model?.request_shape === "seedream_flash_images_generations" ? (
+        <div className="field size-field nodrag">
+          <select aria-label="图层尺寸" value={node.layer_size ?? "auto"} disabled={locked} onChange={(e) => apply({ kind: "setLayerSize", taskId: node.id, size: e.target.value as "1K" | "1.5K" | "2K" | "auto" })}>
+            {["auto", "1K", "1.5K", "2K"].map((s) => <option key={s} value={s}>{s === "auto" ? "自动" : s}</option>)}
+          </select>
+          <span className="muted small" title="auto：921600–4624220 像素保持原尺寸，较小放到 1K，较大缩到 2K">底图跟随输入，图层跟随元素</span>
+        </div>
+      ) : <div className="field size-field nodrag">
         <select value={tier ?? ""} onChange={(e) => setTier(e.target.value)} aria-label="分辨率档" disabled={locked}>
           {tier !== null && !tiers.includes(tier) && <option value={tier}>{tier}（不支持）</option>}
           {tier === null && <option value="">自定义</option>}
@@ -759,7 +766,7 @@ export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskF
             {pixels.width}×{pixels.height}
           </span>
         )}
-      </div>
+      </div>}
 
       <div className="ports">
         <PortRow id="positive" kind="positive" label={ports.negative ? "正向提示词" : "提示词"} className={hasPositive ? "" : "port-required"} connectable={!locked}>

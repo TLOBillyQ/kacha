@@ -49,6 +49,7 @@ export interface TaskNode extends NodeBase {
   transparent_background: boolean;
   /** 缺省沿用 url/png/false；仅适用于 Flash。 */
   output_options?: OutputOptions;
+  layer_size?: import("./gateway").LayerSize;
   /** 脏判据快照；未提交过为 null。本切片只读写不解释。 */
   last_submitted: Json | null;
 }
@@ -57,7 +58,9 @@ export interface LayerRecord {
   /** 相对任务目录，形如 layers/01.png（按 z_index 升序编号）。 */
   file: string;
   z_index: number;
-  bounding_box: number[];
+  bounding_box: number[] | import("./gateway").LayerBoundingBox;
+  name?: string;
+  description?: string;
 }
 
 export interface ResultRecord {
@@ -173,7 +176,7 @@ function autoRatio(raw: unknown): AutoRatio | null {
 const NODE_KEYS = {
   prompt: ["id", "type", "pos", "size", "text"],
   reference: ["id", "type", "pos", "size", "path", "sha256", "display_name"],
-  task: ["id", "type", "pos", "size", "model", "size_spec", "image_ports", "layer_decomposition", "transparent_background", "output_options", "last_submitted"],
+  task: ["id", "type", "pos", "size", "model", "size_spec", "image_ports", "layer_decomposition", "transparent_background", "output_options", "layer_size", "last_submitted"],
   result: ["id", "type", "pos", "size", "task_id", "file", "path", "layer_count", "record"],
 } as const;
 
@@ -196,6 +199,7 @@ function parseNode(raw: unknown): BoardNode {
         size_spec: sizeSpec(o, "size_spec"),
         image_ports: num(o, "image_ports"),
         layer_decomposition: bool(o, "layer_decomposition"),
+        ...(o.layer_size === undefined ? {} : { layer_size: o.layer_size as import("./gateway").LayerSize }),
         transparent_background: bool(o, "transparent_background"),
         ...(o.output_options === undefined ? {} : { output_options: outputOptions(o.output_options as OutputOptions) }),
         last_submitted: nullableObj(o, "last_submitted"),
