@@ -68,6 +68,14 @@ export function PreviewDialog({ req, toast, onClose }: Props) {
   const [pickSource, setPickSource] = useState(0);
   const [busy, setBusy] = useState(false);
   const layers = req.layers ?? [];
+  const baseInfo = useImageInfos([req.absPath]).get(req.absPath);
+  const layerStyle = (layer: LayerRecord) => {
+    const box = layer.bounding_box;
+    if (Array.isArray(box)) return undefined; // historical results retain their existing preview
+    if (!baseInfo) return { visibility: "hidden" as const };
+    const [left, top, right, bottom] = box.absolute;
+    return { inset: "auto", left: `${left / baseInfo.width * 100}%`, top: `${top / baseInfo.height * 100}%`, width: `${(right - left) / baseInfo.width * 100}%`, height: `${(bottom - top) / baseInfo.height * 100}%`, zIndex: layer.z_index };
+  };
   const targets = req.regionTargets ?? [];
   const outlines = req.regionOutlines ?? [];
   const first = editing?.firstRegion ?? 0;
@@ -202,7 +210,7 @@ export function PreviewDialog({ req, toast, onClose }: Props) {
               )}
               {solo === null &&
                 layers.map((layer, i) =>
-                  checked.has(i) ? <img key={layer.record.file} className="preview-layer" src={fileUrl(layer.absPath)} alt={layer.record.file} draggable={false} /> : null,
+                  checked.has(i) ? <img key={layer.record.file} className="preview-layer" style={layerStyle(layer.record)} src={fileUrl(layer.absPath)} alt={layer.record.file} draggable={false} /> : null,
                 )}
               {solo === null &&
                 showOutlines &&
@@ -267,8 +275,8 @@ export function PreviewDialog({ req, toast, onClose }: Props) {
                           setSolo((s) => (s === i ? null : i));
                         }}
                       />
-                      <span>
-                        图层{i + 1}
+                      <span title={layer.record.description}>
+                        {layer.record.name ?? `图层${i + 1}`}
                         {layerInfos.get(layer.absPath)?.has_alpha && <span className="badge">透明</span>}
                       </span>
                     </label>

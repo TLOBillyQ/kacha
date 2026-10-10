@@ -2,7 +2,8 @@
 // 派发时一次写入参考图快照与 task.json，之后不可变；成功后再写结果图，失败 / 取消时写结局记录。文件系统由调用方注入。
 import type { CapabilityTable } from "./capabilities";
 import type { FittedRecord } from "./fitImage";
-import type { LayerRecord, RegionRender } from "./board";
+import type { Board, LayerRecord, RegionRender } from "./board";
+import { validLayerBox } from "./gateway";
 
 export type { LayerRecord };
 import type { ReferenceImage, OutputOptions } from "./gateway";
@@ -111,6 +112,7 @@ export interface SubmissionPlan {
   sizeSpec: SizeSpec;
   size: { width: number; height: number };
   layerDecomposition: boolean;
+  layerSize?: import("./gateway").LayerSize;
   transparentBackground: boolean;
   outputOptions?: OutputOptions;
   capabilityFormatVersion: number;
@@ -150,6 +152,7 @@ export interface TaskRecord {
   size_spec: SizeSpec;
   size: { width: number; height: number };
   layer_decomposition: boolean;
+  layer_size?: import("./gateway").LayerSize;
   transparent_background: boolean;
   output_options?: OutputOptions;
   /** 按发送序号排列。 */
@@ -183,6 +186,7 @@ export async function writeSubmission(fs: Pick<TaskFs, "writeNewFile">, outputRo
     size_spec: plan.sizeSpec,
     size: plan.size,
     layer_decomposition: plan.layerDecomposition,
+    ...(plan.layerSize ? { layer_size: plan.layerSize } : {}),
     ...(plan.outputOptions ? { output_options: plan.outputOptions } : {}),
     transparent_background: plan.transparentBackground,
     references,
@@ -262,7 +266,9 @@ export async function saveResult(fs: Pick<TaskFs, "writeNewFile">, outputRoot: s
 export interface LayerImage {
   bytes: Uint8Array;
   zIndex: number;
-  boundingBox: number[];
+  boundingBox: LayerRecord["bounding_box"];
+  name?: string;
+  description?: string;
 }
 
 /** 图层文件名（相对任务目录）：layers/<两位序号>.<ext>，序号 1 起、按 z_index 升序。 */
@@ -279,9 +285,32 @@ export async function saveLayers(fs: Pick<TaskFs, "writeNewFile">, outputRoot: s
     if (!kind) throw new Error(`图层${i + 1} 不是可识别的图片`);
     const file = layerFileName(i + 1, kind.ext);
     await fs.writeNewFile(taskPath(outputRoot, relDir, file), layer.bytes);
-    out.push({ file, z_index: layer.zIndex, bounding_box: layer.boundingBox });
+    out.push({ file, z_index: layer.zIndex, bounding_box: layer.boundingBox, ...(layer.name !== undefined ? { name: layer.name } : {}), ...(layer.description !== undefined ? { description: layer.description } : {}) });
   }
+  await fs.writeNewFile(taskPath(outputRoot, relDir, "layers.json"), new TextEncoder().encode(layersExportJson(out)));
   return out;
+}
+
+export async function readLayers(fs: Pick<TaskFs, "readFile">, outputRoot: string, taskId: string): Promise<LayerRecord[] | null> {
+  const path = taskFilePath(outputRoot, taskId, "layers.json");
+  if (!path) return null;
+  let bytes: Uint8Array;
+  try { bytes = await fs.readFile(path); } catch { return null; }
+  let raw: unknown;
+  try { raw = JSON.parse(new TextDecoder().decode(bytes)); } catch { throw new LocalError("图层元数据损坏"); }
+  const layers = (raw as { layers?: unknown })?.layers;
+  if (!Array.isArray(layers) || layers.length > 16 || layers.some((l, i) => !isObject(l) || l.z_index !== i + 1 || typeof l.file !== "string" || !/^layers\/\d{2}\.png$/.test(l.file) || !validLayerBox(l.bounding_box) || (l.name !== undefined && typeof l.name !== "string") || (l.description !== undefined && typeof l.description !== "string"))) throw new LocalError("图层元数据损坏");
+  return layers as LayerRecord[];
+}
+
+/** 打开时恢复任务目录真源；旧普通结果没有 layers.json，保持兼容。 */
+export async function restoreResultLayers(fs: Pick<TaskFs, "readFile">, outputRoot: string, board: Board): Promise<Board> {
+  const nodes = await Promise.all(board.nodes.map(async (node) => {
+    if (node.type !== "result" || node.record.model !== "doubao-seedream-5-0-flash-260915") return node;
+    const layers = await readLayers(fs, outputRoot, node.task_id);
+    return layers === null ? node : { ...node, layer_count: layers.length, record: { ...node.record, layers } };
+  }));
+  return { ...board, nodes };
 }
 
 /** 导出用 layers.json 内容：与结果记录里的 layers 一致。 */

@@ -3,6 +3,61 @@ import type { BoardNode } from "./board";
 import { parseOutcome } from "./taskDir";
 import { board, harness, settle } from "./testing/runnerHarness";
 
+import { createRunner } from "./runner";
+import { memoryTaskFs } from "./testing/memoryTaskFs";
+import { BUILTIN_TABLE } from "./capabilities";
+import type { RunDeps } from "./run";
+
+// Official flat-response example encoded with synthetic bytes. No real gateway evidence.
+describe("Flash 图层运行器：官方契约合成回放", () => {
+  const png = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 1]);
+  const box = { absolute: [100, 200, 300, 400], normalized: [100, 200, 300, 400] };
+  const fixture = (opts: { width?: number; height?: number; input?: Uint8Array; layerDownloadFails?: boolean; layerJpeg?: boolean; decodeFails?: boolean } = {}) => {
+    const fs = memoryTaskFs();
+    const changes: any[] = [], payloads: any[] = [];
+    let alpha = true;
+    const deps: RunDeps = { ...fs, readFile: async (p) => p === "/root/refs/cat.png" ? opts.input ?? png : fs.readFile(p), now: () => new Date("2026-10-10T00:00:00Z"), schedule: () => () => {}, imageCodec: { decode: async () => { if (opts.decodeFails) throw new Error("decode"); return { width: opts.width ?? 1000, height: opts.height ?? 1000, hasAlpha: () => alpha, close: () => {}, encode: async () => png }; } }, fetch: async (_url, init) => { if (init.method === "GET") return { status: 403, headers: { get: () => null }, text: async () => "", arrayBuffer: async () => new ArrayBuffer(0) }; payloads.push(JSON.parse(init.body!)); return { status: 200, headers: { get: () => null }, text: async () => JSON.stringify({ data: [{ z_index: 1, ...(opts.layerDownloadFails ? { url: "https://synthetic.test/layer" } : { b64_json: btoa(String.fromCharCode(...(opts.layerJpeg ? new Uint8Array([255, 216, 255, 1]) : png))) }), bounding_box: box }, { z_index: 0, b64_json: btoa(String.fromCharCode(...png)) }] }), arrayBuffer: async () => png.slice().buffer }; } };
+    const runner = createRunner({ deps, apply: (_key, c) => changes.push(c), log: () => {}, concurrency: 1 });
+    const b = board(["t1"], true);
+    b.edges = b.edges.filter((e) => e.to[1] !== "positive");
+    for (const n of b.nodes) if (n.type === "task") { n.model = "doubao-seedream-5-0-flash-260915"; n.layer_decomposition = true; }
+    const target = { boardKey: "A", boardFile: null, table: BUILTIN_TABLE, outputRoot: "/root", baseUrl: "https://synthetic.test", apiKey: "test" };
+    return { fs, changes, payloads, runner, b, target, setAlpha: (v: boolean) => { alpha = v; } };
+  };
+  it.each([{ width: 511, height: 512 }, { width: 6001, height: 6000 }, { width: 16001, height: 1000 }, { input: new Uint8Array(30000001) }, { input: new Uint8Array([82, 73, 70, 70, 0, 0, 0, 0, 87, 69, 66, 80]) }, { decodeFails: true }])("专用输入非法时不发送网关 %#", async (opts) => {
+    const h = fixture(opts);
+    expect(await h.runner.submit(h.target, h.b, ["t1"])).not.toEqual([]);
+    await settle();
+    expect(h.payloads).toHaveLength(0);
+    expect(h.fs.files.size).toBe(0);
+  });
+  it.each([{ layerDownloadFails: true }, { layerJpeg: true }])("任一图层下载或格式失败，整体没有成功结果 %#", async (opts) => {
+    const h = fixture(opts);
+    await h.runner.submit(h.target, h.b, ["t1"]); await settle();
+    expect(h.runner.getSnapshot().board("A").statuses.get("t1")?.kind).toBe("failed");
+    expect(h.changes.filter((c) => c.kind === "runResult")).toHaveLength(0);
+    expect([...h.fs.files.keys()].filter((p) => /\/result\.|\/layers\//.test(p))).toEqual([]);
+  });
+  it("无需提示词提交单图，只产出一个完整结果并保存定位元数据", async () => {
+    const h = fixture();
+    expect(await h.runner.submit(h.target, h.b, ["t1"])).toEqual([]);
+    await settle();
+    expect(h.payloads[0]).toMatchObject({ layer_decomposition: true, size: "auto" });
+    expect(h.payloads[0]).not.toHaveProperty("prompt");
+    const results = h.changes.filter((c) => c.kind === "runResult");
+    expect(results).toHaveLength(1);
+    expect(results[0].result.layers).toEqual([{ file: "layers/01.png", z_index: 1, bounding_box: box }]);
+    expect([...h.fs.files.keys()].some((p) => p.endsWith("/layers.json"))).toBe(true);
+  });
+  it("任一图层没有 alpha 则整体失败，没有结果或成功图片落盘", async () => {
+    const h = fixture(); h.setAlpha(false);
+    await h.runner.submit(h.target, h.b, ["t1"]); await settle();
+    expect(h.runner.getSnapshot().board("A").statuses.get("t1")).toEqual({ kind: "failed", label: "响应无效" });
+    expect(h.changes.filter((c) => c.kind === "runResult")).toHaveLength(0);
+    expect([...h.fs.files.keys()].filter((p) => /\/result\.|\/layers\//.test(p))).toEqual([]);
+  });
+});
+
 describe("Flash 失败政策", () => {
   it.each([401, 400, 500])("HTTP %i 不重发，保留失败", async (status) => {
     const h = harness();

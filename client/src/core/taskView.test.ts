@@ -63,6 +63,20 @@ function ready(patch: Partial<TaskNode> = {}, refs: string[] = [], text = "@图1
   );
 }
 
+describe("Flash 图层任务视图", () => {
+  it("单图自动拆分不需要提示词，普通模式仍需要提示词", () => {
+    const b = board([reference("r"), task("t", { model: "doubao-seedream-5-0-flash-260915", layer_decomposition: true })], [edge("r", "t", "image:0")]);
+    expect(view(b).reasons).toEqual([]);
+    expect(view(b).toggles.layerDecomposition.canEnable).toBe(true);
+    (b.nodes[1] as TaskNode).layer_decomposition = false;
+    expect(kinds(b)).toContainEqual(["positiveMissing", "notReady"]);
+  });
+  it("专用尺寸无效或输入数量不是一张时阻断", () => {
+    const b = ready({ model: "doubao-seedream-5-0-flash-260915", layer_decomposition: true, layer_size: "bad" as any }, ["a", "b"]);
+    expect(view(b).reasons.map((r) => r.kind)).toEqual(expect.arrayContaining(["layerNeedsOneImage", "sizeUnsupported"]));
+  });
+});
+
 const REGION = { rects: [[0.1, 0.1, 0.5, 0.5] as [number, number, number, number]], render: "highlight_overlay" as const };
 
 interface Case {
