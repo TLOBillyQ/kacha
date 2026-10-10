@@ -34,13 +34,13 @@ export function planSend(model: ModelCapability, slots: SlotRef[], prompt: strin
   const language = promptLanguage(prompt);
   const workflow = workflowFor(slots.length);
   const negativeInlined = !isSupported(model.workflows[workflow].supports_negative_prompt);
-  const phrases = overlayPhrases(model, slots, language);
+  const phrases = [...overlayPhrases(model, slots, language), ...coordinatePhrases(slots, language)];
   const rewritten = rewriteRegionRefs(rewriteImageRefs(prompt, imageRefMap(slots)), regionNames(slots, language));
-  const note = imageRefMap(slots).length === 1 ? singleImageNote(language) : referenceNote(slots.length, language);
+  const note = imageRefMap(slots).length === 1 && !(model.request_shape === "seedream_flash_images_generations" && slots.length > 1) ? singleImageNote(language) : referenceNote(slots.length, language);
   const withNote = slots.length === 0 ? rewritten : `${note}\n${rewritten}`;
   const negative = negativeInlined && negativePrompt ? `\n${language === "en" ? "Avoid: " : "避免出现："}${negativePrompt}` : "";
   return {
-    text: `${withNote}${negative}${phrases.length ? `\n${phrases.join("\n")}` : ""}`,
+    text: officialReferences(`${withNote}${negative}${phrases.length ? `\n${phrases.join("\n")}` : ""}`, model),
     nativeNegativePrompt: !negativeInlined && negativePrompt ? negativePrompt : null,
     workflow,
     negativeInlined,
@@ -63,14 +63,18 @@ export function referenceProblemsOf(model: ModelCapability | undefined, slots: S
   });
   const referenced = new Set([...referencedIndexes([prompt]), ...injected]);
   // 红是硬阻断，只认用户明确写的 @图N；「地图5」之类的普通文字不拦。
-  const tagged = new Set([...prompt.matchAll(TAG)].map((m) => Number(m[1])));
+  const tagged = new Set([...prompt.matchAll(model?.request_shape === "seedream_flash_images_generations" ? REFERENCE : TAG)].map((m) => Number(m.groups ? m.groups.tagged ?? m.groups.zhN ?? m.groups.enN : m[1])));
   const outOfRange = [...tagged].filter((n) => n < 1 || n > count).sort((a, b) => a - b);
   const unreferenced = count === 1 ? [] : Array.from({ length: count }, (_, i) => i + 1).filter((n) => !referenced.has(n));
   // 只有区域真的生效（叠加槽存在）时才校验「区域N」；没有框选时这两个字是普通文字。
   const regions = regionNames(slots, language).length;
   const regionIssues = regions > 0 ? referencedRegions(prompt).filter((n) => n < 1 || n > regions).map((n) => `提示词引用了区域${n}，但只框选了 ${regions} 个区域`) : [];
   return {
-    issues: [...outOfRange.map((n) => `提示词引用了图${n}，但只接了 ${count} 张参考图`), ...regionIssues],
+    issues: [...outOfRange.map((n) => `提示词引用了图${n}，但只接了 ${count} 张参考图`), ...regionIssues,
+      ...slots.filter((s) => {
+        const region = s.regionData ?? s.coordinateRegion;
+        return region && (region.coordinate_kind !== undefined && !["point", "bbox"].includes(region.coordinate_kind) || region.rects.some((r) => !Array.isArray(r) || r.length !== 4 || r.some((n) => !Number.isFinite(n) || n < 0 || n > 1) || r[0] >= r[2] || r[1] >= r[3]));
+      }).map((s) => `图${s.userPort} 的区域坐标无效，需要0–1范围内的非空矩形`)],
     warnings: unreferenced.map((n) => `图${n} 已连接，尚未说明它的用途。可在提示词中点击参考图插入引用，并描述如何使用它。`),
     unreferenced,
   };
@@ -154,9 +158,28 @@ function overlayPhrases(model: ModelCapability, slots: SlotRef[], language: Prom
 }
 
 /** 区域编号 → 发送文本里的指代（区域1 → 紫色区域 / the purple region），按区域编号排列。 */
+function officialReferences(text: string, model: ModelCapability): string {
+  return model.request_shape === "seedream_flash_images_generations" ? text.replace(/\bImage\s*(\d+)/gi, "图$1") : text;
+}
+
+function coordinateName(slot: SlotRef, index: number): string {
+  const rect = slot.coordinateRegion!.rects[index];
+  const q = (n: number) => Math.round(n * 999);
+  return slot.coordinateRegion!.coordinate_kind === "point"
+    ? `图${slot.port} <point>${q((rect[0] + rect[2]) / 2)} ${q((rect[1] + rect[3]) / 2)}</point>`
+    : `图${slot.port} <bbox>${rect.map(q).join(" ")}</bbox>`;
+}
+
+function coordinatePhrases(slots: SlotRef[], language: PromptLanguage): string[] {
+  return slots.filter((s) => s.coordinateRegion).map((s) => {
+    const names = s.coordinateRegion!.rects.map((_, i) => coordinateName(s, i)).join(language === "zh" ? "、" : ", ");
+    return language === "zh" ? `区域指示：${names}。按用户指令修改或保持这些区域，未要求修改的内容保持不变。` : `Region indicators: ${names}. Modify or preserve these regions as instructed; keep content unchanged where no change is requested.`;
+  });
+}
+
 function regionNames(slots: SlotRef[], language: PromptLanguage): string[] {
-  const total = slots.reduce((n, s) => n + (s.kind === "overlay" ? s.regionCount : 0), 0);
-  return Array.from({ length: total }, (_, i) => (language === "zh" ? `${colorName(i, language)}区域` : `the ${colorName(i, language)} region`));
+  const first = firstRegionOf(slots);
+  return slots.flatMap((s) => Array.from({ length: s.regionCount }, (_, i) => s.coordinateRegion ? coordinateName(s, i) : (language === "zh" ? `${colorName(first.get(s.port)! + i, language)}区域` : `the ${colorName(first.get(s.port)! + i, language)} region`)));
 }
 
 const REGION_REF = /区域\s*(\d+)|\bregion\s*(\d+)/gi;

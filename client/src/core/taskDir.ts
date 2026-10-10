@@ -98,6 +98,7 @@ export type ReferenceSource =
 export interface ReferenceRegion {
   rects: [number, number, number, number][];
   render: RegionRender;
+  coordinate_kind?: "point" | "bbox";
   source_port: number;
 }
 
