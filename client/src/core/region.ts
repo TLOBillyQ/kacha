@@ -7,7 +7,8 @@ import { isSupported, type ModelCapability } from "./capabilities";
 
 /**
  * 客户端已实现的渲染方式，按优先级取模型支持的第一个。能力表记模型事实、不记客户端实现（ADR 0004）：
- * marked_image / bbox_tag 在能力表里可以标支持，但客户端尚未实现，由这里挡在外面。
+ * 高亮叠加为默认；Flash坐标表达由连线的bbox_tag选择，不新增派生图片。
+ * marked_image未实现；用户提供的视觉标记按普通参考图发送。
  */
 export const RENDER_PRIORITY: RegionRender[] = ["highlight_overlay"];
 
