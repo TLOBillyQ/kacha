@@ -13,6 +13,7 @@ import {
 import { editBoard, type BoardChange, type EditEnv, type EditResult } from "../core/edit";
 import { emptyHistory, recordChange, redo, undo, type History } from "../core/history";
 import { basename, boardsDir, dirname, joinPath, resolveFromRoot } from "../core/paths";
+import { restoreResultLayers } from "../core/taskDir";
 import { ipc } from "../shell/ipc";
 import { logEvent } from "../shell/log";
 import type { OperationGate } from "../core/updatePreparation";
@@ -234,6 +235,14 @@ export function useBoardSessions(outputRoot: string | null, envSource: EnvSource
       const texts = await ipc.readBoard(path);
       if (texts.main === null && texts.bak === null) return false;
       const opened = openBoard(texts.main, texts.bak);
+      // 任务目录是真源：Flash 结果的图层身份 / 定位按 layers.json 还原（画板只冗余展示）；画板包导入同走这里。
+      if (opened.kind === "ok" && outputRootRef.current) {
+        try {
+          opened.board = await restoreResultLayers({ readFile: ipc.readFileBytes }, outputRootRef.current, opened.board);
+        } catch (e) {
+          throw new Error(`打开画板失败：${errorText(e)}`);
+        }
+      }
       const key = crypto.randomUUID();
       const session: Session =
         opened.kind === "ok"

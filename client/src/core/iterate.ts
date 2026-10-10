@@ -2,7 +2,7 @@
 // 全部是 Board → Board 的纯函数；「生成变体」只是父任务按该结果的任务目录重跑，见 run.ts。
 import type { Board, BoardEdge, BoardNode, PromptNode, ResultNode, TaskNode } from "./board";
 import { findModel, isSupported, type CapabilityTable, type ModelCapability } from "./capabilities";
-import { canConnect, connect, IMAGE_PORT_PREFIX, imageEdges, syncImagePorts, type Verdict } from "./graph";
+import { canConnect, connect, IMAGE_PORT_PREFIX, imageEdges, sourceLayerRecord, syncImagePorts, type Verdict } from "./graph";
 import { COLUMN_GAP, placeNear, PROMPT_NODE_SIZE, ROW_GAP, TASK_NODE_SIZE } from "./layout";
 import { defaultEditModel, type Discovery } from "./settings";
 import { defaultSizeSpec, type SizeSpec } from "./size";
@@ -46,6 +46,13 @@ export function continueEditing(
 ): Outcome {
   const sources = sourceIds.map((id) => board.nodes.find((n) => n.id === id)).filter(isImageNode);
   if (!sources.length) return { ok: false, reason: "先选中结果或参考图节点" };
+  // 来源图层身份在接线前校验：无效身份明确失败，不默默接底图或猜图层。
+  for (const s of sources) {
+    const layer = sourceLayers?.get(s.id);
+    if (layer === undefined || layer === null) continue;
+    if (s.type !== "result") return { ok: false, reason: `「${s.display_name}」是参考图，没有图层可接` };
+    if (!sourceLayerRecord(s.record, layer)) return { ok: false, reason: `图层${layer} 不在该结果的图层记录中` };
+  }
 
   const trigger = sources.find((n) => n.id === triggerId) ?? sources[0];
   const producer = trigger.type === "result" ? producerOf(board, trigger.id) : undefined;
@@ -99,9 +106,11 @@ export function addAsReferenceTarget(board: Board, selectedIds: string[]): { ok:
   return tasks.length === 1 ? { ok: true, taskId: tasks[0] } : { ok: false, reason: "先选一个生成任务" };
 }
 
-/** 加为参考图：结果节点接到目标任务的下一个空图片端口；不新增节点、不改参数（目标因图片端口集合变化而变脏）。sourceLayer（1 起）= 接该图层而非合成结果。 */
+/** 加为参考图：结果节点接到目标任务的下一个空图片端口；不新增节点、不改参数（目标因图片端口集合变化而变脏）。sourceLayer（1 起）= 接该图层而非合成结果；无效身份明确拒绝。 */
 export function addAsReference(board: Board, table: CapabilityTable, resultId: string, taskId: string, sourceLayer: number | null = null): Outcome {
-  if (board.nodes.find((n) => n.id === resultId)?.type !== "result") return { ok: false, reason: "只能把结果节点加为参考图" };
+  const node = board.nodes.find((n) => n.id === resultId);
+  if (node?.type !== "result") return { ok: false, reason: "只能把结果节点加为参考图" };
+  if (sourceLayer !== null && !sourceLayerRecord(node.record, sourceLayer)) return { ok: false, reason: `图层${sourceLayer} 不在该结果的图层记录中` };
   const c = { source: resultId, sourceHandle: "out", target: taskId, targetHandle: `${IMAGE_PORT_PREFIX}${imageEdges(board, taskId).length}` };
   const verdict = canConnect(board, table, c);
   if (!verdict.ok) return verdict;

@@ -127,6 +127,8 @@ export async function prepareJob(
   // 读到即按该任务模型的输入规则处理成参考图快照；叠加图从处理后的快照合成，两者尺寸一致。
   const sourceBytes: FittedBytes[] = [];
   for (const [i, src] of sources.entries()) {
+    // 无效来源图层身份：明确失败，不回落底图、不猜 layers/NN 路径。
+    if (src.absPath === null) throw new LocalError(`图${i + 1}（${src.label}）的来源图层身份无效`);
     let bytes: Uint8Array;
     try {
       bytes = await deps.readFile(src.absPath);

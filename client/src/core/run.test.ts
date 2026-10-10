@@ -53,6 +53,80 @@ const regen = async (d: RunDeps, args: Parameters<typeof prepareRegenerate>[1]) 
 
 const ok = () => ({ status: 200, body: JSON.stringify({ metadata: { output: { choices: [{ message: { content: [{ image: PNG_B64 }] } }] } } }) });
 
+describe("Flash 来源图层", () => {
+  const LAYER2 = Uint8Array.from([...PNG, 7]);
+  const layerResult = (): ResultNode => ({
+    id: "x",
+    type: "result",
+    pos: [0, 200],
+    size: [100, 100],
+    extra: {},
+    task_id: "task-x",
+    file: "result.png",
+    path: "2026-09-16/task-x/result.png",
+    layer_count: 2,
+    record: {
+      model: "doubao-seedream-5-0-flash-260915",
+      prompt: "",
+      negative_prompt: "",
+      size_spec: { tier: "1K", ratio: "1:1", width: null, height: null },
+      submitted_at: "2026-09-16T01:00:00Z",
+      layers: [
+        { file: "layers/01.png", z_index: 1, bounding_box: { absolute: [0, 0, 10, 10], normalized: [0, 0, 10, 10] }, name: "主体" },
+        { file: "layers/02.png", z_index: 2, bounding_box: { absolute: [10, 10, 20, 20], normalized: [10, 10, 20, 20] } },
+      ],
+    },
+  });
+  const layerBoard = (sourceLayer: number | null): Board => {
+    const b = board(false);
+    const p = b.nodes.find((n) => n.type === "prompt");
+    if (p?.type === "prompt") p.text = "把图1改色";
+    const t = b.nodes.find((n) => n.type === "task") as TaskNode;
+    t.model = "doubao-seedream-5-0-flash-260915";
+    t.image_ports = 1;
+    b.nodes.push(layerResult());
+    b.edges.push({ from: ["x", "out"], to: ["t", "image:0"], source_layer: sourceLayer, region: null, system: false, extra: {} });
+    return b;
+  };
+  const passThroughCodec: RunDeps["imageCodec"] = { decode: async () => ({ width: 1024, height: 1024, hasAlpha: () => true, encode: async () => PNG, close: () => undefined }) };
+
+  it("实际发送与参考图快照用指定图层字节；任务记录谱系指向所属结果与图层序号；重新生成沿用快照与谱系", async () => {
+    const { d, files } = deps(() => ({ status: 200, body: JSON.stringify({ data: [{ b64_json: PNG_B64 }] }) }));
+    d.imageCodec = passThroughCodec;
+    files.set("/root/2026-09-16/task-x/result.png", PNG);
+    files.set("/root/2026-09-16/task-x/layers/02.png", LAYER2);
+    const prepared = await prepare(d, { board: layerBoard(2), table: BUILTIN_TABLE, tableSha256: "x", outputRoot: "/root", taskNodeId: "t" });
+    expect(prepared.job.plan.references).toHaveLength(1);
+    expect(prepared.job.plan.references[0].bytes).toEqual(LAYER2);
+    expect(prepared.job.plan.references[0].source).toEqual({ kind: "result", task_id: "task-x", file: "result.png", source_layer: 2 });
+    const written = await writeJob(d, "/root", prepared.job);
+    const record = JSON.parse(new TextDecoder().decode(files.get(`/root/${written.relDir}/task.json`)));
+    expect(record.references[0].source).toEqual({ kind: "result", task_id: "task-x", file: "result.png", source_layer: 2 });
+    expect(files.get(`/root/${written.relDir}/reference-1.png`)).toEqual(LAYER2);
+    // 重新生成：读回快照字节与谱系（仍指向所属结果），不依赖画板现状。
+    const again = await regen(d, { board: prepared.board, table: BUILTIN_TABLE, tableSha256: "x", outputRoot: "/root", taskNodeId: "t" });
+    expect(again.job.plan.references[0].bytes).toEqual(LAYER2);
+    expect(again.job.plan.references[0].source).toEqual({ kind: "result", task_id: "task-x", file: "result.png", source_layer: 2 });
+  });
+
+  it("无效来源图层身份：提交前明确失败，不回落底图、不猜 layers/NN 路径、不发请求", async () => {
+    const { d, files, requests } = deps(() => ({ status: 200, body: "{}" }));
+    // 若错误回落到底图，本可通过校验——用它证明没有回落。
+    d.imageCodec = passThroughCodec;
+    files.set("/root/2026-09-16/task-x/result.png", PNG);
+    await expect(prepareJob(d, { board: layerBoard(9), table: BUILTIN_TABLE, tableSha256: "x", outputRoot: "/root", taskNodeId: "t" })).rejects.toThrow(/来源图层/);
+    expect(requests).toEqual([]);
+  });
+
+  it("缺失图层文件：提交前明确失败（读图失败），不回落底图", async () => {
+    const { d, files, requests } = deps(() => ({ status: 200, body: "{}" }));
+    d.imageCodec = passThroughCodec;
+    files.set("/root/2026-09-16/task-x/result.png", PNG);
+    await expect(prepareJob(d, { board: layerBoard(2), table: BUILTIN_TABLE, tableSha256: "x", outputRoot: "/root", taskNodeId: "t" })).rejects.toThrow(/图层2/);
+    expect(requests).toEqual([]);
+  });
+});
+
 describe("Flash 普通任务", () => {
   it.each([false, true])("公开运行器转换快照链路，编码结果损坏=%s", async (invalid) => {
     const source2 = Uint8Array.from([...PNG, 2]);

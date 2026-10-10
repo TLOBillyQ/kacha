@@ -31,6 +31,7 @@ export type ReasonKind =
   | "transparentNoAlpha"
   | "transparentNeedsPng"
   | "referenceOutOfRange"
+  | "sourceLayerInvalid"
   | "imageMissing";
 
 /** 未就绪 = 还没填完（节点不标红）；错误 = 其余（节点标红）。两类都阻止提交。 */
@@ -97,7 +98,12 @@ export function taskView(board: Board, table: CapabilityTable, taskId: string, f
     ...(task.layer_decomposition && layer ? [reason("layerUnsupported", layer)] : []),
     ...(task.transparent_background && transparent ? [reason(transparent.kind, transparent.text)] : []),
     ...refs.issues.map((text) => reason("referenceOutOfRange", text)),
-    ...imageSources(board, taskId, "").flatMap((src, i) => (facts.missingNodes.has(src.nodeId) ? [reason("imageMissing", `图${i + 1} 图片缺失：${src.label}`)] : [])),
+    ...imageSources(board, taskId, "").flatMap((src, i) => {
+      if (src.absPath === null) return [reason("sourceLayerInvalid", `图${i + 1} 来源图层无效：${src.label}`)];
+      // 缺图按来源分键：图层线只看自己那层，底图线只看底图，互不株连。
+      const key = src.sourceLayer === null ? src.nodeId : `${src.nodeId}:layer:${src.sourceLayer}`;
+      return facts.missingNodes.has(key) ? [reason("imageMissing", `图${i + 1} 图片缺失：${src.label}`)] : [];
+    }),
   ];
   const edgeCount = imageEdges(board, taskId).length;
   const englishUnverified = !!model && edgeCount > 0 && promptLanguage(promptText(board, taskId, "positive")) === "en" && model.reference_phrasing.en_verified === "untested";

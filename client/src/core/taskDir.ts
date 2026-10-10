@@ -2,10 +2,11 @@
 // 派发时一次写入参考图快照与 task.json，之后不可变；成功后再写结果图，失败 / 取消时写结局记录。文件系统由调用方注入。
 import type { CapabilityTable } from "./capabilities";
 import type { FittedRecord } from "./fitImage";
-import type { LayerRecord, RegionRender } from "./board";
+import type { Board, LayerRecord, RegionRender } from "./board";
 
 export type { LayerRecord };
 import type { ReferenceImage, OutputOptions } from "./gateway";
+import { validLayerBox } from "./gateway";
 import { joinPath } from "./paths";
 import type { SendPlan } from "./sendPlan";
 import type { SizeSpec } from "./size";
@@ -285,9 +286,67 @@ export async function saveLayers(fs: Pick<TaskFs, "writeNewFile">, outputRoot: s
   return out;
 }
 
-/** 导出用 layers.json 内容：与结果记录里的 layers 一致。 */
-export function layersExportJson(layers: LayerRecord[]): string {
-  return `${JSON.stringify({ layers }, null, 2)}\n`;
+/** layers.json 的底图身份（可选）：file 为导出包里实际写出的底图文件名。 */
+export interface LayersBase {
+  file?: string;
+  z_index: 0;
+  name?: string;
+  description?: string;
+}
+
+/** 导出用 layers.json 内容：与结果记录里的 layers 一致；base 为底图身份（file 在导出包里指向实际写出的底图文件名）。 */
+export function layersExportJson(layers: LayerRecord[], base?: LayersBase): string {
+  return `${JSON.stringify({ ...(base ? { base } : {}), layers }, null, 2)}\n`;
+}
+
+/** 解析并校验 layers.json：底图身份（可选，z_index 缺省补 0）与图层记录；损坏或关键身份 / 定位无效明确失败。 */
+export function parseLayersFile(bytes: Uint8Array): { base?: LayersBase; layers: LayerRecord[] } {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(new TextDecoder().decode(bytes));
+  } catch {
+    throw new LocalError("图层元数据损坏");
+  }
+  const base = isObject(raw) ? raw.base : undefined;
+  const validBase =
+    base === undefined ||
+    (isObject(base) &&
+      (base.z_index === undefined || base.z_index === 0) &&
+      (base.file === undefined || typeof base.file === "string") &&
+      (base.name === undefined || typeof base.name === "string") &&
+      (base.description === undefined || typeof base.description === "string"));
+  const layers = isObject(raw) ? raw.layers : undefined;
+  const validLayers =
+    Array.isArray(layers) &&
+    layers.length <= 16 &&
+    layers.every((l, i) => isObject(l) && l.z_index === i + 1 && typeof l.file === "string" && /^layers\/\d{2}\.png$/.test(l.file) && validLayerBox(l.bounding_box) && (l.name === undefined || typeof l.name === "string") && (l.description === undefined || typeof l.description === "string"));
+  if (!validBase || !validLayers) throw new LocalError("图层元数据损坏");
+  return { ...(base === undefined ? {} : { base: { ...(base as object), z_index: 0 } as LayersBase }), layers: layers as LayerRecord[] };
+}
+
+/** 读任务目录真源的图层元数据；没有 layers.json（旧普通结果）为 null，损坏或关键身份 / 定位无效为明确失败。 */
+export async function readLayers(fs: Pick<TaskFs, "readFile">, outputRoot: string, taskId: string): Promise<LayerRecord[] | null> {
+  const path = taskFilePath(outputRoot, taskId, "layers.json");
+  if (!path) return null;
+  let bytes: Uint8Array;
+  try {
+    bytes = await fs.readFile(path);
+  } catch {
+    return null;
+  }
+  return parseLayersFile(bytes).layers;
+}
+
+/** 打开时按任务目录真源恢复 Flash 结果的图层（画板只冗余展示）；旧普通结果没有 layers.json，保持兼容。 */
+export async function restoreResultLayers(fs: Pick<TaskFs, "readFile">, outputRoot: string, board: Board): Promise<Board> {
+  const nodes = await Promise.all(
+    board.nodes.map(async (node) => {
+      if (node.type !== "result" || node.record.model !== "doubao-seedream-5-0-flash-260915") return node;
+      const layers = await readLayers(fs, outputRoot, node.task_id);
+      return layers === null ? node : { ...node, layer_count: layers.length, record: { ...node.record, layers } };
+    }),
+  );
+  return { ...board, nodes };
 }
 
 /** 没有结果图的任务的结局；没有记录 = 上次进行中时程序异常退出（已中断）。 */

@@ -207,15 +207,15 @@ export async function collectRunFacts(
   const alphaByNode = new Map<string, boolean>();
   await Promise.all(
     taskIds
-      .flatMap((id) => {
-        const edges = imageEdges(board, id);
-        return imageSources(board, id, outputRoot).map((src, i) => ({ ...src, alphaKey: edges[i]?.source_layer == null ? src.nodeId : `${src.nodeId}:layer:${edges[i].source_layer}` }));
-      })
+      .flatMap((id) => imageSources(board, id, outputRoot).map((src) => ({ ...src, key: src.sourceLayer === null ? src.nodeId : `${src.nodeId}:layer:${src.sourceLayer}` })))
       .map((src) =>
-        probe.inspectImage(src.absPath).then(
-          (info) => void alphaByNode.set(src.alphaKey, info.has_alpha),
-          () => void missingNodes.add(src.nodeId),
-        ),
+        // 无效来源图层身份（absPath 为 null）不探测也不算缺图：任务视图给出「来源图层无效」的明确原因。
+        src.absPath === null
+          ? Promise.resolve()
+          : probe.inspectImage(src.absPath).then(
+              (info) => void alphaByNode.set(src.key, info.has_alpha),
+              () => void missingNodes.add(src.key),
+            ),
       ),
   );
   return { missingNodes, alphaByNode };

@@ -57,7 +57,11 @@ export interface LayerRecord {
   /** 相对任务目录，形如 layers/01.png（按 z_index 升序编号）。 */
   file: string;
   z_index: number;
-  bounding_box: number[];
+  /** Flash 图层为 { absolute, normalized }；旧结果为旧版四元数组。 */
+  bounding_box: number[] | import("./gateway").LayerBoundingBox;
+  /** 可选元数据（官方按可选返回，不臆造）。 */
+  name?: string;
+  description?: string;
 }
 
 export interface ResultRecord {

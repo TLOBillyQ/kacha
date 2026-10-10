@@ -273,4 +273,26 @@ describe("图层接回", () => {
       expect(imageEdge).toMatchObject({ source_layer: 1 });
     }
   });
+
+  it("加为参考图：无效来源图层身份明确拒绝，不留连线", () => {
+    for (const layer of [0, 3, 1.5, -1]) {
+      const outcome = addAsReference(board([layered("x"), task("t")]), BUILTIN_TABLE, "x", "t", layer);
+      expect(outcome.ok).toBe(false);
+      if (!outcome.ok) expect(outcome.reason).toContain("图层");
+    }
+    // 结果没有图层记录 / 触发节点是参考图：同样拒绝。
+    expect(addAsReference(board([result("y"), task("t")]), BUILTIN_TABLE, "y", "t", 1).ok).toBe(false);
+    expect(addAsReference(board([reference("r"), task("t")]), BUILTIN_TABLE, "r", "t", 1).ok).toBe(false);
+    const after = addAsReference(board([layered("x"), task("t")]), BUILTIN_TABLE, "x", "t", 3);
+    if (!after.ok) expect(after.reason).toContain("图层");
+  });
+
+  it("以此继续编辑：无效来源图层身份明确拒绝，不建节点", () => {
+    const b = board([layered("x"), reference("r")]);
+    for (const layers of [new Map([["x", 5]]), new Map([["x", 0]]), new Map([["x", 2.5]]), new Map([["r", 1]])]) {
+      const outcome = continueEditing(b, BUILTIN_TABLE, NONE, ["x", "r"], "x", ids, layers);
+      expect(outcome.ok).toBe(false);
+      if (!outcome.ok) expect(outcome.reason).toContain("图层");
+    }
+  });
 });

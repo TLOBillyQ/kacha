@@ -4,8 +4,8 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { useEffect, useRef, useState } from "react";
 import type { PortRef, RegionRender } from "../core/board";
 import { MAX_REGIONS, regionCss } from "../core/overlay";
-import { basename, joinPath } from "../core/paths";
-import { layersExportJson, type LayerRecord } from "../core/taskDir";
+import { basename, dirname, joinPath } from "../core/paths";
+import { layersExportJson, parseLayersFile, type LayerRecord } from "../core/taskDir";
 import { fileUrl, ipc } from "../shell/ipc";
 import { saveCopyAs, writeNew } from "../shell/saveFile";
 import { useBoardActions, useImageInfos } from "./context";
@@ -171,9 +171,21 @@ export function PreviewDialog({ req, toast, onClose }: Props) {
     runExport(async () => {
       const dir = await open({ directory: true });
       if (!dir) return null;
-      await writeNew(await ipc.readFileBytes(req.absPath), joinPath(dir, basename(req.absPath)));
-      for (const layer of layers) await writeNew(await ipc.readFileBytes(layer.absPath), joinPath(dir, basename(layer.record.file)));
-      const json = await writeNew(new TextEncoder().encode(layersExportJson(layers.map((l) => l.record))), joinPath(dir, "layers.json"));
+      // 元数据真源是任务目录的 layers.json：可读且层数与当前一致时按它出（含底图名称 / 描述）；读不到（旧结果没有 layers.json）退回节点记录。损坏则明确失败，不静默降级。
+      const truth = await ipc.readFileBytes(joinPath(dirname(req.absPath), "layers.json")).then(parseLayersFile, () => null);
+      const source = truth && truth.layers.length === layers.length ? truth : null;
+      const records = source?.layers ?? layers.map((l) => l.record);
+      const basePath = await writeNew(await ipc.readFileBytes(req.absPath), joinPath(dir, basename(req.absPath)));
+      // 图层保持 layers/NN.png 布局写进 layers/ 子目录；重名改名的以实际写出的文件名为准。
+      const written: string[] = [];
+      for (const layer of layers) {
+        const path = await writeNew(await ipc.readFileBytes(layer.absPath), joinPath(dir, "layers", basename(layer.record.file)));
+        written.push(`layers/${basename(path)}`);
+      }
+      const json = await writeNew(
+        new TextEncoder().encode(layersExportJson(records.map((r, i) => ({ ...r, file: written[i] })), { ...(source?.base ?? {}), file: basename(basePath), z_index: 0 })),
+        joinPath(dir, "layers.json"),
+      );
       return `已保存底图、${layers.length} 个图层与 ${basename(json)}`;
     });
 

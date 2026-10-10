@@ -1,6 +1,6 @@
 // 节点图规则：连线合法性、任务节点按能力露出的端口与开关、提示词与图片来源。
 // 全部是 Board → 结果的纯函数；换模型绝不自动删线或改设置。不可运行原因见 taskView。
-import type { Board, BoardEdge, TaskNode } from "./board";
+import type { Board, BoardEdge, LayerRecord, ResultRecord, TaskNode } from "./board";
 import {
   findModel,
   isSupported,
@@ -12,7 +12,6 @@ import {
 import { flashFeatureImplemented } from "./gateway";
 import { resolveFromRoot } from "./paths";
 import { effectiveRegionRender, expandImageEdges, type PortSlot } from "./region";
-import { layerFileName } from "./taskDir";
 
 export const IMAGE_PORT_PREFIX = "image:";
 
@@ -75,22 +74,32 @@ export function promptText(board: Board, taskId: string, port: "positive" | "neg
 export interface ImageSource {
   nodeId: string;
   label: string;
-  absPath: string;
+  /** 无效来源图层身份为 null：不猜 layers/NN 路径、不回落底图，由调用方走明确素材校验失败。 */
+  absPath: string | null;
+  /** 接的是结果节点的第几图层（1 起）；底图 / 参考图为 null。缺图与透明探测按它分键，互不株连。 */
+  sourceLayer: number | null;
+}
+
+/** 来源图层身份解析：正整数序号、在结果记录的图层表内、记录带文件名；否则为 null（无效身份）。 */
+export function sourceLayerRecord(record: ResultRecord, sourceLayer: number): LayerRecord | null {
+  if (!Number.isInteger(sourceLayer) || sourceLayer < 1) return null;
+  const entry = record.layers?.[sourceLayer - 1];
+  return entry && typeof entry.file === "string" && entry.file !== "" ? entry : null;
 }
 
 /** 任务的参考图来源，按端口顺序；结果节点回灌的是文件本身，不带会话参数。 */
 export function imageSources(board: Board, taskId: string, outputRoot: string): ImageSource[] {
-  return imageEdges(board, taskId).flatMap((e) => {
+  return imageEdges(board, taskId).flatMap((e): ImageSource[] => {
     const src = board.nodes.find((n) => n.id === e.from[0]);
-    if (src?.type === "reference") return [{ nodeId: src.id, label: src.display_name, absPath: resolveFromRoot(outputRoot, src.path) }];
+    if (src?.type === "reference") return [{ nodeId: src.id, label: src.display_name, absPath: resolveFromRoot(outputRoot, src.path), sourceLayer: null }];
     if (src?.type === "result") {
-      // 接了某一图层：路径指向 layers/NN.<ext>（文件名以结果记录为准），标签点明图层序号。
+      // 接了某一图层：路径以结果记录里的图层记录为准（记录无效 = 身份无效，不给路径），标签点明图层序号。
       if (e.source_layer !== null) {
-        const file = src.record.layers?.[e.source_layer - 1]?.file ?? layerFileName(e.source_layer);
+        const layer = sourceLayerRecord(src.record, e.source_layer);
         const dir = src.path.slice(0, src.path.length - src.file.length);
-        return [{ nodeId: src.id, label: `${src.file} 图层${e.source_layer}`, absPath: resolveFromRoot(outputRoot, `${dir}${file}`) }];
+        return [{ nodeId: src.id, label: `${src.file} 图层${e.source_layer}`, absPath: layer ? resolveFromRoot(outputRoot, `${dir}${layer.file}`) : null, sourceLayer: e.source_layer }];
       }
-      return [{ nodeId: src.id, label: src.file, absPath: resolveFromRoot(outputRoot, src.path) }];
+      return [{ nodeId: src.id, label: src.file, absPath: resolveFromRoot(outputRoot, src.path), sourceLayer: null }];
     }
     return [];
   });

@@ -55,6 +55,13 @@ export async function planExport(board: Board, outputRoot: string, fs: PackFs): 
     if (dir) {
       taskDirs.add(dir);
       if (!(await fs.isFile(absPath).catch(() => false))) missing.push({ nodeId: node.id, path: node.path });
+      // Flash 结果的图层文件也要齐：缺哪层列哪层，照常导出（导入后该层缺失，用到时会明确失败）。
+      if (node.type === "result") {
+        for (const layer of node.record.layers ?? []) {
+          const layerRel = `${dir}/${layer.file}`;
+          if (!(await fs.isFile(resolveFromRoot(outputRoot, layerRel)).catch(() => false))) missing.push({ nodeId: node.id, path: layerRel });
+        }
+      }
       nodes.push(rel === node.path ? node : { ...node, path: rel });
       continue;
     }

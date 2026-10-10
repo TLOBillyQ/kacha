@@ -9,6 +9,19 @@ export function flashFeatureImplemented(model: ModelCapability | undefined, feat
   return model?.request_shape !== "seedream_flash_images_generations" || feature === "transparent";
 }
 
+/** 图层定位：absolute 为底图像素坐标 [left,top,right,bottom]，normalized 为 0–1000（与提示坐标 0–999 互不相干）。 */
+export interface LayerBoundingBox {
+  absolute: number[];
+  normalized: number[];
+}
+
+/** bounding_box 合法性：两个矩形各为 [left,top,right,bottom]、有面积，normalized 限 0–1000。 */
+export function validLayerBox(value: unknown): value is LayerBoundingBox {
+  const b = value as LayerBoundingBox | undefined;
+  const rect = (v: unknown, max: number) => Array.isArray(v) && v.length === 4 && v.every((n) => typeof n === "number" && Number.isFinite(n) && n >= 0 && n <= max) && v[2] > v[0] && v[3] > v[1];
+  return !!b && rect(b.absolute, Number.MAX_SAFE_INTEGER) && rect(b.normalized, 1000);
+}
+
 export const MODELS_PATH = "/v1/models";
 export const TEXT_TO_IMAGE_PATH = "/v1/images/generations";
 export const IMAGE_EDIT_PATH = "/v1/images/edits";
