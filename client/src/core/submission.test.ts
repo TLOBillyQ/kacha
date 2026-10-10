@@ -281,7 +281,7 @@ describe("二次确认：「图N」校验与提示", () => {
     t.models.find((m) => m.model_id === "doubao-seedream-5-0-flash-260915")!.reference_phrasing.en_verified = "untested";
     const [item] = buildConfirmItems(b, t, ["t"], ctx);
     expect(item.warnings).toContain("该模型英文序号未验证");
-    expect(item.send?.text).toBe("This request provides one reference image, identified as Image 1. Use the visual content of Image 1 to follow the user instructions below; image references without a number in those instructions refer to Image 1.\n\nWhen the user specifies a reference purpose, use Image 1 for that purpose. When the user asks to modify the image, use Image 1 as the editing base and preserve content unrelated to the requested changes.\n\nUser instructions:\nPut Image 1 on a beach");
+    expect(item.send?.text).toBe("This request provides one reference image, identified as 图1. Use the visual content of 图1 to follow the user instructions below; image references without a number in those instructions refer to 图1.\n\nWhen the user specifies a reference purpose, use 图1 for that purpose. When the user asks to modify the image, use 图1 as the editing base and preserve content unrelated to the requested changes.\n\nUser instructions:\nPut 图1 on a beach");
   });
 });
 
