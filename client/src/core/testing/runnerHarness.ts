@@ -42,10 +42,10 @@ function gate() {
   };
 }
 
-type Reply = { status: number; body: string };
+type Reply = { status: number; body: string; bytes?: Uint8Array };
 
 /** 内存 RunDeps + 手摇假时钟 + 记录式画板写入 / 日志；网关按 replies 依次应答（用完后一律成功）。 */
-export function harness(opts: { concurrency?: number } = {}) {
+export function harness(opts: { concurrency?: number; imageCodec?: RunDeps["imageCodec"] } = {}) {
   const fs = memoryTaskFs();
   const files = fs.files;
   const requests: string[] = [];
@@ -56,6 +56,7 @@ export function harness(opts: { concurrency?: number } = {}) {
   let now = Date.parse("2026-09-16T09:15:00Z");
   let timers: { at: number; fn: () => void }[] = [];
   const deps: RunDeps = {
+    imageCodec: opts.imageCodec,
     readFile: async (path) => {
       await read.pass();
       return path === "/root/refs/cat.png" ? PNG : fs.readFile(path);
@@ -68,7 +69,7 @@ export function harness(opts: { concurrency?: number } = {}) {
       requests.push(url);
       await gateway.pass();
       const r = replies.shift() ?? { status: 200, body: OK_BODY };
-      return { status: r.status, headers: { get: () => null }, text: async () => r.body, arrayBuffer: async () => new TextEncoder().encode(r.body).buffer as ArrayBuffer };
+      return { status: r.status, headers: { get: () => null }, text: async () => r.body, arrayBuffer: async () => (r.bytes ?? new TextEncoder().encode(r.body)).slice().buffer as ArrayBuffer };
     },
     now: () => new Date(now),
     schedule: (ms, fn) => {
