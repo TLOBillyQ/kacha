@@ -31,30 +31,28 @@ for (const imported of [false, true]) test(`Lite ${imported ? "画板包导入" 
   });
   await task(page, "t").locator(".task-actions button.primary").click();
   await expect(toast(page)).toContainText("Lite 已停用，请切换到 Flash");
-  await task(page, "t").getByRole("button", { name: "展开" }).click();
+  if (await task(page, "t").getByRole("button", { name: "展开" }).count()) await task(page, "t").getByRole("button", { name: "展开" }).click();
   const select = task(page, "t").getByRole("combobox", { name: "模型", exact: true });
   await expect(select).toHaveValue(LITE);
   await expect(select.locator(`option[value='${LITE}']`)).toBeDisabled();
-  await task(page, "r").locator(".node-title").click({ button: "right" });
+  await task(page, "r").click({ button: "right" });
   await page.getByRole("menuitem", { name: "以此继续编辑", exact: true }).click();
   await expect(page.locator(".react-flow__node-task").filter({ hasText: "Lite（已停用" })).toHaveCount(2);
-  await select.selectOption(FLASH);
+  // 继续编辑把焦点移到新节点，原任务节点自动收起；重新展开后再切换模型。
+  if (await task(page, "t").getByRole("button", { name: "展开" }).count()) await task(page, "t").getByRole("button", { name: "展开" }).click();
+  await task(page, "t").getByRole("combobox", { name: "模型", exact: true }).selectOption(FLASH);
   // 3K remains invalid, requiring the user's explicit adjustment.
   await task(page, "t").locator(".task-actions button.primary").click();
-  await expect(toast(page)).toContainText("生成尺寸不在模型尺寸表内");
+  await expect(toast(page)).toContainText("生成尺寸 3K · 1:1 不在模型尺寸表内");
   expect(bodies).toHaveLength(0);
   await task(page, "t").getByRole("combobox", { name: "分辨率档" }).selectOption("2K");
   await task(page, "t").locator(".node-title").click({ button: "right" });
   await page.getByRole("menuitem", { name: "重新生成", exact: true }).click();
   await expect(toast(page)).toContainText("Lite 已停用，请切换到 Flash");
-  await task(page, "r").locator(".node-title").click({ button: "right" });
+  await task(page, "r").click({ button: "right" });
   await page.getByRole("menuitem", { name: "生成变体", exact: true }).click();
   await expect(toast(page)).toContainText("Lite 已停用，请切换到 Flash");
   expect(bodies).toHaveLength(0);
-  await task(page, "r").locator(".node-title").click({ button: "right" });
-  await page.getByRole("menuitem", { name: "以此继续编辑", exact: true }).click();
-  const continued = page.locator(".react-flow__node-task").filter({ hasText: "Lite（已停用" }).last();
-  await expect(continued).toBeVisible();
   await page.screenshot({ path: `test-results/retirement-${imported ? "import" : "open"}.png` });
   await task(page, "t").locator(".task-actions button.primary").click();
   await expect.poll(() => bodies.length).toBe(1);
