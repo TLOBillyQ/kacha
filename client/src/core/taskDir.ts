@@ -277,7 +277,7 @@ export function layerFileName(index: number, ext = "png"): string {
 }
 
 /** 拆分图层落盘：按 z_index 升序写 layers/01.<ext>…；返回写盘后的图层记录。 */
-export async function saveLayers(fs: Pick<TaskFs, "writeNewFile">, outputRoot: string, relDir: string, layers: LayerImage[]): Promise<LayerRecord[]> {
+export async function saveLayers(fs: Pick<TaskFs, "writeNewFile">, outputRoot: string, relDir: string, layers: LayerImage[], metadata?: { base: { z_index: 0; name?: string; description?: string } }): Promise<LayerRecord[]> {
   const ordered = [...layers].sort((a, b) => a.zIndex - b.zIndex);
   const out: LayerRecord[] = [];
   for (const [i, layer] of ordered.entries()) {
@@ -287,7 +287,7 @@ export async function saveLayers(fs: Pick<TaskFs, "writeNewFile">, outputRoot: s
     await fs.writeNewFile(taskPath(outputRoot, relDir, file), layer.bytes);
     out.push({ file, z_index: layer.zIndex, bounding_box: layer.boundingBox, ...(layer.name !== undefined ? { name: layer.name } : {}), ...(layer.description !== undefined ? { description: layer.description } : {}) });
   }
-  await fs.writeNewFile(taskPath(outputRoot, relDir, "layers.json"), new TextEncoder().encode(layersExportJson(out)));
+  await fs.writeNewFile(taskPath(outputRoot, relDir, "layers.json"), new TextEncoder().encode(layersExportJson(out, metadata?.base)));
   return out;
 }
 
@@ -314,8 +314,8 @@ export async function restoreResultLayers(fs: Pick<TaskFs, "readFile">, outputRo
 }
 
 /** 导出用 layers.json 内容：与结果记录里的 layers 一致。 */
-export function layersExportJson(layers: LayerRecord[]): string {
-  return `${JSON.stringify({ layers }, null, 2)}\n`;
+export function layersExportJson(layers: LayerRecord[], base?: { z_index: 0; name?: string; description?: string }): string {
+  return `${JSON.stringify({ ...(base ? { base } : {}), layers }, null, 2)}\n`;
 }
 
 /** 没有结果图的任务的结局；没有记录 = 上次进行中时程序异常退出（已中断）。 */

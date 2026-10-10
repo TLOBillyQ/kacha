@@ -58,6 +58,11 @@ test("single image → optional prompt → bbox preview → save → reopen from
   expect(dimensions.top).toBeCloseTo(0.2, 2);
   expect(dimensions.width).toBeCloseTo(0.3, 2);
   expect(dimensions.height).toBeCloseTo(0.4, 2);
+  await page.evaluate(() => window.__e2e.dialogAnswers.open.push("/e2e/export"));
+  await dialog.getByRole("button", { name: "保存全部图层 + layers.json", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => window.__e2e.readText("/e2e/export/layers.json"))).not.toBeNull();
+  const exported = await page.evaluate(() => JSON.parse(window.__e2e.readText("/e2e/export/layers.json")!));
+  expect(exported.layers[0]).toMatchObject({ bounding_box: bbox, name: "合成主体", description: "官方契约合成资产，非网关实测" });
   await page.screenshot({ path: "test-results/layers-preview.png" });
   expect(errors).toEqual([]);
 });

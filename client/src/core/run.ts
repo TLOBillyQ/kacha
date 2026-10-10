@@ -335,16 +335,17 @@ export async function executeJob(
   let saved: { file: string; path: string };
   let layers: LayerRecord[] | undefined;
   try {
-    saved = await saveResult(deps, args.outputRoot, job.relDir, fetched[0].bytes);
-    // 图层拆分：首张是合成结果，其余按 z_index 升序落盘 layers/01.<ext>…（无上架模型可跑，按契约夹具验收）。
-    if (job.plan.layerDecomposition && fetched.length > 1) {
+    // 写底图作为最终成功图片；全部图层验证与保存先完成。
+    if (job.plan.layerDecomposition && (fetched.length > 1 || flashLayers)) {
       layers = await saveLayers(
         deps,
         args.outputRoot,
         job.relDir,
         fetched.slice(1).map((f, i) => ({ bytes: f.bytes, zIndex: f.layer?.z_index ?? i + 1, boundingBox: f.layer?.bounding_box ?? [], ...(f.layer?.name !== undefined ? { name: f.layer.name } : {}), ...(f.layer?.description !== undefined ? { description: f.layer.description } : {}) })),
+        flashLayers ? { base: { z_index: 0, ...(fetched[0].layer?.name !== undefined ? { name: fetched[0].layer.name } : {}), ...(fetched[0].layer?.description !== undefined ? { description: fetched[0].layer.description } : {}) } } : undefined,
       );
     }
+    saved = await saveResult(deps, args.outputRoot, job.relDir, fetched[0].bytes);
   } catch (e) {
     throw new LocalError(`保存结果图失败：${e instanceof Error ? e.message : String(e)}`);
   }

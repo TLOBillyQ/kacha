@@ -177,7 +177,8 @@ export function PreviewDialog({ req, toast, onClose }: Props) {
       if (!dir) return null;
       await writeNew(await ipc.readFileBytes(req.absPath), joinPath(dir, basename(req.absPath)));
       for (const layer of layers) await writeNew(await ipc.readFileBytes(layer.absPath), joinPath(dir, basename(layer.record.file)));
-      const json = await writeNew(new TextEncoder().encode(layersExportJson(layers.map((l) => l.record))), joinPath(dir, "layers.json"));
+      const savedMetadata = await ipc.readFileBytes(joinPath(req.absPath.replace(/[\\/][^\\/]+$/, ""), "layers.json")).catch(() => null);
+      const json = await writeNew(savedMetadata ?? new TextEncoder().encode(layersExportJson(layers.map((l) => l.record))), joinPath(dir, "layers.json"));
       return `已保存底图、${layers.length} 个图层与 ${basename(json)}`;
     });
 
