@@ -97,7 +97,9 @@ export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=""
 密钥文件应随项目发布材料备份到受限位置；丢失后必须更换公钥并发布一次只供手动安装的新版本。
 
 发布前需先按 `docs/release/release-notes-template.md` 撰写 `docs/release/release-notes-<版本>.md`，
-其全文即 Release 正文与 updater 更新说明。发布脚本的安全闸门：token 只从环境变量读取；`release/`
+其全文即 Release 正文与 updater 更新说明。更新说明只写本版变化摘要，连同标题控制在 200 字以内；
+安装、系统放行、校验与故障恢复步骤保留在 `docs/release/auto-update-user-guide.md`，不重复写进更新说明。
+发布脚本的安全闸门：token 只从环境变量读取；`release/`
 有其他版本的发布产物、缺少 updater 签名、SHA256SUMS 不一致或未列出本端发布集合、缺少发布说明时，
 一律不发起任何上传。
 
@@ -113,7 +115,7 @@ macOS 测试还比较首次安装 zip 与更新包内的应用内容，捕获归
 这些是假产物测试，不验证真实 codesign、minisign、macOS 扩展属性或安装更新。
 发布测试使用内存假 Gitea，不执行真实上传；macOS 真机安装、迁移及自动更新未验收。
 
-## 用户侧提示（必须写入发布说明）
+## 用户侧提示（见用户指南）
 
 - Windows 安装器未购买代码签名：SmartScreen「更多信息 → 仍要运行」；按当前用户安装，
   通常不需要管理员权限；依赖 WebView2（Win10 21H2+/Win11 预装）。
