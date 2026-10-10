@@ -59,6 +59,24 @@ describe("Flash 图层运行器：官方契约合成回放", () => {
 });
 
 describe("Flash 失败政策", () => {
+  it.each(["base64", "URL"])("%s 的 PNG 签名残片解码失败，不存结果或产出节点", async (transport) => {
+    const damaged = Uint8Array.of(137, 80, 78, 71, 13, 10, 26, 10);
+    const decoded: Uint8Array[] = [];
+    const h = harness({ imageCodec: { decode: async (bytes) => {
+      decoded.push(bytes);
+      throw new Error("truncated PNG");
+    } } });
+    const b = board();
+    for (const node of b.nodes) if (node.type === "task") node.model = "doubao-seedream-5-0-flash-260915";
+    h.replies.push({ status: 200, body: JSON.stringify({ data: [transport === "URL" ? { url: "https://result.test/broken.png" } : { b64_json: btoa(String.fromCharCode(...damaged)) }] }) });
+    if (transport === "URL") h.replies.push({ status: 200, body: "", bytes: damaged });
+    await h.runner.submit(h.target(), b, ["t1"]);
+    await settle();
+    expect(h.statuses().t1).toEqual({ kind: "failed", label: "响应无效" });
+    expect(decoded).toEqual([damaged]);
+    expect(h.changes.filter((c) => c.change.kind === "runResult")).toEqual([]);
+    expect([...h.files.keys()].some((path) => /\/result\./.test(path))).toBe(false);
+  });
   it.each([401, 400, 500])("HTTP %i 不重发，保留失败", async (status) => {
     const h = harness();
     const b = board();

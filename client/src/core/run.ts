@@ -93,6 +93,16 @@ async function validateLayerReference(deps: RunDeps, bytes: Uint8Array): Promise
   } finally { decoded.close(); }
 }
 
+async function validateFlashOrdinaryOutput(deps: RunDeps, bytes: Uint8Array): Promise<void> {
+  if (!deps.imageCodec) throw new GatewayError("invalid_response", "Flash 结果需要实际图片解码校验");
+  let decoded;
+  try { decoded = await deps.imageCodec.decode(bytes); }
+  catch { throw new GatewayError("invalid_response", "Flash 结果图片无法解码"); }
+  try {
+    if (!Number.isInteger(decoded.width) || !Number.isInteger(decoded.height) || decoded.width <= 0 || decoded.height <= 0) throw new GatewayError("invalid_response", "Flash 结果图片尺寸无效");
+  } finally { decoded.close(); }
+}
+
 function readError(label: string, e: unknown): LocalError {
   return new LocalError(`读取${label}失败：${e instanceof Error ? e.message : String(e)}`);
 }
@@ -314,6 +324,7 @@ export async function executeJob(
           }
         } finally { decoded.close(); }
       }
+      if (job.input.model.request_shape === "seedream_flash_images_generations" && !job.plan.layerDecomposition && !job.plan.transparentBackground) await validateFlashOrdinaryOutput(deps, bytes);
       fetched.push({ bytes, layer: image.layer });
     }
   } catch (e) {
