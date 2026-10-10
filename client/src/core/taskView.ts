@@ -2,7 +2,7 @@
 // 生成任务节点与二次确认（buildConfirmItems）消费同一份，「节点标红 ≡ 运行被拦」由构造保证。
 // 换模型绝不自动删线或改设置，只报告原因。
 import type { Board, TaskNode } from "./board";
-import { findModel, isSupported, type CapabilityTable, type ModelCapability } from "./capabilities";
+import { findModel, isRetiredModel, isSupported, LITE_RETIRED_HINT, type CapabilityTable, type ModelCapability } from "./capabilities";
 import { isRequestShapeImplemented } from "./gateway";
 import { imageEdges, imagePortSlots, imageSources, promptText, workflowOf } from "./graph";
 import { MAX_REGIONS } from "./overlay";
@@ -16,6 +16,7 @@ export type ReasonKind =
   | "positiveMissing"
   | "positiveEmpty"
   | "modelUnknown"
+  | "modelRetired"
   | "modelUnshelved"
   | "modelNotFromGateway"
   | "requestShapeMissing"
@@ -25,11 +26,14 @@ export type ReasonKind =
   | "tooManyRegions"
   | "negativeUnsupported"
   | "sizeUnsupported"
+  | "layerNeedsOneImage"
   | "layerUnsupported"
   | "transparentUnsupported"
   | "transparentNeedsOneImage"
   | "transparentNoAlpha"
+  | "transparentNeedsPng"
   | "referenceOutOfRange"
+  | "sourceLayerInvalid"
   | "imageMissing";
 
 /** 未就绪 = 还没填完（节点不标红）；错误 = 其余（节点标红）。两类都阻止提交。 */
@@ -41,7 +45,7 @@ export interface UnrunnableReason {
   text: string;
 }
 
-/** 界面采集的事实；读不到的一律当未知，未知不拦。 */
+/** 界面采集的事实；透明背景必须明确确认 alpha，其余未知按各项规则处理。 */
 export interface TaskFacts {
   /** 图片文件缺失的参考图 / 结果节点 id。 */
   missingNodes: ReadonlySet<string>;
@@ -90,18 +94,26 @@ export function taskView(board: Board, table: CapabilityTable, taskId: string, f
   const refs = imageRefProblems(board, table, taskId);
   const transparent = transparentBlock(board, model, taskId, facts);
   const layer = model && !isSupported(model.workflows[workflowOf(board, taskId)].layer_decomposition) ? "模型不支持拆分图层" : null;
+  const flashLayers = model?.request_shape === "seedream_flash_images_generations" && task.layer_decomposition;
   const reasons = [
-    ...promptReasons(board, taskId),
-    ...(model ? [...availabilityReasons(table, facts.discovery, model), ...modelReasons(board, model, task)] : [reason("modelUnknown", `模型 ${task.model} 不在能力表内`)]),
+    ...(flashLayers ? [] : promptReasons(board, taskId)),
+    ...(flashLayers && imagePortSlots(board, table, taskId).length !== 1 ? [reason("layerNeedsOneImage", "图层拆分需要恰好一张 PNG/JPEG 参考图，不支持区域派生图")] : []),
+    ...(flashLayers && !["1K", "1.5K", "2K", "auto"].includes(task.layer_size ?? "auto") ? [reason("sizeUnsupported", "图层尺寸只支持 1K / 1.5K / 2K / auto")] : []),
+    ...(isRetiredModel(task.model) ? [reason("modelRetired", LITE_RETIRED_HINT)] : model ? [...availabilityReasons(table, facts.discovery, model), ...modelReasons(board, model, task)] : [reason("modelUnknown", `模型 ${task.model} 不在能力表内`)]),
     ...(task.layer_decomposition && layer ? [reason("layerUnsupported", layer)] : []),
     ...(task.transparent_background && transparent ? [reason(transparent.kind, transparent.text)] : []),
     ...refs.issues.map((text) => reason("referenceOutOfRange", text)),
-    ...imageSources(board, taskId, "").flatMap((src, i) => (facts.missingNodes.has(src.nodeId) ? [reason("imageMissing", `图${i + 1} 图片缺失：${src.label}`)] : [])),
+    ...imageSources(board, taskId, "").flatMap((src, i) => {
+      if (src.absPath === null) return [reason("sourceLayerInvalid", `图${i + 1} 来源图层无效：${src.label}`)];
+      // 缺图按来源分键：图层线只看自己那层，底图线只看底图，互不株连。
+      const key = src.sourceLayer === null ? src.nodeId : `${src.nodeId}:layer:${src.sourceLayer}`;
+      return facts.missingNodes.has(key) ? [reason("imageMissing", `图${i + 1} 图片缺失：${src.label}`)] : [];
+    }),
   ];
   const edgeCount = imageEdges(board, taskId).length;
   const englishUnverified = !!model && edgeCount > 0 && promptLanguage(promptText(board, taskId, "positive")) === "en" && model.reference_phrasing.en_verified === "untested";
   const rule = model?.workflows[workflowOf(board, taskId)].size_rule;
-  const size = rule ? resolveSize(rule, task.size_spec) : null;
+  const size = !flashLayers && rule ? resolveSize(rule, task.size_spec) : null;
   const { tier, ratio } = task.size_spec;
   return {
     reasons: dedupe(reasons),
@@ -118,6 +130,7 @@ export function taskView(board: Board, table: CapabilityTable, taskId: string, f
 }
 
 function modelLabel(table: CapabilityTable, discovery: Discovery, modelId: string): TaskView["model"] {
+  if (isRetiredModel(modelId)) return { state: "unknown", label: "Lite（已停用，请切换到 Flash）" };
   const model = findModel(table, modelId);
   if (!model) return { state: "unknown", label: `${modelId}（未知模型）` };
   if (availableModels(table, discovery).some((m) => m.model_id === modelId)) return { state: "ok", label: model.display_name };
@@ -125,15 +138,22 @@ function modelLabel(table: CapabilityTable, discovery: Discovery, modelId: strin
 }
 
 /**
- * 透明背景的前提：模型支持、恰好一条图片线、该图带透明通道。开关能否打开与打开后的不可运行原因都出自这一条规则。
- * 透明通道未知（没读到）时不拦；模型缺失时由「不在能力表内」拦，这里不重复。
+ * 透明背景按展开后的实际参考图数、所选文件的 alpha 与输出格式校验，开关和不可运行原因共用规则。
+ * 透明通道未知时阻止启用；模型缺失时由「不在能力表内」拦。
  */
 function transparentBlock(board: Board, model: ModelCapability | undefined, taskId: string, facts: TaskFacts): { kind: ReasonKind; text: string; hint: string } | null {
   if (!model) return null;
   if (!isSupported(model.transparent_background)) return { kind: "transparentUnsupported", text: "模型不支持透明背景", hint: "模型不支持透明背景" };
   const edges = imageEdges(board, taskId);
-  if (edges.length !== 1) return { kind: "transparentNeedsOneImage", text: "透明背景需要恰好一条图片线", hint: "需要恰好一条图片线" };
-  return facts.alphaByNode.get(edges[0].from[0]) === false ? { kind: "transparentNoAlpha", text: "该图不带透明通道", hint: "该图不带透明通道" } : null;
+  if (expandImageEdges(edges, model).length !== 1) {
+    const text = model.request_shape === "seedream_flash_images_generations" ? "需要恰好一张实际参考图" : "需要恰好一条图片线";
+    return { kind: "transparentNeedsOneImage", text: `透明背景${text}`, hint: text };
+  }
+  const task = findTask(board, taskId)!;
+  if (model.request_shape === "seedream_flash_images_generations" && task.output_options?.output_format === "jpeg") return { kind: "transparentNeedsPng", text: "透明背景输出必须为 PNG", hint: "输出必须为 PNG" };
+  const edge = edges[0];
+  const alpha = facts.alphaByNode.get(edge.source_layer === null ? edge.from[0] : `${edge.from[0]}:layer:${edge.source_layer}`);
+  return alpha === true ? null : { kind: "transparentNoAlpha", text: alpha === false ? "该图不带透明通道" : "参考图透明通道尚未确认", hint: alpha === false ? "该图不带透明通道" : "透明通道尚未确认" };
 }
 
 /** 按画板当前内容的发送计划；模型不在能力表内时没有发送计划。 */
@@ -141,7 +161,8 @@ export function sendPlanOf(board: Board, table: CapabilityTable, taskId: string)
   const task = findTask(board, taskId);
   const model = task && findModel(table, task.model);
   if (!model) return null;
-  return planSend(model, imagePortSlots(board, table, taskId), promptText(board, taskId, "positive"), promptText(board, taskId, "negative"));
+  const plan = planSend(model, imagePortSlots(board, table, taskId), promptText(board, taskId, "positive"), promptText(board, taskId, "negative"));
+  return model.request_shape === "seedream_flash_images_generations" && task.layer_decomposition && !promptText(board, taskId, "positive").trim() && !promptText(board, taskId, "negative").trim() ? { ...plan, text: "" } : plan;
 }
 
 /** 「图N」「区域N」的引用越界与未引用，取自发送计划；没有发送计划（模型缺失）时按无固定句算。 */
@@ -187,14 +208,14 @@ function modelReasons(board: Board, model: ModelCapability, task: TaskNode): Unr
   const wf = model.workflows[workflowOf(board, task.id)];
   const max = model.workflows.image_edit.max_references;
   const render = effectiveRegionRender(model);
-  const expanded = expandImageEdges(edges, render).length;
+  const expanded = expandImageEdges(edges, model).length;
   if (edges.length > 0 && max === 0) out.push(reason("imageEditUnsupported", "模型不支持图片编辑"));
   else if (expanded > max) out.push(reason("tooManyReferences", `参考图 ${expanded} 张超出模型上限 ${max} 张`));
   const regions = edges.reduce((n, e) => n + (e.region?.rects.length ?? 0), 0);
   if (render === null && regions > 0) out.push(reason("regionUnsupported", "模型不支持框选修改区域"));
   if (render !== null && regions > MAX_REGIONS) out.push(reason("tooManyRegions", `框选了 ${regions} 个区域，最多 ${MAX_REGIONS} 个`));
   if (hasEdge(board, task.id, "negative") && !isSupported(wf.supports_negative_prompt)) out.push(reason("negativeUnsupported", "模型不支持负向提示词"));
-  if (resolveSize(wf.size_rule, task.size_spec) === null) {
+  if (!(model.request_shape === "seedream_flash_images_generations" && task.layer_decomposition) && resolveSize(wf.size_rule, task.size_spec) === null) {
     const s = task.size_spec;
     const value = ratioValue(s.ratio);
     // 只有宽高比本身越界才报范围；分辨率档不认识、或没有 custom 范围的模型仍按「不在尺寸表内」。

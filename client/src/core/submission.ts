@@ -1,4 +1,6 @@
 // 提交前的纯函数：脏判据快照、运行范围、二次确认清单。
+import type { OutputOptions } from "./gateway";
+import { outputOptions } from "./gateway";
 import type { Board, Region, TaskNode } from "./board";
 import { findModel, type CapabilityTable } from "./capabilities";
 import { imageEdges, imageSources, promptText } from "./graph";
@@ -19,6 +21,8 @@ export interface Snapshot {
   size_spec: SizeSpec;
   layer_decomposition: boolean;
   transparent_background: boolean;
+  output_options?: OutputOptions;
+  layer_size?: import("./gateway").LayerSize;
   images: SnapshotImage[];
 }
 
@@ -42,6 +46,8 @@ export function snapshotOf(board: Board, taskId: string): Snapshot | null {
     model: task.model,
     size_spec: { tier: task.size_spec.tier, ratio: task.size_spec.ratio, width: task.size_spec.width, height: task.size_spec.height },
     layer_decomposition: task.layer_decomposition,
+    ...(task.layer_decomposition && task.model === "doubao-seedream-5-0-flash-260915" ? { layer_size: task.layer_size ?? "auto" } : {}),
+    ...(task.model === "doubao-seedream-5-0-flash-260915" ? { output_options: outputOptions(task.output_options) } : {}),
     transparent_background: task.transparent_background,
     images,
   };
@@ -57,7 +63,7 @@ function canonical(value: unknown): string {
   return JSON.stringify(value) ?? "null";
 }
 
-const SNAPSHOT_KEYS: (keyof Snapshot)[] = ["prompt", "negative_prompt", "model", "size_spec", "layer_decomposition", "transparent_background", "images"];
+const SNAPSHOT_KEYS: (keyof Snapshot)[] = ["prompt", "negative_prompt", "model", "size_spec", "layer_decomposition", "layer_size", "transparent_background", "output_options", "images"];
 
 export function isDirty(board: Board, taskId: string): boolean {
   const task = findTask(board, taskId);
@@ -203,12 +209,15 @@ export async function collectRunFacts(
   const alphaByNode = new Map<string, boolean>();
   await Promise.all(
     taskIds
-      .flatMap((id) => imageSources(board, id, outputRoot))
+      .flatMap((id) => imageSources(board, id, outputRoot).map((src) => ({ ...src, key: src.sourceLayer === null ? src.nodeId : `${src.nodeId}:layer:${src.sourceLayer}` })))
       .map((src) =>
-        probe.inspectImage(src.absPath).then(
-          (info) => void alphaByNode.set(src.nodeId, info.has_alpha),
-          () => void missingNodes.add(src.nodeId),
-        ),
+        // 无效来源图层身份（absPath 为 null）不探测也不算缺图：任务视图给出「来源图层无效」的明确原因。
+        src.absPath === null
+          ? Promise.resolve()
+          : probe.inspectImage(src.absPath).then(
+              (info) => void alphaByNode.set(src.key, info.has_alpha),
+              () => void missingNodes.add(src.key),
+            ),
       ),
   );
   return { missingNodes, alphaByNode };

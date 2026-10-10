@@ -183,7 +183,7 @@ describe("二次确认清单", () => {
   });
 
   it("Seedream 无原生负向：负向拼进发送文本末尾", () => {
-    const b = board([prompt("p", "一只橘猫"), prompt("n", "模糊"), task("t", { model: "doubao-seedream-5-0-lite-260128" })], [edge("p", "t", "positive"), edge("n", "t", "negative")]);
+    const b = board([prompt("p", "一只橘猫"), prompt("n", "模糊"), task("t", { model: "doubao-seedream-5-0-flash-260915" })], [edge("p", "t", "positive"), edge("n", "t", "negative")]);
     const [item] = buildConfirmItems(b, BUILTIN_TABLE, ["t"], ctx);
     expect(item.send?.text).toBe("一只橘猫\n避免出现：模糊");
     expect(item.send?.negativeInlined).toBe(true);
@@ -216,7 +216,7 @@ describe("二次确认清单", () => {
   });
 
   it("Seedream 请求形态已接入，不因请求形态标红", () => {
-    const b = board([prompt("p", "一只橘猫"), task("t", { model: "doubao-seedream-5-0-lite-260128" })], [edge("p", "t", "positive")]);
+    const b = board([prompt("p", "一只橘猫"), task("t", { model: "doubao-seedream-5-0-flash-260915" })], [edge("p", "t", "positive")]);
     const [item] = buildConfirmItems(b, BUILTIN_TABLE, ["t"], { discovery: { source: "none" }, missingNodes: new Set(), alphaByNode: new Map() });
     expect(texts(item).join()).not.toContain("请求形态");
   });
@@ -274,22 +274,22 @@ describe("二次确认：「图N」校验与提示", () => {
 
   it("英文序号未验证的模型：英文提示词带参考图时提示", () => {
     const b = board(
-      [prompt("p", "Put @图1 on a beach"), reference("r1"), task("t", { model: "doubao-seedream-5-0-lite-260128" })],
+      [prompt("p", "Put @图1 on a beach"), reference("r1"), task("t", { model: "doubao-seedream-5-0-flash-260915" })],
       [edge("p", "t", "positive"), edge("r1", "t", "image:0")],
     );
     const t = structuredClone(BUILTIN_TABLE);
-    t.models.find((m) => m.model_id === "doubao-seedream-5-0-lite-260128")!.reference_phrasing.en_verified = "untested";
+    t.models.find((m) => m.model_id === "doubao-seedream-5-0-flash-260915")!.reference_phrasing.en_verified = "untested";
     const [item] = buildConfirmItems(b, t, ["t"], ctx);
     expect(item.warnings).toContain("该模型英文序号未验证");
-    expect(item.send?.text).toBe("This request provides one reference image, identified as Image 1. Use the visual content of Image 1 to follow the user instructions below; image references without a number in those instructions refer to Image 1.\n\nWhen the user specifies a reference purpose, use Image 1 for that purpose. When the user asks to modify the image, use Image 1 as the editing base and preserve content unrelated to the requested changes.\n\nUser instructions:\nPut Image 1 on a beach");
+    expect(item.send?.text).toBe("This request provides one reference image, identified as 图1. Use the visual content of 图1 to follow the user instructions below; image references without a number in those instructions refer to 图1.\n\nWhen the user specifies a reference purpose, use 图1 for that purpose. When the user asks to modify the image, use 图1 as the editing base and preserve content unrelated to the requested changes.\n\nUser instructions:\nPut 图1 on a beach");
   });
 });
 
 describe("图片来源", () => {
   it("按端口顺序给出绝对路径；结果回灌文件本身", () => {
     expect(imageSources(editBoard(), "t", "/root")).toEqual([
-      { nodeId: "r1", label: "r1.png", absPath: "/root/refs/r1.png" },
-      { nodeId: "x", label: "result.png", absPath: "/root/2026-09-16/task-x/result.png" },
+      { nodeId: "r1", label: "r1.png", absPath: "/root/refs/r1.png", sourceLayer: null },
+      { nodeId: "x", label: "result.png", absPath: "/root/2026-09-16/task-x/result.png", sourceLayer: null },
     ]);
   });
 });
@@ -384,6 +384,58 @@ describe("运行前事实采集", () => {
     const facts = await collectRunFacts(probe, board([prompt("p", "猫"), task("t")], [edge("p", "t", "positive")]), ["t"], "/root");
     expect(facts.missingNodes.size).toBe(0);
     expect(facts.alphaByNode.size).toBe(0);
+  });
+
+  it("来源图层按图层路径探测并按图层键记 alpha；无效身份不探测也不算缺图（任务视图另有明确原因）", async () => {
+    const r = result("x") as Extract<BoardNode, { type: "result" }>;
+    const withLayers = { ...r, layer_count: 2, record: { ...r.record, layers: [{ file: "layers/01.png", z_index: 1, bounding_box: [] }, { file: "layers/02.png", z_index: 2, bounding_box: [] }] } };
+    const b = board(
+      [prompt("p", "改"), withLayers, task("t")],
+      [edge("p", "t", "positive"), { ...edge("x", "t", "image:0"), source_layer: 1 }, { ...edge("x", "t", "image:1"), source_layer: 9 }],
+    );
+    const probed: string[] = [];
+    const probe = {
+      inspectImage: async (absPath: string) => {
+        probed.push(absPath);
+        return { has_alpha: true };
+      },
+    };
+    const facts = await collectRunFacts(probe, b, ["t"], "/root");
+    expect(probed).toEqual(["/root/2026-09-16/task-x/layers/01.png"]);
+    expect(facts.missingNodes.size).toBe(0);
+    expect([...facts.alphaByNode]).toEqual([["x:layer:1", true]]);
+  });
+
+  it("图层文件缺失按图层键记缺图，不株连底图与兄弟图层", async () => {
+    const r = result("x") as Extract<BoardNode, { type: "result" }>;
+    const withLayers = { ...r, layer_count: 2, record: { ...r.record, layers: [{ file: "layers/01.png", z_index: 1, bounding_box: [] }, { file: "layers/02.png", z_index: 2, bounding_box: [] }] } };
+    const b = board(
+      [prompt("p", "改"), withLayers, task("t")],
+      [edge("p", "t", "positive"), edge("x", "t", "image:0"), { ...edge("x", "t", "image:1"), source_layer: 2 }],
+    );
+    const probe = {
+      inspectImage: async (absPath: string) => {
+        if (absPath.endsWith("layers/02.png")) throw new Error("ENOENT");
+        return { has_alpha: false };
+      },
+    };
+    const facts = await collectRunFacts(probe, b, ["t"], "/root");
+    expect([...facts.missingNodes]).toEqual(["x:layer:2"]);
+  });
+
+  it("同一结果的不同图层各占一键，互不覆盖", async () => {
+    const r = result("x") as Extract<BoardNode, { type: "result" }>;
+    const withLayers = { ...r, layer_count: 2, record: { ...r.record, layers: [{ file: "layers/01.png", z_index: 1, bounding_box: [] }, { file: "layers/02.png", z_index: 2, bounding_box: [] }] } };
+    const b = board(
+      [prompt("p", "改"), withLayers, task("t")],
+      [edge("p", "t", "positive"), { ...edge("x", "t", "image:0"), source_layer: 1 }, { ...edge("x", "t", "image:1"), source_layer: 2 }],
+    );
+    const probe = { inspectImage: async (absPath: string) => ({ has_alpha: absPath.endsWith("01.png") }) };
+    const facts = await collectRunFacts(probe, b, ["t"], "/root");
+    expect([...facts.alphaByNode].sort()).toEqual([
+      ["x:layer:1", true],
+      ["x:layer:2", false],
+    ]);
   });
 });
 
@@ -495,17 +547,32 @@ describe("区域指示：图N 校验与发送文本", () => {
 });
 
 describe("图层来源", () => {
-  it("source_layer 指向 layers/NN 文件，标签点明图层序号", () => {
+  const withLayers = (layers?: { file: string; z_index: number; bounding_box: number[] }[]) => {
     const r = result("x") as Extract<BoardNode, { type: "result" }>;
-    const withLayers = {
-      ...r,
-      layer_count: 2,
-      record: { ...r.record, layers: [{ file: "layers/01.png", z_index: 1, bounding_box: [] }, { file: "layers/02.jpg", z_index: 2, bounding_box: [] }] },
-    };
-    const b = board([prompt("p", "@图1 改色"), withLayers, task("t")], [edge("p", "t", "positive"), { ...edge("x", "t", "image:0"), source_layer: 2 }]);
-    expect(imageSources(b, "t", "/root")).toEqual([{ nodeId: "x", label: "result.png 图层2", absPath: "/root/2026-09-16/task-x/layers/02.jpg" }]);
+    return { ...r, layer_count: layers?.length ?? 0, record: { ...r.record, ...(layers ? { layers } : {}) } };
+  };
+  const layerBoard = (src: BoardNode, layer: number | null) =>
+    board([prompt("p", "改"), src, task("t")], [edge("p", "t", "positive"), { ...edge("x", "t", "image:0"), source_layer: layer }]);
+
+  it("source_layer 指向 layers/NN 文件，标签点明图层序号", () => {
+    const b = board([prompt("p", "@图1 改色"), withLayers([{ file: "layers/01.png", z_index: 1, bounding_box: [] }, { file: "layers/02.jpg", z_index: 2, bounding_box: [] }]), task("t")], [edge("p", "t", "positive"), { ...edge("x", "t", "image:0"), source_layer: 2 }]);
+    expect(imageSources(b, "t", "/root")).toEqual([{ nodeId: "x", label: "result.png 图层2", absPath: "/root/2026-09-16/task-x/layers/02.jpg", sourceLayer: 2 }]);
     // 快照也记 source_layer：换图层让任务变脏。
     expect(snapshotOf(b, "t")?.images[0]).toMatchObject({ kind: "result", source_layer: 2 });
+  });
+
+  it("无效来源图层身份：absPath 为 null，不猜 layers/NN、不回落底图", () => {
+    const two = withLayers([
+      { file: "layers/01.png", z_index: 1, bounding_box: [] },
+      { file: "layers/02.png", z_index: 2, bounding_box: [] },
+    ]);
+    const emptyFile = withLayers([{ file: "", z_index: 1, bounding_box: [] }]);
+    // 越界、零 / 负、非整数、结果没有图层记录、记录文件名为空：一律无效。
+    for (const [src, layer] of [[two, 3], [two, 0], [two, -1], [two, 1.5], [withLayers(), 1], [emptyFile, 1]] as const) {
+      const [s] = imageSources(layerBoard(src, layer), "t", "/root");
+      expect(s.absPath).toBeNull();
+      expect(s.label).toBe(`result.png 图层${layer}`);
+    }
   });
 });
 

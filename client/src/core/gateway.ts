@@ -2,7 +2,24 @@
 // 路径、载荷与出图解析全部来自 contracts/fixtures 实测夹具；生成请求只发一次，不重发、不用幂等键、不查任务。
 // HTTP 由调用方注入（壳里是 tauri-plugin-http 的 fetch，测试里是夹具回放）。
 // 发什么由发送计划（sendPlan.ts）决定；这里只把发送文本与原生负向放进请求体。
+import { withinPixelRange } from "./size";
 import { isSupported, type ModelCapability } from "./capabilities";
+
+export type LayerSize = "1K" | "1.5K" | "2K" | "auto";
+export interface LayerMetadata { z_index: number; bounding_box?: LayerBoundingBox | number[]; name?: string; description?: string }
+
+/** 图层定位：absolute 为底图像素坐标 [left,top,right,bottom]，normalized 为 0–1000（与提示坐标 0–999 互不相干）。 */
+export interface LayerBoundingBox {
+  absolute: number[];
+  normalized: number[];
+}
+
+/** bounding_box 合法性：两个矩形各为 [left,top,right,bottom]、有面积，normalized 限 0–1000。 */
+export function validLayerBox(value: unknown): value is LayerBoundingBox {
+  const b = value as LayerBoundingBox | undefined;
+  const rect = (v: unknown, max: number) => Array.isArray(v) && v.length === 4 && v.every((n) => typeof n === "number" && Number.isFinite(n) && n >= 0 && n <= max) && v[2] > v[0] && v[3] > v[1];
+  return !!b && rect(b.absolute, Number.MAX_SAFE_INTEGER) && rect(b.normalized, 1000);
+}
 
 export const MODELS_PATH = "/v1/models";
 export const TEXT_TO_IMAGE_PATH = "/v1/images/generations";
@@ -57,6 +74,22 @@ export function categoryForStatus(status: number): GatewayErrorCategory {
 export interface ReferenceImage {
   mediaType: string;
   bytes: Uint8Array;
+  /** 运行器对实际参考图快照解码后确认；未知不能作为透明背景输入。 */
+  hasAlpha?: boolean;
+}
+
+export interface OutputOptions {
+  output_format: "png" | "jpeg";
+  response_format: "url" | "b64_json";
+  watermark: boolean;
+}
+
+export const DEFAULT_OUTPUT_OPTIONS: OutputOptions = { output_format: "png", response_format: "url", watermark: false };
+
+export function outputOptions(value?: OutputOptions): OutputOptions {
+  const options = value ?? DEFAULT_OUTPUT_OPTIONS;
+  if (!["png", "jpeg"].includes(options.output_format) || !["url", "b64_json"].includes(options.response_format) || typeof options.watermark !== "boolean") throw new GatewayError("config", "输出选项无效");
+  return { ...options };
 }
 
 export interface GenerationInput {
@@ -70,11 +103,13 @@ export interface GenerationInput {
   references: ReferenceImage[];
   /** 透明背景开关；只对能力表支持透明背景的模型生效。 */
   transparentBackground?: boolean;
+  outputOptions?: OutputOptions;
+  layerDecomposition?: boolean;
+  layerSize?: LayerSize;
 }
 
 export type GeneratedImage = ({ kind: "url"; url: string } | { kind: "bytes"; bytes: Uint8Array }) & {
-  /** 图层信息（z_index / bounding_box 取自 content item，合成形状待 #83 确认）。 */
-  layer?: { z_index: number; bounding_box: number[] };
+  layer?: LayerMetadata;
 };
 
 // ---- 请求构造 ----
@@ -135,8 +170,32 @@ const buildSeedreamImagesGenerations: RequestShape["build"] = (input) => {
   return { path: TEXT_TO_IMAGE_PATH, body };
 };
 
+const buildFlashImagesGenerations: RequestShape["build"] = (input) => {
+  if (input.references.length > 10) throw new GatewayError("config", "Flash 参考图最多 10 张");
+  if (!input.layerDecomposition && !withinPixelRange({ min_total_pixels: 921600, max_total_pixels: 4624220, min_aspect_ratio: 1 / 16, max_aspect_ratio: 16 }, input.size.width, input.size.height)) throw new GatewayError("config", "Flash 生成尺寸超出范围");
+  if (input.layerDecomposition && (input.references.length !== 1 || !["image/png", "image/jpeg"].includes(input.references[0].mediaType) || input.references[0].bytes.length > 30000000)) throw new GatewayError("config", "Flash 图层拆分需要一张 PNG/JPEG 参考图（不超过 30MB）");
+  if (input.layerDecomposition && !["1K", "1.5K", "2K", "auto"].includes(input.layerSize ?? "auto")) throw new GatewayError("config", "Flash 图层尺寸无效");
+  const options = outputOptions(input.outputOptions);
+  if (input.transparentBackground) {
+    if (input.references.length !== 1) throw new GatewayError("config", "透明背景需要恰好一张实际参考图");
+    if (options.output_format !== "png") throw new GatewayError("config", "透明背景输出必须为 PNG");
+    if (input.references[0].hasAlpha !== true) throw new GatewayError("config", "透明背景需要已确认带透明通道的参考图快照");
+  }
+  return { path: TEXT_TO_IMAGE_PATH, body: {
+    model: input.model.model_id,
+    ...(input.text.trim() || !input.layerDecomposition ? { prompt: input.text } : {}),
+    size: input.layerDecomposition ? input.layerSize ?? "auto" : `${input.size.width}x${input.size.height}`,
+    ...(input.layerDecomposition ? { layer_decomposition: true } : {}),
+    ...options,
+    optimize_prompt_options: { mode: "standard" },
+    ...(input.transparentBackground ? { background: "transparent" } : {}),
+    ...(input.references.length ? { image: input.references.map(dataUrl) } : {}),
+  } };
+};
+
 /** 按能力表 request_shape 选择请求形态。 */
 const REQUEST_SHAPES: Record<string, RequestShape> = {
+  seedream_flash_images_generations: { build: buildFlashImagesGenerations, parse: parseFlashImage },
   qwen_images_edits: { build: buildQwenImagesEdits, parse: parseGeneratedImages },
   seedream_images_generations: { build: buildSeedreamImagesGenerations, parse: parseImageUrls },
 };
@@ -246,12 +305,39 @@ export function parseImageUrls(body: unknown): GeneratedImage[] {
   return data.flatMap((item): GeneratedImage[] => (typeof item?.url === "string" && /^https?:\/\//i.test(item.url) ? [{ kind: "url", url: item.url }] : []));
 }
 
-/** 提交一个生成任务；图层拆分时可能返回多张（首张为合成结果）。 */
+function parseFlashImage(body: unknown): GeneratedImage[] {
+  const data = (body as { data?: unknown })?.data;
+  if (!Array.isArray(data) || data.length !== 1) throw new GatewayError("invalid_response", "Flash 普通生成必须返回恰好一张图片");
+  const item = data[0];
+  if (!item || typeof item !== "object" || item.error || (item.url !== undefined && item.b64_json !== undefined)) throw new GatewayError("invalid_response", "Flash 图片响应无效");
+  if (typeof item.url === "string" && /^https?:\/\//i.test(item.url)) return [{ kind: "url", url: item.url }];
+  const bytes = typeof item.b64_json === "string" ? decodeBase64(item.b64_json) : null;
+  if (bytes?.length) return [{ kind: "bytes", bytes }];
+  throw new GatewayError("invalid_response", "Flash 图片响应无效");
+}
+
+function parseFlashLayers(body: unknown): GeneratedImage[] {
+  const data = (body as { data?: unknown })?.data;
+  const fail = () => new GatewayError("invalid_response", "Flash 图层身份、层序或定位信息无效");
+  if (!Array.isArray(data) || data.length < 1 || data.length > 17) throw fail();
+  const seen = new Set<number>();
+  const images = data.map((item): GeneratedImage => {
+    if (!item || !Number.isInteger(item.z_index) || item.z_index < 0 || item.z_index > 16 || seen.has(item.z_index) || (item.z_index > 0 && !validLayerBox(item.bounding_box))) throw fail();
+    seen.add(item.z_index);
+    if ((item.name !== undefined && typeof item.name !== "string") || (item.description !== undefined && typeof item.description !== "string")) throw fail();
+    const image = parseFlashImage({ data: [item] })[0];
+    return { ...image, layer: { z_index: item.z_index, ...(item.bounding_box !== undefined ? { bounding_box: item.bounding_box } : {}), ...(item.name !== undefined ? { name: item.name } : {}), ...(item.description !== undefined ? { description: item.description } : {}) } };
+  });
+  if (!seen.has(0) || [...seen].some((n) => n > 0 && !seen.has(n - 1))) throw fail();
+  return images.sort((a, b) => a.layer!.z_index - b.layer!.z_index);
+}
+
+/** 提交一个生成任务；图层拆分仍是一项生成结果。 */
 export async function generate(config: GatewayConfig, input: GenerationInput): Promise<{ images: GeneratedImage[]; requestId: string | null }> {
   const shape = requestShapeOf(input.model);
   const { path, body } = shape.build(input);
   const response = await send(config, "POST", path, body);
-  const images = shape.parse(response.body);
+  const images = input.layerDecomposition && input.model.request_shape === "seedream_flash_images_generations" ? parseFlashLayers(response.body) : shape.parse(response.body);
   if (!images.length) throw new GatewayError("invalid_response", "网关没有返回图片", 200, response.requestId);
   return { images, requestId: response.requestId };
 }
@@ -267,5 +353,9 @@ export async function fetchResultImage(fetch: FetchLike, image: GeneratedImage):
     throw new GatewayError("network", "下载结果图失败：网络不可达");
   }
   if (response.status >= 400) throw new GatewayError(categoryForStatus(response.status), `下载结果图失败：HTTP ${response.status}`, response.status);
-  return new Uint8Array(await response.arrayBuffer());
+  let bytes: Uint8Array;
+  try { bytes = new Uint8Array(await response.arrayBuffer()); }
+  catch { throw new GatewayError("network", "下载结果图失败：无法读取响应"); }
+  if (!bytes.length) throw new GatewayError("invalid_response", "下载结果图为空");
+  return bytes;
 }

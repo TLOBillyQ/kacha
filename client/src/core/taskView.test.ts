@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { Board, BoardEdge, BoardNode, TaskNode } from "./board";
 import { BUILTIN_TABLE, type CapabilityTable } from "./capabilities";
+import { imagePortSlots } from "./graph";
 import { buildConfirmItems } from "./submission";
-import { taskView, type TaskFacts } from "./taskView";
+import { sendPlanOf, taskView, type TaskFacts } from "./taskView";
 
 const QWEN_PRO = "qwen-image-3.0-pro";
 
@@ -63,7 +64,85 @@ function ready(patch: Partial<TaskNode> = {}, refs: string[] = [], text = "@图1
   );
 }
 
+describe("坐标区域按当前模型推导", () => {
+  const COORD = { rects: [[0.1, 0.1, 0.5, 0.5] as [number, number, number, number]], render: "bbox_tag" as const, coordinate_kind: "bbox" as const };
+
+  /** Flash 上框出的坐标区域，切到别的模型后区域数据原样保留。 */
+  const coordBoard = (model: string): Board => {
+    const b = ready({ model }, ["r1"], "把区域1改为红色");
+    b.edges[1] = { ...b.edges[1], region: COORD };
+    return b;
+  };
+
+  it("Flash：坐标区域不占叠加名额，发送文本带坐标标签", () => {
+    const b = coordBoard("doubao-seedream-5-0-flash-260915");
+    const slots = imagePortSlots(b, BUILTIN_TABLE, "t");
+    expect(slots.map((s) => s.kind)).toEqual(["image"]);
+    expect(slots[0].coordinateRegion).toBeDefined();
+    expect(sendPlanOf(b, BUILTIN_TABLE, "t")!.text).toContain("<bbox>");
+  });
+
+  it.each([
+    ["doubao-seedream-5-0-pro-260628", "坐标通路只接 Flash"],
+    ["qwen-image-3.0-pro", "模型不支持坐标标签"],
+  ])("切到 %s（%s）：按高亮叠加发送，不出现坐标语法", (model) => {
+    const b = coordBoard(model);
+    const slots = imagePortSlots(b, BUILTIN_TABLE, "t");
+    expect(slots.map((s) => s.kind)).toEqual(["image", "overlay"]);
+    expect(slots[0].coordinateRegion).toBeUndefined();
+    const text = sendPlanOf(b, BUILTIN_TABLE, "t")!.text;
+    expect(text).not.toContain("<bbox>");
+    expect(text).not.toContain("<point>");
+    expect(text).toContain("标注版");
+  });
+});
+
+describe("Flash 图层任务视图", () => {
+  it("单图自动拆分不需要提示词，普通模式仍需要提示词", () => {
+    const b = board([reference("r"), task("t", { model: "doubao-seedream-5-0-flash-260915", layer_decomposition: true })], [edge("r", "t", "image:0")]);
+    expect(view(b).reasons).toEqual([]);
+    expect(view(b).toggles.layerDecomposition.canEnable).toBe(true);
+    (b.nodes[1] as TaskNode).layer_decomposition = false;
+    expect(kinds(b)).toContainEqual(["positiveMissing", "notReady"]);
+  });
+  it("专用尺寸无效或输入数量不是一张时阻断", () => {
+    const b = ready({ model: "doubao-seedream-5-0-flash-260915", layer_decomposition: true, layer_size: "bad" as any }, ["a", "b"]);
+    expect(view(b).reasons.map((r) => r.kind)).toEqual(expect.arrayContaining(["layerNeedsOneImage", "sizeUnsupported"]));
+  });
+});
+
 const REGION = { rects: [[0.1, 0.1, 0.5, 0.5] as [number, number, number, number]], render: "highlight_overlay" as const };
+
+/** 带两个图层记录的结果节点。 */
+function layeredResult(id: string): BoardNode {
+  return {
+    id,
+    type: "result",
+    pos: [0, 0],
+    size: [100, 100],
+    extra: {},
+    task_id: `task-${id}`,
+    file: "result.png",
+    path: `2026-09-16/task-${id}/result.png`,
+    layer_count: 2,
+    record: {
+      model: "m",
+      prompt: "",
+      negative_prompt: "",
+      size_spec: { tier: "1K", ratio: "1:1", width: null, height: null },
+      submitted_at: "",
+      layers: [
+        { file: "layers/01.png", z_index: 1, bounding_box: [] },
+        { file: "layers/02.png", z_index: 2, bounding_box: [] },
+      ],
+    },
+  };
+}
+
+/** 正向提示词 + 结果节点以 source_layer 接入的任务。 */
+function layerReady(sourceLayer: number | null): Board {
+  return board([prompt("p", "@图1 改色"), layeredResult("x"), task("t")], [edge("p", "t", "positive"), { ...edge("x", "t", "image:0"), source_layer: sourceLayer }]);
+}
 
 interface Case {
   name: string;
@@ -74,6 +153,7 @@ interface Case {
 }
 
 const CASES: Case[] = [
+  { name: "Lite 停用明确提示", board: ready({ model: "doubao-seedream-5-0-lite-260128" }, [], "猫"), expected: [["modelRetired", "error"]] },
   { name: "正向提示词未连接：未就绪", board: board([task("t")]), expected: [["positiveMissing", "notReady"]] },
   { name: "合法任务无原因", board: ready({}, [], "一只橘猫"), expected: [] },
   { name: "编辑工作流低于最少参考图数不算原因（文生图 0 张合法）", board: ready({}, [], "猫"), expected: [] },
@@ -179,6 +259,12 @@ const CASES: Case[] = [
   },
   { name: "参考图文件缺失", board: ready({}, ["r1"]), facts: { ...UNKNOWN, missingNodes: new Set(["r1"]) }, expected: [["imageMissing", "error"]] },
   { name: "缺图未知（没读到）不拦", board: ready({}, ["r1"]), expected: [] },
+  { name: "来源图层身份无效（越界）：错误", board: layerReady(3), expected: [["sourceLayerInvalid", "error"]] },
+  { name: "来源图层身份无效（非整数）：错误", board: layerReady(1.5), expected: [["sourceLayerInvalid", "error"]] },
+  { name: "来源图层文件缺失：缺图原因点明图层", board: layerReady(2), facts: { ...UNKNOWN, missingNodes: new Set(["x:layer:2"]) }, expected: [["imageMissing", "error"]] },
+  { name: "来源图层缺失不株连底图：底图线无原因", board: (() => { const b = layerReady(2); b.edges.push({ from: ["x", "out"], to: ["t", "image:1"], source_layer: null, region: null, system: false, extra: {} }); return b; })(), facts: { ...UNKNOWN, missingNodes: new Set(["x:layer:2"]) }, expected: [["imageMissing", "error"]] },
+  { name: "合法来源图层：无原因", board: layerReady(2), expected: [] },
+  { name: "底图缺失不株连图层线", board: layerReady(2), facts: { ...UNKNOWN, missingNodes: new Set(["x"]) }, expected: [] },
   { name: "模型不支持透明背景", board: ready({ transparent_background: true }, [], "猫"), expected: [["transparentUnsupported", "error"]] },
   { name: "透明背景没有恰好一条图片线", board: seedreamPro({ transparent_background: true }, []), expected: [["transparentNeedsOneImage", "error"]] },
   {
@@ -187,7 +273,7 @@ const CASES: Case[] = [
     facts: { ...UNKNOWN, alphaByNode: new Map([["r1", false]]) },
     expected: [["transparentNoAlpha", "error"]],
   },
-  { name: "透明通道未知（没读到）不拦", board: seedreamPro({ transparent_background: true }, ["r1"]), expected: [] },
+  { name: "透明通道未知明确阻断", board: seedreamPro({ transparent_background: true }, ["r1"]), expected: [["transparentNoAlpha", "error"]] },
 ];
 
 /** 支持透明背景的 Seedream 5.0 pro（2K · 1:1），提示词引用全部参考图。 */
@@ -231,6 +317,11 @@ describe("不可运行原因：文案", () => {
     const b = ready({}, ["r1", "r2"], "@图1 的区域1 改红");
     b.edges[1] = { ...b.edges[1], region: REGION };
     expect(view(b).unreferenced).toEqual([2]);
+  });
+
+  it("来源图层：无效身份与缺图的文案点明图层", () => {
+    expect(texts(layerReady(3))).toEqual(["图1 来源图层无效：result.png 图层3"]);
+    expect(view(layerReady(2), BUILTIN_TABLE, { ...UNKNOWN, missingNodes: new Set(["x:layer:2"]) }).reasons.map((r) => r.text)).toEqual(["图1 图片缺失：result.png 图层2"]);
   });
 });
 
@@ -323,10 +414,10 @@ describe("警告与未引用序号", () => {
   });
 
   it("英文提示词 + 参考图 + 英文序号未验证的模型：黄色警告，不阻断", () => {
-    const lite = "doubao-seedream-5-0-lite-260128";
+    const flash = "doubao-seedream-5-0-flash-260915";
     const t = structuredClone(BUILTIN_TABLE);
-    t.models.find((m) => m.model_id === lite)!.reference_phrasing.en_verified = "untested";
-    const patch = { model: lite, size_spec: { tier: "2K", ratio: "1:1", width: null, height: null } };
+    t.models.find((m) => m.model_id === flash)!.reference_phrasing.en_verified = "untested";
+    const patch = { model: flash, size_spec: { tier: "2K", ratio: "1:1", width: null, height: null } };
     const v = view(ready(patch, ["r1"], "Put @图1 on a beach"), t);
     expect(v.warnings).toEqual(["该模型英文序号未验证"]);
     expect(v.reasons).toEqual([]);

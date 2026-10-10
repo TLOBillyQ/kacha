@@ -4,8 +4,8 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { useEffect, useRef, useState } from "react";
 import type { PortRef, RegionRender } from "../core/board";
 import { MAX_REGIONS, regionCss } from "../core/overlay";
-import { basename, joinPath } from "../core/paths";
-import { layersExportJson, type LayerRecord } from "../core/taskDir";
+import { basename, dirname, joinPath } from "../core/paths";
+import { layersExportJson, parseLayersFile, type LayerRecord } from "../core/taskDir";
 import { fileUrl, ipc } from "../shell/ipc";
 import { saveCopyAs, writeNew } from "../shell/saveFile";
 import { useBoardActions, useImageInfos } from "./context";
@@ -22,6 +22,8 @@ export interface RegionTarget {
   edgeRef: { from: PortRef; to: PortRef };
   rects: Rect01[];
   render: RegionRender;
+  coordinateKind?: "point" | "bbox";
+  coordinateAvailable?: boolean;
   /** 这条线第一个区域的区域编号（0 起）；区域N 的颜色由它推导。 */
   firstRegion: number;
 }
@@ -59,6 +61,7 @@ export function PreviewDialog({ req, toast, onClose }: Props) {
   const { apply, addAsReference, continueEditing } = useBoardActions();
   const stage = useRef<HTMLImageElement>(null);
   const [editing, setEditing] = useState<RegionTarget | null>(req.edit ?? null);
+  const [regionMode, setRegionMode] = useState(req.edit?.render === "bbox_tag" ? req.edit.coordinateKind ?? "bbox" : "overlay");
   const [rects, setRects] = useState<Rect01[]>(() => (req.edit ? req.edit.rects.map((r) => [...r] as Rect01) : []));
   const [selected, setSelected] = useState<number | null>(null);
   const [drag, setDrag] = useState<Drag | null>(null);
@@ -68,6 +71,14 @@ export function PreviewDialog({ req, toast, onClose }: Props) {
   const [pickSource, setPickSource] = useState(0);
   const [busy, setBusy] = useState(false);
   const layers = req.layers ?? [];
+  const baseInfo = useImageInfos([req.absPath]).get(req.absPath);
+  const layerStyle = (layer: LayerRecord) => {
+    const box = layer.bounding_box;
+    if (Array.isArray(box)) return undefined; // historical results retain their existing preview
+    if (!baseInfo) return { visibility: "hidden" as const };
+    const [left, top, right, bottom] = box.absolute;
+    return { inset: "auto", left: `${left / baseInfo.width * 100}%`, top: `${top / baseInfo.height * 100}%`, width: `${(right - left) / baseInfo.width * 100}%`, height: `${(bottom - top) / baseInfo.height * 100}%`, zIndex: layer.z_index };
+  };
   const targets = req.regionTargets ?? [];
   const outlines = req.regionOutlines ?? [];
   const first = editing?.firstRegion ?? 0;
@@ -80,6 +91,7 @@ export function PreviewDialog({ req, toast, onClose }: Props) {
 
   const startEdit = (target: RegionTarget) => {
     setEditing(target);
+    setRegionMode(target.render === "bbox_tag" ? target.coordinateKind ?? "bbox" : "overlay");
     setRects(target.rects.map((r) => [...r] as Rect01));
     setSelected(null);
     setSolo(null);
@@ -143,7 +155,7 @@ export function PreviewDialog({ req, toast, onClose }: Props) {
   };
   const saveRegion = () => {
     if (!editing) return;
-    apply({ kind: "setRegion", edge: editing.edgeRef, region: rects.length ? { rects, render: editing.render } : null });
+    apply({ kind: "setRegion", edge: editing.edgeRef, region: rects.length ? { rects, render: regionMode === "overlay" ? "highlight_overlay" : "bbox_tag", ...(regionMode !== "overlay" ? { coordinate_kind: regionMode as "point" | "bbox" } : {}) } : null });
     onClose();
   };
 
@@ -167,9 +179,22 @@ export function PreviewDialog({ req, toast, onClose }: Props) {
     runExport(async () => {
       const dir = await open({ directory: true });
       if (!dir) return null;
-      await writeNew(await ipc.readFileBytes(req.absPath), joinPath(dir, basename(req.absPath)));
-      for (const layer of layers) await writeNew(await ipc.readFileBytes(layer.absPath), joinPath(dir, basename(layer.record.file)));
-      const json = await writeNew(new TextEncoder().encode(layersExportJson(layers.map((l) => l.record))), joinPath(dir, "layers.json"));
+      // 元数据真源是任务目录的 layers.json：可读且层数与当前一致时按它出（含底图名称 / 描述）；读不到（旧结果没有 layers.json）退回节点记录。损坏则明确失败，不静默降级。
+      const truth = await ipc.readFileBytes(joinPath(dirname(req.absPath), "layers.json")).then(parseLayersFile, () => null);
+      const source = truth && truth.layers.length === layers.length ? truth : null;
+      const records = source?.layers ?? layers.map((l) => l.record);
+      const basePath = await writeNew(await ipc.readFileBytes(req.absPath), joinPath(dir, basename(req.absPath)));
+      // 图层保持 layers/NN.png 布局写进 layers/ 子目录；重名改名的以实际写出的文件名为准。
+      const written: string[] = [];
+      for (const layer of layers) {
+        const path = await writeNew(await ipc.readFileBytes(layer.absPath), joinPath(dir, "layers", basename(layer.record.file)));
+        written.push(`layers/${basename(path)}`);
+      }
+      const json = await writeNew(
+        new TextEncoder().encode(layersExportJson(records.map((r, i) => ({ ...r, file: written[i] })), { ...(source?.base ?? {}), file: basename(basePath), z_index: 0 })),
+        joinPath(dir, "layers.json"),
+      );
+
       return `已保存底图、${layers.length} 个图层与 ${basename(json)}`;
     });
 
@@ -181,6 +206,15 @@ export function PreviewDialog({ req, toast, onClose }: Props) {
         <div className="modal-head">
           <strong>{req.title}</strong>
           {editing && <span className="badge">编辑区域：{editing.label}</span>}
+          {editing?.coordinateAvailable && (
+            <label className="small">区域表达
+              <select aria-label="区域表达" value={regionMode} onChange={(e) => setRegionMode(e.target.value)}>
+                <option value="overlay">高亮叠加</option>
+                <option value="bbox">坐标框</option>
+                <option value="point">坐标点（框中心）</option>
+              </select>
+            </label>
+          )}
           {solo !== null && <span className="badge">单层：图层{solo + 1}</span>}
           {outlines.length > 0 && !editing && (
             <label className="small" title="本次编辑框选的修改区域（只读描边，来自产出任务的提交快照）">
@@ -202,7 +236,7 @@ export function PreviewDialog({ req, toast, onClose }: Props) {
               )}
               {solo === null &&
                 layers.map((layer, i) =>
-                  checked.has(i) ? <img key={layer.record.file} className="preview-layer" src={fileUrl(layer.absPath)} alt={layer.record.file} draggable={false} /> : null,
+                  checked.has(i) ? <img key={layer.record.file} className="preview-layer" style={layerStyle(layer.record)} src={fileUrl(layer.absPath)} alt={layer.record.file} draggable={false} /> : null,
                 )}
               {solo === null &&
                 showOutlines &&
@@ -224,7 +258,7 @@ export function PreviewDialog({ req, toast, onClose }: Props) {
                       top: `${r[1] * 100}%`,
                       width: `${(r[2] - r[0]) * 100}%`,
                       height: `${(r[3] - r[1]) * 100}%`,
-                      background: regionCss(first + i, 0.5),
+                      background: regionMode === "overlay" ? regionCss(first + i, 0.5) : "transparent",
                       borderColor: regionCss(first + i, 0.9),
                     }}
                   >
@@ -267,8 +301,8 @@ export function PreviewDialog({ req, toast, onClose }: Props) {
                           setSolo((s) => (s === i ? null : i));
                         }}
                       />
-                      <span>
-                        图层{i + 1}
+                      <span title={layer.record.description}>
+                        {layer.record.name ?? `图层${i + 1}`}
                         {layerInfos.get(layer.absPath)?.has_alpha && <span className="badge">透明</span>}
                       </span>
                     </label>
@@ -311,7 +345,7 @@ export function PreviewDialog({ req, toast, onClose }: Props) {
           {editing ? (
             <>
               <span className={first + rects.length > MAX_REGIONS ? "region-limit-exceeded" : "muted"}>
-                拖拽空白处画新矩形；拖动矩形移动，拖动角柄缩放。提示词里写「区域N」指代对应颜色的区域，每个任务最多 {MAX_REGIONS} 个
+                拖拽空白处画新矩形；拖动矩形移动，拖动角柄缩放。提示词里写「区域N」指代对应区域，每个任务最多 {MAX_REGIONS} 个。{regionMode === "point" && "坐标点取每个框的中心，影响范围由模型判断。"}
               </span>
               <button disabled={selected === null} onClick={removeSelected}>
                 删除选中

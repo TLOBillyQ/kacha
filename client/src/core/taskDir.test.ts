@@ -1,14 +1,46 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import type { Board, BoardNode } from "./board";
 import { BUILTIN_TABLE } from "./capabilities";
 import { memoryTaskFs } from "./testing/memoryTaskFs";
-import { layerFileName, layersExportJson, LocalError, newTaskId, parseOutcome, readOutcome, readSubmission, saveLayers, saveResult, sha256Hex, sniffImage, tableDigest, taskDirOfRelPath, taskDirOfTaskId, taskFilePath, writeOutcome, writeSubmission, type SubmissionPlan } from "./taskDir";
+import { layerFileName, layersExportJson, LocalError, newTaskId, parseLayersFile, parseOutcome, readLayers, readOutcome, readSubmission, restoreResultLayers, saveLayers, saveResult, sha256Hex, sniffImage, tableDigest, taskDirOfRelPath, taskDirOfTaskId, taskFilePath, writeOutcome, writeSubmission, type SubmissionPlan } from "./taskDir";
+
+/** 最小结果节点（图层真源测试用）。 */
+function resultNode(id: string, taskId: string, model: string, layers?: unknown): BoardNode {
+  return {
+    id,
+    type: "result",
+    pos: [0, 0],
+    size: [100, 100],
+    extra: {},
+    task_id: taskId,
+    file: "result.png",
+    path: `2026-09-16/${taskId}/result.png`,
+    layer_count: 0,
+    record: { model, prompt: "", negative_prompt: "", size_spec: { tier: "1K", ratio: "1:1", width: null, height: null }, submitted_at: "", ...(layers ? { layers } : {}) },
+  } as BoardNode;
+}
+
+function boardOf(nodes: BoardNode[]): Board {
+  return { format_version: 1, title: "t", viewport: { zoom: 1, x: 0, y: 0 }, nodes, edges: [], extra: {} };
+}
 
 const PNG = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="), (c) => c.charCodeAt(0));
 const JPEG = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0, 0x10]);
 const WEBP = new TextEncoder().encode("RIFF\0\0\0\0WEBPVP8 ");
 
 const now = new Date("2026-09-16T09:15:00.123Z");
+
+describe("HEIC/HEIF 参考图签名", () => {
+  it("识别 ftyp 主品牌及兼容品牌，AVIF/任意字符串不能冒充", () => {
+    const encode = (s: string) => new TextEncoder().encode(s);
+    expect(sniffImage(encode("\0\0\0\u0018ftypheic\0\0\0\0mif1heic"))).toEqual({ ext: "heic", mediaType: "image/heic" });
+    expect(sniffImage(encode("\0\0\0\u0018ftypmif1\0\0\0\0mif1heix"))).toEqual({ ext: "heic", mediaType: "image/heic" });
+    expect(sniffImage(encode("\0\0\0\u0014ftypmif1\0\0\0\0mif1"))).toEqual({ ext: "heif", mediaType: "image/heif" });
+    expect(sniffImage(encode("\0\0\0\u0014ftypavif\0\0\0\0avif"))).toBeNull();
+    expect(sniffImage(encode("random heic"))).toBeNull();
+  });
+});
 
 describe("任务编号与目录", () => {
   it("task_id = UTC 时间戳 + 8 位十六进制；目录 = <UTC 日期>/<task_id>", () => {
@@ -353,6 +385,14 @@ describe("结局记录 outcome.json", () => {
 });
 
 describe("图层落盘与导出", () => {
+  it("完整 bbox 与可选元数据从任务目录读取，并覆盖画板冗余", async () => {
+    const fs = memoryTaskFs();
+    const dir = "2026-10-10/20261010T000000Z-00000001";
+    const bbox = { absolute: [100, 200, 300, 400], normalized: [100, 200, 300, 400] };
+    const saved = await saveLayers(fs, "/root", dir, [{ bytes: PNG, zIndex: 1, boundingBox: bbox, name: "主体", description: "官方契约合成资产" }]);
+    expect(await readLayers(fs, "/root", "20261010T000000Z-00000001")).toEqual(saved);
+    expect(JSON.parse(layersExportJson(saved)).layers[0]).toEqual({ file: "layers/01.png", z_index: 1, bounding_box: bbox, name: "主体", description: "官方契约合成资产" });
+  });
   it("图层文件名：layers/ 下两位序号，缺省扩展名 png", () => {
     expect(layerFileName(1)).toBe("layers/01.png");
     expect(layerFileName(12, "jpg")).toBe("layers/12.jpg");
@@ -364,7 +404,7 @@ describe("图层落盘与导出", () => {
       { bytes: JPEG, zIndex: 2, boundingBox: [0, 0, 10, 10] },
       { bytes: PNG, zIndex: 1, boundingBox: [5, 5, 20, 20] },
     ]);
-    expect([...fs.files.keys()]).toEqual(["/root/2026-09-16/t/layers/01.png", "/root/2026-09-16/t/layers/02.jpg"]);
+    expect([...fs.files.keys()]).toEqual(["/root/2026-09-16/t/layers/01.png", "/root/2026-09-16/t/layers/02.jpg", "/root/2026-09-16/t/layers.json"]);
     expect(layers).toEqual([
       { file: "layers/01.png", z_index: 1, bounding_box: [5, 5, 20, 20] },
       { file: "layers/02.jpg", z_index: 2, bounding_box: [0, 0, 10, 10] },
@@ -380,5 +420,100 @@ describe("图层落盘与导出", () => {
   it("layers.json 导出内容与图层记录一致", () => {
     const text = layersExportJson([{ file: "layers/01.png", z_index: 1, bounding_box: [5, 5, 20, 20] }]);
     expect(JSON.parse(text)).toEqual({ layers: [{ file: "layers/01.png", z_index: 1, bounding_box: [5, 5, 20, 20] }] });
+  });
+
+  it("layers.json 导出内容可带底图身份（文件名与可选名称 / 描述）", () => {
+    const text = layersExportJson([{ file: "layers/01.png", z_index: 1, bounding_box: { absolute: [0, 0, 10, 10], normalized: [0, 0, 10, 10] }, name: "主体" }], { file: "result.png", z_index: 0, name: "底图", description: "合成资产" });
+    expect(JSON.parse(text)).toEqual({
+      base: { file: "result.png", z_index: 0, name: "底图", description: "合成资产" },
+      layers: [{ file: "layers/01.png", z_index: 1, bounding_box: { absolute: [0, 0, 10, 10], normalized: [0, 0, 10, 10] }, name: "主体" }],
+    });
+  });
+});
+
+describe("图层元数据真源 layers.json", () => {
+  const TASK = "20260916T091500Z-0000000a";
+  const DIR = `/root/2026-09-16/${TASK}`;
+  const box1 = { absolute: [100, 200, 400, 600], normalized: [100, 200, 400, 600] };
+  const box2 = { absolute: [0, 0, 50, 50], normalized: [0, 0, 50, 50] };
+  const metadata = () =>
+    JSON.stringify({
+      base: { z_index: 0, name: "合成底图" },
+      layers: [
+        { file: "layers/01.png", z_index: 1, bounding_box: box1, name: "主体", description: "官方契约合成资产" },
+        { file: "layers/02.png", z_index: 2, bounding_box: box2 },
+      ],
+    });
+
+  it("读出完整图层记录：层序、absolute+normalized bbox、可选名称 / 描述", async () => {
+    const fs = memoryTaskFs([[`${DIR}/layers.json`, new TextEncoder().encode(metadata())]]);
+    expect(await readLayers(fs, "/root", TASK)).toEqual([
+      { file: "layers/01.png", z_index: 1, bounding_box: box1, name: "主体", description: "官方契约合成资产" },
+      { file: "layers/02.png", z_index: 2, bounding_box: box2 },
+    ]);
+  });
+
+  it("parseLayersFile 同时读出底图身份（可选）；没有 base 字段时为 undefined", () => {
+    const parsed = parseLayersFile(new TextEncoder().encode(metadata()));
+    expect(parsed.base).toEqual({ z_index: 0, name: "合成底图" });
+    expect(parsed.layers.map((l) => l.file)).toEqual(["layers/01.png", "layers/02.png"]);
+    const noBase = parseLayersFile(new TextEncoder().encode(JSON.stringify({ layers: [{ file: "layers/01.png", z_index: 1, bounding_box: box1 }] })));
+    expect(noBase.base).toBeUndefined();
+    expect(noBase.layers).toHaveLength(1);
+  });
+
+  it("parseLayersFile：底图身份形状无效明确失败", () => {
+    for (const base of [42, "x", { z_index: 1 }, { name: 42 }, { file: 42 }, { description: null }]) {
+      const text = JSON.stringify({ base, layers: [] });
+      expect(() => parseLayersFile(new TextEncoder().encode(text))).toThrow("图层元数据损坏");
+    }
+  });
+
+  it("旧普通结果没有 layers.json：null（兼容，不算损坏）；非法任务编号也为 null", async () => {
+    expect(await readLayers(memoryTaskFs(), "/root", TASK)).toBeNull();
+    expect(await readLayers(memoryTaskFs(), "/root", "not-a-task")).toBeNull();
+  });
+
+  it("元数据损坏或关键身份 / 定位无效：明确失败，不猜层序或位置", async () => {
+    const bad = [
+      "{ not json",
+      JSON.stringify({ layers: "x" }),
+      JSON.stringify({ layers: [{ file: "layers/01.png", z_index: 2, bounding_box: box1 }] }),
+      JSON.stringify({ layers: [{ file: "layers/1.png", z_index: 1, bounding_box: box1 }] }),
+      JSON.stringify({ layers: [{ file: "layers/01.png", z_index: 1, bounding_box: [0, 0, 1, 1] }] }),
+      JSON.stringify({ layers: [{ file: "layers/01.png", z_index: 1, bounding_box: { absolute: [0, 0, 10, 10], normalized: [0, 0, 2000, 10] } }] }),
+      JSON.stringify({ layers: [{ file: "layers/01.png", z_index: 1, bounding_box: { absolute: [5, 5, 5, 9], normalized: [0, 0, 1, 1] } }] }),
+      JSON.stringify({ layers: [{ file: "layers/01.png", z_index: 1, bounding_box: box1, name: 42 }] }),
+      JSON.stringify({ layers: Array.from({ length: 17 }, (_, i) => ({ file: layerFileName(i + 1), z_index: i + 1, bounding_box: box1 })) }),
+    ];
+    for (const text of bad) {
+      const fs = memoryTaskFs([[`${DIR}/layers.json`, new TextEncoder().encode(text)]]);
+      await expect(readLayers(fs, "/root", TASK)).rejects.toThrow("图层元数据损坏");
+    }
+  });
+
+  it("重开恢复：Flash 结果节点按任务目录真源还原层身份与定位；画板冗余副本不作数", async () => {
+    const other = "20260916T091500Z-0000000b";
+    const fs = memoryTaskFs([[`${DIR}/layers.json`, new TextEncoder().encode(metadata())]]);
+    const flash = resultNode("x", TASK, "doubao-seedream-5-0-flash-260915", []);
+    const qwen = resultNode("y", other, "qwen-image-3.0-pro");
+    const restored = await restoreResultLayers(fs, "/root", boardOf([flash, qwen]));
+    const x = restored.nodes.find((n) => n.id === "x");
+    expect(x?.type === "result" && x.layer_count).toBe(2);
+    expect(x?.type === "result" && x.record.layers?.[0]).toMatchObject({ file: "layers/01.png", z_index: 1, bounding_box: box1, name: "主体" });
+    // 其它模型的结果即使同名目录有 layers.json 也不动（这里没写，保持原样）。
+    expect(restored.nodes.find((n) => n.id === "y")).toBe(qwen);
+  });
+
+  it("Flash 结果没有 layers.json（旧结果）：节点原样保留", async () => {
+    const legacy = resultNode("x", TASK, "doubao-seedream-5-0-flash-260915", [{ file: "layers/01.png", z_index: 1, bounding_box: [5, 5, 20, 20] }]);
+    const restored = await restoreResultLayers(memoryTaskFs(), "/root", boardOf([legacy]));
+    expect(restored.nodes[0]).toBe(legacy);
+  });
+
+  it("layers.json 损坏：明确失败（打开方据此报错），不静默丢层", async () => {
+    const fs = memoryTaskFs([[`${DIR}/layers.json`, new TextEncoder().encode("{ not json")]]);
+    const flash = resultNode("x", TASK, "doubao-seedream-5-0-flash-260915", []);
+    await expect(restoreResultLayers(fs, "/root", boardOf([flash]))).rejects.toThrow("图层元数据损坏");
   });
 });

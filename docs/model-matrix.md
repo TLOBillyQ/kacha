@@ -6,6 +6,8 @@ tags: [工具开发, 生图, 模型选型, 蛋仔, 千星, new-api]
 
 > 数据来源：千问 AI 平台 CLI 实时查询（2026-08-20）。价格为平台公示单价，团队 new-api 网关的实际计费策略以网关后台为准。
 > 更新方式：`qianwen models list --output image --format json`、`qianwen models info <model-id> --format json`。
+>
+> 2026-10-10 注：本矩阵是当时的计费选型快照，属历史研究，未覆盖后经团队网关接入的 Seedream 系列。现行上架模型为 Seedream 5.0 pro / Flash 与 qwen-image-3.0-pro / qwen-image-3.0；Lite 已停用，由 Flash（`doubao-seedream-5-0-flash-260915`）接替经济档并作为新建任务首选。现行能力、上架与证据以 `client/src/core/capabilities.builtin.json`、[Flash 研究](research/seedream-flash.md) 及 ADR 0001 / 0004 为准。
 
 ## 场景 × 模型矩阵
 
@@ -32,6 +34,8 @@ new-api 的 `/v1/models` 只返回模型 ID，不提供编辑支持、分辨率�
 ### 3. 备选链保证可用性
 
 矩阵成立的前提是团队网关已开通对应模型并抹平端点差异。若某模型在网关上不可用，客户端按备选链降级。接入新模型前先对网关做冒烟测试。
+
+> 2026-10-10 更正：备选链自动降级是 v1 设想，v2 客户端未实现也不采用——模型不可用时明确提示不可用，不自动改选其它模型（ADR 0001：网关拒绝不自动换模型）。新模型默认仍需网关实测准入；唯一例外是本次 Flash 接入（官方明确支持 + 客户端实现 + 自动化验证即可开放，网关未测单独记录），该例外不推广到其他模型。
 
 ## 特殊约束
 

@@ -68,6 +68,15 @@ function ok(r: ReturnType<typeof continueEditing>): Board {
 const find = <T extends BoardNode>(b: Board, id: string) => b.nodes.find((n) => n.id === id) as T;
 
 describe("以此继续编辑", () => {
+  it("旧 Lite 结果继续编辑保留停用身份与分辨率档，不静默换 Flash", () => {
+    const source = result("old", [0, 0], "doubao-seedream-5-0-lite-260128");
+    if (source.type !== "result") throw new Error("result");
+    source.record.size_spec = { tier: "3K", ratio: "16:9", width: null, height: null };
+    const before = board([source]);
+    const b = ok(continueEditing(before, BUILTIN_TABLE, NONE, ["old"], "old", ids));
+    expect(find<TaskNode>(b, "new-task")).toMatchObject({ model: "doubao-seedream-5-0-lite-260128", size_spec: { tier: "3K" }, image_ports: 1 });
+    expect(find(b, "old")).toEqual(source);
+  });
   // 源任务 src（经济档 2K 16:9，接了负向）产出结果 res。
   const lineage = () =>
     board(
@@ -120,7 +129,7 @@ describe("以此继续编辑", () => {
 
   it("触发于参考图节点：用工具栏模型，不接负向", () => {
     const b = ok(continueEditing(board([reference("r")]), BUILTIN_TABLE, NONE, ["r"], "r", ids));
-    expect(find<TaskNode>(b, "new-task").model).toBe("doubao-seedream-5-0-lite-260128");
+    expect(find<TaskNode>(b, "new-task").model).toBe("doubao-seedream-5-0-flash-260915");
     expect(b.edges.some((e) => e.to[1] === "negative")).toBe(false);
     const picked = ok(continueEditing({ ...board([reference("r")]), last_model: "qwen-image-3.0" }, BUILTIN_TABLE, NONE, ["r"], "r", ids));
     expect(find<TaskNode>(picked, "new-task").model).toBe("qwen-image-3.0");
@@ -129,7 +138,7 @@ describe("以此继续编辑", () => {
   it("源模型与工具栏模型都不支持图片编辑：换默认编辑模型，尺寸不在其尺寸表内时用默认尺寸", () => {
     const b0 = lineage();
     const src = find<TaskNode>(b0, "src");
-    src.model = "doubao-seedream-5-0-lite-260128";
+    src.model = "doubao-seedream-5-0-flash-260915";
     const t = structuredClone(BUILTIN_TABLE);
     t.models.find((m) => m.model_id === src.model)!.workflows.image_edit.max_references = 0;
     const b = ok(continueEditing(b0, t, NONE, ["res"], "res", ids));
@@ -271,6 +280,28 @@ describe("图层接回", () => {
     if (outcome.ok) {
       const imageEdge = outcome.board.edges.find((e) => e.from[0] === "x");
       expect(imageEdge).toMatchObject({ source_layer: 1 });
+    }
+  });
+
+  it("加为参考图：无效来源图层身份明确拒绝，不留连线", () => {
+    for (const layer of [0, 3, 1.5, -1]) {
+      const outcome = addAsReference(board([layered("x"), task("t")]), BUILTIN_TABLE, "x", "t", layer);
+      expect(outcome.ok).toBe(false);
+      if (!outcome.ok) expect(outcome.reason).toContain("图层");
+    }
+    // 结果没有图层记录 / 触发节点是参考图：同样拒绝。
+    expect(addAsReference(board([result("y"), task("t")]), BUILTIN_TABLE, "y", "t", 1).ok).toBe(false);
+    expect(addAsReference(board([reference("r"), task("t")]), BUILTIN_TABLE, "r", "t", 1).ok).toBe(false);
+    const after = addAsReference(board([layered("x"), task("t")]), BUILTIN_TABLE, "x", "t", 3);
+    if (!after.ok) expect(after.reason).toContain("图层");
+  });
+
+  it("以此继续编辑：无效来源图层身份明确拒绝，不建节点", () => {
+    const b = board([layered("x"), reference("r")]);
+    for (const layers of [new Map([["x", 5]]), new Map([["x", 0]]), new Map([["x", 2.5]]), new Map([["r", 1]])]) {
+      const outcome = continueEditing(b, BUILTIN_TABLE, NONE, ["x", "r"], "x", ids, layers);
+      expect(outcome.ok).toBe(false);
+      if (!outcome.ok) expect(outcome.reason).toContain("图层");
     }
   });
 });

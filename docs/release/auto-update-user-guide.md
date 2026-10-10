@@ -1,6 +1,6 @@
 # 自动更新用户指南
 
-本指南说明 #3 的自动更新流程与 #14 的首次迁移交付。功能已在开发分支实现，迁移目标仍待 Gitea 上首个带 updater 签名的正式版发布；本文不表示该版本已经上线。Windows 实测进度见 [验收记录](auto-update-windows-acceptance.md)。
+本指南说明 #3 的自动更新流程与 #14 的首次迁移交付。Windows `v0.3.0`（2026-10-09）是首个带 updater 签名的正式版，真实下载与签名已验证；完整安装、重启、恢复与迁移验收仍在进行，详见 [验收记录](auto-update-windows-acceptance.md)。macOS 首个带 updater 签名的正式版仍待发布，本文不表示它已经上线。
 
 ## 下载与网络
 
@@ -18,7 +18,7 @@ Updater 签名与操作系统代码签名是两回事。项目没有购买 Windo
 
 支持 Windows 10 21H2+ / Windows 11 x64，应用依赖 WebView2。缺失运行时时按应用提示安装 Microsoft Edge WebView2，再启动 Kacha。
 
-1. 等首个带 updater 签名的正式版发布后，下载 `kacha-<版本>-win-x64-setup.exe`。旧 `kacha-<版本>-win-x64.zip` 不能直接接入新自动更新流程，需要手动安装一次。
+1. 从 Gitea Releases 下载带 updater 签名正式版的 `kacha-<版本>-win-x64-setup.exe`（首个为 `v0.3.0`）。旧 `kacha-<版本>-win-x64.zip` 不能直接接入新自动更新流程，需要手动安装一次。
 2. 在旧版中等任务队列清空，保存全部已打开画板并退出。保留旧版程序及现有数据，便于必要时手动恢复。
 3. 用原来的 Windows 用户运行 NSIS 安装器，按当前用户安装到该用户可写的目录。通常不需要管理员权限；应用不会自动提权。
 4. 首次安装或启动如出现 SmartScreen 拦截，确认来自团队 Gitea 且校验值一致后，手动点「更多信息 → 仍要运行」。若系统策略不提供放行入口，交由团队维护者处理。

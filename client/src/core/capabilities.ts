@@ -5,6 +5,10 @@ import builtinJson from "./capabilities.builtin.json";
 
 export const CAPABILITY_FORMAT_VERSION = 1;
 
+export const RETIRED_LITE_MODEL = "doubao-seedream-5-0-lite-260128";
+export const LITE_RETIRED_HINT = "Lite 已停用，请切换到 Flash";
+export const isRetiredModel = (modelId: string): boolean => modelId === RETIRED_LITE_MODEL;
+
 /** 三态：待测在 UI 上等同不支持，仅在模型说明浮层列出。 */
 export type TriState = "supported" | "unsupported" | "untested";
 export type Tier = "flagship" | "economy";
@@ -117,7 +121,7 @@ export function mergeOverride(builtin: CapabilityTable, override: CapabilityTabl
   const models = builtin.models.map((m) => byId.get(m.model_id) ?? m);
   const known = new Set(builtin.models.map((m) => m.model_id));
   models.push(...override.models.filter((m) => !known.has(m.model_id)));
-  return { format_version: builtin.format_version, models };
+  return { format_version: builtin.format_version, models: models.filter((m) => !isRetiredModel(m.model_id)) };
 }
 
 // ---- schema 校验 ----
@@ -218,7 +222,12 @@ export function parseCapabilityTable(raw: unknown): ParseResult {
 function loadBuiltin(): CapabilityTable {
   const result = parseCapabilityTable(builtinJson);
   if (!result.ok) throw new Error(`内置能力表无效：${result.errors.join("；")}`);
-  return result.table;
+  // 本票仅新增可手动选择的 Flash，保持既有上架顺序与默认模型（默认切换由停用票处理）。
+  // 明确按 model_id 找到 Flash 挪到末尾，不依赖它在 JSON 里的位置。
+  const models = result.table.models;
+  const flash = models.find((m) => m.model_id === "doubao-seedream-5-0-flash-260915");
+  if (!flash) throw new Error("内置能力表缺少 Flash 模型");
+  return { ...result.table, models: [...models.filter((m) => m !== flash), flash] };
 }
 
 export const BUILTIN_TABLE: CapabilityTable = loadBuiltin();

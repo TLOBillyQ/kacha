@@ -2,6 +2,212 @@ import { describe, expect, it } from "vitest";
 import type { BoardNode } from "./board";
 import { parseOutcome } from "./taskDir";
 import { board, harness, settle } from "./testing/runnerHarness";
+import { createRunner } from "./runner";
+import { BUILTIN_TABLE } from "./capabilities";
+import { memoryTaskFs } from "./testing/memoryTaskFs";
+import { sendPlanOf } from "./taskView";
+import type { RunDeps } from "./run";
+
+// Official flat-response example encoded with synthetic bytes. No real gateway evidence.
+describe("Flash 图层运行器：官方契约合成回放", () => {
+  const png = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 1]);
+  const box = { absolute: [100, 200, 300, 400], normalized: [100, 200, 300, 400] };
+  const fixture = (opts: { width?: number; height?: number; input?: Uint8Array; layerDownloadFails?: boolean; layerJpeg?: boolean; decodeFails?: boolean } = {}) => {
+    const fs = memoryTaskFs();
+    const changes: any[] = [], payloads: any[] = [];
+    let alpha = true;
+    const deps: RunDeps = { ...fs, readFile: async (p) => p === "/root/refs/cat.png" ? opts.input ?? png : fs.readFile(p), now: () => new Date("2026-10-10T00:00:00Z"), schedule: () => () => {}, imageCodec: { decode: async () => { if (opts.decodeFails) throw new Error("decode"); return { width: opts.width ?? 1000, height: opts.height ?? 1000, hasAlpha: () => alpha, close: () => {}, encode: async () => png }; } }, fetch: async (_url, init) => { if (init.method === "GET") return { status: 403, headers: { get: () => null }, text: async () => "", arrayBuffer: async () => new ArrayBuffer(0) }; payloads.push(JSON.parse(init.body!)); return { status: 200, headers: { get: () => null }, text: async () => JSON.stringify({ data: [{ z_index: 1, ...(opts.layerDownloadFails ? { url: "https://synthetic.test/layer" } : { b64_json: btoa(String.fromCharCode(...(opts.layerJpeg ? new Uint8Array([255, 216, 255, 1]) : png))) }), bounding_box: box }, { z_index: 0, b64_json: btoa(String.fromCharCode(...png)) }] }), arrayBuffer: async () => png.slice().buffer }; } };
+    const runner = createRunner({ deps, apply: (_key, c) => changes.push(c), log: () => {}, concurrency: 1 });
+    const b = board(["t1"], true);
+    b.edges = b.edges.filter((e) => e.to[1] !== "positive");
+    for (const n of b.nodes) if (n.type === "task") { n.model = "doubao-seedream-5-0-flash-260915"; n.layer_decomposition = true; }
+    const target = { boardKey: "A", boardFile: null, table: BUILTIN_TABLE, outputRoot: "/root", baseUrl: "https://synthetic.test", apiKey: "test" };
+    return { fs, changes, payloads, runner, b, target, setAlpha: (v: boolean) => { alpha = v; } };
+  };
+  it.each([{ width: 511, height: 512 }, { width: 6001, height: 6000 }, { width: 16001, height: 1000 }, { input: new Uint8Array(30000001) }, { input: new Uint8Array([82, 73, 70, 70, 0, 0, 0, 0, 87, 69, 66, 80]) }, { decodeFails: true }])("专用输入非法时不发送网关 %#", async (opts) => {
+    const h = fixture(opts);
+    expect(await h.runner.submit(h.target, h.b, ["t1"])).not.toEqual([]);
+    await settle();
+    expect(h.payloads).toHaveLength(0);
+    expect(h.fs.files.size).toBe(0);
+  });
+  it.each([{ layerDownloadFails: true }, { layerJpeg: true }])("任一图层下载或格式失败，整体没有成功结果 %#", async (opts) => {
+    const h = fixture(opts);
+    await h.runner.submit(h.target, h.b, ["t1"]); await settle();
+    expect(h.runner.getSnapshot().board("A").statuses.get("t1")?.kind).toBe("failed");
+    expect(h.changes.filter((c) => c.kind === "runResult")).toHaveLength(0);
+    expect([...h.fs.files.keys()].filter((p) => /\/result\.|\/layers\//.test(p))).toEqual([]);
+  });
+  it("无需提示词提交单图，只产出一个完整结果并保存定位元数据", async () => {
+    const h = fixture();
+    expect(await h.runner.submit(h.target, h.b, ["t1"])).toEqual([]);
+    await settle();
+    expect(h.payloads[0]).toMatchObject({ layer_decomposition: true, size: "auto" });
+    expect(h.payloads[0]).not.toHaveProperty("prompt");
+    const results = h.changes.filter((c) => c.kind === "runResult");
+    expect(results).toHaveLength(1);
+    expect(results[0].result.layers).toEqual([{ file: "layers/01.png", z_index: 1, bounding_box: box }]);
+    expect([...h.fs.files.keys()].some((p) => p.endsWith("/layers.json"))).toBe(true);
+  });
+  it("任一图层没有 alpha 则整体失败，没有结果或成功图片落盘", async () => {
+    const h = fixture(); h.setAlpha(false);
+    await h.runner.submit(h.target, h.b, ["t1"]); await settle();
+    expect(h.runner.getSnapshot().board("A").statuses.get("t1")).toEqual({ kind: "failed", label: "响应无效" });
+    expect(h.changes.filter((c) => c.kind === "runResult")).toHaveLength(0);
+    expect([...h.fs.files.keys()].filter((p) => /\/result\.|\/layers\//.test(p))).toEqual([]);
+  });
+});
+it("Flash 区域发送文本、原图/叠加图顺序及任务记录经runner保持一致，重新生成还原坐标", async () => {
+  const fs = memoryTaskFs();
+  const b = board(["t1"], true);
+  const t = b.nodes.find((n) => n.type === "task")!;
+  if (t.type !== "task") throw new Error("task");
+  t.model = "doubao-seedream-5-0-flash-260915";
+  const image = b.edges.find((e) => e.to[1] === "image:0")!;
+  image.region = { rects: [[0, 0, 1, 1]], render: "bbox_tag", coordinate_kind: "point" };
+  const png = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="), c => c.charCodeAt(0));
+  fs.files.set("/root/refs/cat.png", png);
+  const bodies: any[] = [];
+  const r = createRunner({ concurrency: 1, log: () => {}, apply: (_, c) => { if (c.kind === "submitted") t.last_submitted = c.lastSubmitted; }, deps: {
+    ...fs, now: () => new Date("2026-10-10T10:00:00Z"), schedule: () => () => {},
+    imageCodec: { decode: async () => ({ width: 1024, height: 1024, hasAlpha: () => true, encode: async () => png, close() {} }) },
+    fetch: async (_, init) => { bodies.push(JSON.parse(String(init?.body))); return { status: 200, headers: { get: () => null }, text: async () => JSON.stringify({ data: [{ b64_json: btoa(String.fromCharCode(...png)) }] }), arrayBuffer: async () => png.buffer as ArrayBuffer }; },
+  }});
+  const target = { boardKey: "A", boardFile: "A", table: BUILTIN_TABLE, outputRoot: "/root", baseUrl: "http://gw", apiKey: "k" };
+  const shown = sendPlanOf(b, BUILTIN_TABLE, "t1")!;
+  expect(await r.submit(target, b, ["t1"])).toEqual([]);
+  await settle();
+  const records = [...fs.files].filter(([p]) => p.endsWith("/task.json")).map(([, bytes]) => JSON.parse(new TextDecoder().decode(bytes)));
+  expect(records[0].send_text).toBe(shown.text);
+  expect(bodies[0].prompt).toBe(shown.text);
+  expect(bodies[0].image).toHaveLength(1);
+  expect(records[0].references[0].region).toEqual({ rects: [[0, 0, 1, 1]], render: "bbox_tag", coordinate_kind: "point", source_port: 1 });
+  expect(await r.regenerate(target, b, "t1")).toBeNull();
+  await settle();
+  expect(bodies[1].prompt).toBe(shown.text);
+  image.region!.rects = [[-1, 0, 1, 1]];
+  expect(await r.submit(target, b, ["t1"])).toHaveLength(1);
+  expect(bodies).toHaveLength(2);
+});
+
+describe("Lite 停用", () => {
+  it("普通运行明确阻止，不调用网关或写入任务目录", async () => {
+    const h = harness();
+    const b = board();
+    for (const node of b.nodes) if (node.type === "task") node.model = "doubao-seedream-5-0-lite-260128";
+    expect(await h.runner.submit(h.target(), b, ["t1"])).toEqual(["Lite 已停用，请切换到 Flash"]);
+    await settle();
+    expect(h.requests).toEqual([]);
+    expect(h.files.size).toBe(0);
+    expect(h.changes).toEqual([]);
+  });
+  it.each([undefined, "20260916T091500Z-deadbeef"])("历史 Lite 重新生成/变体在当前节点已改 Flash 后仍阻止且不改历史 (%s)", async (fromTaskId) => {
+    const h = harness();
+    const b = board();
+    const t = b.nodes.find((n) => n.type === "task")!;
+    if (t.type !== "task") throw new Error("task");
+    const taskId = "20260916T091500Z-deadbeef";
+    const path = `/root/2026-09-16/${taskId}/task.json`;
+    const old = new TextEncoder().encode(JSON.stringify({ task_id: taskId, submitted_at: "2026-09-16T09:15:00Z", workflow: "text_to_image", model: "doubao-seedream-5-0-lite-260128", capability_format_version: 1, capability_table_sha256: "a".repeat(64), prompt: "旧猫", negative_prompt: "", send_text: "旧猫", size_spec: { tier: "3K", ratio: "1:1", width: null, height: null }, size: { width: 3072, height: 3072 }, layer_decomposition: false, transparent_background: false, references: [] }));
+    h.files.set(path, old);
+    t.model = "doubao-seedream-5-0-flash-260915";
+    t.last_submitted = { task_id: taskId, model: "doubao-seedream-5-0-lite-260128", prompt: "旧猫", negative_prompt: "", size_spec: { tier: "3K", ratio: "1:1", width: null, height: null }, layer_decomposition: false, transparent_background: false, images: [] };
+    expect(await h.runner.regenerate(h.target(), b, "t1", fromTaskId)).toBe("Lite 已停用，请切换到 Flash");
+    expect(h.requests).toEqual([]);
+    expect(h.files.size).toBe(1);
+    expect(h.files.get(path)).toEqual(old);
+  });
+  it("旧 Lite 结果作为 Flash 任务的参考图仍可提交，快照与谱系指向旧任务目录", async () => {
+    const png = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="), c => c.charCodeAt(0));
+    const h = harness({ imageCodec: { decode: async () => ({ width: 1024, height: 1024, hasAlpha: () => false, encode: async () => png, close: () => {} }) } });
+    h.replies.push({ status: 200, body: JSON.stringify({ data: [{ b64_json: btoa(String.fromCharCode(...png)) }] }) });
+    const b = board();
+    const t = b.nodes.find((n) => n.type === "task")!;
+    if (t.type !== "task") throw new Error("task");
+    t.model = "doubao-seedream-5-0-flash-260915";
+    t.image_ports = 1;
+    h.files.set("/root/2026-09-16/task-old/result.png", png);
+    b.nodes.push({ id: "old", type: "result", pos: [0, 200], size: [100, 100], extra: {}, task_id: "task-old", file: "result.png", path: "2026-09-16/task-old/result.png", layer_count: 0, record: { model: "doubao-seedream-5-0-lite-260128", prompt: "旧猫", negative_prompt: "", size_spec: { tier: "3K", ratio: "1:1", width: null, height: null }, submitted_at: "2026-09-16T09:15:00Z" } });
+    b.edges.push({ from: ["old", "out"], to: ["t1", "image:0"], source_layer: null, region: null, system: false, extra: {} });
+    expect(await h.runner.submit(h.target(), b, ["t1"])).toEqual([]);
+    await settle();
+    expect(h.requests).toEqual(["http://gw/v1/images/generations"]);
+    const record = [...h.files].filter(([p]) => p.endsWith("/task.json")).map(([, bytes]) => JSON.parse(new TextDecoder().decode(bytes)))[0];
+    expect(record.model).toBe("doubao-seedream-5-0-flash-260915");
+    expect(record.references[0].source).toEqual({ kind: "result", task_id: "task-old", file: "result.png" });
+    expect([...h.files].find(([p]) => p.endsWith("/reference-1.png"))![1]).toEqual(png);
+  });
+});
+
+describe("Flash 失败政策", () => {
+  it.each(["base64", "URL"])("%s 的 PNG 签名残片解码失败，不存结果或产出节点", async (transport) => {
+    const damaged = Uint8Array.of(137, 80, 78, 71, 13, 10, 26, 10);
+    const decoded: Uint8Array[] = [];
+    const h = harness({ imageCodec: { decode: async (bytes) => {
+      decoded.push(bytes);
+      throw new Error("truncated PNG");
+    } } });
+    const b = board();
+    for (const node of b.nodes) if (node.type === "task") node.model = "doubao-seedream-5-0-flash-260915";
+    h.replies.push({ status: 200, body: JSON.stringify({ data: [transport === "URL" ? { url: "https://result.test/broken.png" } : { b64_json: btoa(String.fromCharCode(...damaged)) }] }) });
+    if (transport === "URL") h.replies.push({ status: 200, body: "", bytes: damaged });
+    await h.runner.submit(h.target(), b, ["t1"]);
+    await settle();
+    expect(h.statuses().t1).toEqual({ kind: "failed", label: "响应无效" });
+    expect(decoded).toEqual([damaged]);
+    expect(h.changes.filter((c) => c.change.kind === "runResult")).toEqual([]);
+    expect([...h.files.keys()].some((path) => /\/result\./.test(path))).toBe(false);
+  });
+  it.each([401, 400, 500])("HTTP %i 不重发，保留失败", async (status) => {
+    const h = harness();
+    const b = board();
+    for (const node of b.nodes) if (node.type === "task") node.model = "doubao-seedream-5-0-flash-260915";
+    h.replies.push({ status, body: "{}" });
+    await h.runner.submit(h.target(), b, ["t1"]);
+    await settle();
+    expect(h.statuses().t1.kind).toBe("failed");
+    h.advance(300000);
+    await settle();
+    expect(h.requests).toHaveLength(1);
+  });
+  it.each([
+    { data: [] },
+    { data: [{ url: "https://result.test/a" }, { url: "https://result.test/b" }] },
+    { data: [{ b64_json: "not-valid!" }] },
+  ])("坏响应失败，不产出结果节点", async (body) => {
+    const h = harness();
+    const b = board();
+    for (const node of b.nodes) if (node.type === "task") node.model = "doubao-seedream-5-0-flash-260915";
+    h.replies.push({ status: 200, body: JSON.stringify(body) });
+    await h.runner.submit(h.target(), b, ["t1"]);
+    await settle();
+    expect(h.statuses().t1).toEqual({ kind: "failed", label: "响应无效" });
+    expect(h.changes.filter((c) => c.change.kind === "runResult")).toEqual([]);
+    expect(h.requests).toHaveLength(1);
+  });
+  it("URL 下载拒绝明确失败且不重发生成", async () => {
+    const h = harness();
+    const b = board();
+    for (const node of b.nodes) if (node.type === "task") node.model = "doubao-seedream-5-0-flash-260915";
+    h.replies.push({ status: 200, body: JSON.stringify({ data: [{ url: "https://result.test/a" }] }) }, { status: 403, body: "denied" });
+    await h.runner.submit(h.target(), b, ["t1"]);
+    await settle();
+    expect(h.statuses().t1).toEqual({ kind: "failed", label: "网关拒绝" });
+    expect(h.requests).toEqual(["http://gw/v1/images/generations", "https://result.test/a"]);
+    expect(h.changes.filter((c) => c.change.kind === "runResult")).toEqual([]);
+  });
+  it("429 明确失败，不自动退避重发或换模型", async () => {
+    const h = harness();
+    const b = board();
+    for (const node of b.nodes) if (node.type === "task") node.model = "doubao-seedream-5-0-flash-260915";
+    h.replies.push({ status: 429, body: "{}" });
+    await h.runner.submit(h.target(), b, ["t1"]);
+    await settle();
+    expect(h.statuses().t1).toEqual({ kind: "failed", label: "网关限流" });
+    expect(h.requests).toHaveLength(1);
+    expect(h.transitions()).not.toContain("t1:running→backoff");
+  });
+});
 
 describe("任务运行器：成功", () => {
   it("先后产出「提交记录」「运行结果」两条系统变更，状态清空", async () => {

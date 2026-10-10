@@ -89,4 +89,21 @@ PYTHONPATH=src python3 -m ugc_image_tool.contracts.cli record \
 PYTHONPATH=src python3 -m ugc_image_tool.contracts.cli validate contracts/fixtures/<版本>
 ```
 
-完整清单必须记录三类接口、主要错误映射、部分失败以及五项行为（幂等键、运行中取消、任务查询、`Retry-After`、部分失败）的 `supported`、`unsupported` 或 `unknown` 结论和证据。只覆盖部分接口的清单视为 partial manifest（如 `2026-08-29-team-gateway-edit-json/` 的编辑专用清单）：`interfaces` 缺任一三类接口即为 partial，此时仅校验已记录的接口与行为（行为结论另可用 `confirmed` 表示本轮实测确认），跳过主要错误映射、`unsafe_to_enable` 和全接口覆盖的强制要求，其余规则不变。只有 `supported` 且有真实夹具的能力才可进入本地模型能力表。
+完整清单必须记录三类接口、主要错误映射、部分失败以及五项行为（幂等键、运行中取消、任务查询、`Retry-After`、部分失败）的 `supported`、`unsupported` 或 `unknown` 结论和证据。只覆盖部分接口的清单视为 partial manifest（如 `2026-08-29-team-gateway-edit-json/` 的编辑专用清单）：`interfaces` 缺任一三类接口即为 partial，此时仅校验已记录的接口与行为（行为结论另可用 `confirmed` 表示本轮实测确认），跳过主要错误映射、`unsafe_to_enable` 和全接口覆盖的强制要求，其余规则不变。只有 `supported` 且有真实夹具的能力才可进入本地模型能力表；Flash 专属例外如下，不改变其他模型准入。
+
+## 2026-10-10 Flash 普通通路与证据准入
+
+按 [Issue #8 最终 Resolution](https://github.com/TLOBillyQ/kacha/issues/8#issuecomment-6093423192)，Flash 官方明确支持能力可在客户端实现及自动化验证完成后开放，无须逐项真实网关冒烟。官方支持、当前网关实测、客户端实现分开记录，详见 [Flash 研究](../research/seedream-flash.md)。路径与有序 `image` 已有真实证据；普通输入/尺寸边界、JPEG、水印、base64、standard 优化按官方规则验证，不冒称网关已测。
+
+#15 普通文生图与编辑均使用 `POST /v1/images/generations`：完整模型 ID `doubao-seedream-5-0-flash-260915`，精确 `WxH`，顶层有序 `image`（0 图时省略），默认 url/png/watermark:false，优化仅 standard。最多 10 张；保守字节政策 30000000（官方 30MB 未定义二进制/十进制），实际参考图快照必须通过格式、字节、像素、边长和比例校验；处理失败不可退回违规原字节。不得发送 n、negative_prompt、seed、mask、input.messages、sequential_image_generation、流式或搜索字段。
+
+普通 `data` 必须恰好一项有效 URL 或 base64 图片；多项、空/坏项、下载失败均失败。URL 立即下载并保存，不持久化临时签名地址。HTTP 拒绝含 429 不自动重发/退避、不换模型。幂等、网关取消、Retry-After、任务查询继续 unknown。真实夹具从 `c3646077d5d9a252c541ae8434308f947030127e` 原样取回 manifest/text/overlay/transparent 四份；回放的替代图片字节和浏览器生成响应明确是合成测试数据，不证明真实编辑视觉语义。
+
+## 2026-10-10 Flash 区域、透明与图层通路（#17–#20）
+
+以下通路已在客户端实现并完成自动化验证；证据等级逐条标注，不与上文真实夹具混同。
+
+- **区域指示（#17）**：发送文本支持 `<point>x y</point>` 与 `<bbox>x1 y1 x2 y2</bbox>` 标签，空格分隔，提示坐标范围 0–999（官方编辑指南明确适用于 Flash）；高亮叠加沿用 Kacha 已有实测方案（2026-09-16 / 2026-09-17 冒烟），不冒称官方独立 API 模式。坐标模式只发送原图，区域保存在参考图快照元数据中；同一任务可混用两种表达，共用连续区域编号。越界引用、非法矩形、展开后超 10 张明确拒绝，不截断。网关真实证据仍只覆盖一张原图加一张高亮叠加图；坐标、多区域与跨图自动化只证明客户端表达与接线，本轮未付费调用。
+- **透明背景（#18）**：`background:"transparent"` 仅用于恰好一张已确认带 alpha 的实际参考图且输出 PNG；客户端按展开后的实际快照字节解码校验，未知 alpha 不当真。真实脱敏夹具为 1536×1536 RGBA（原采集者视觉记录）；区域叠加把唯一输入展开成原图 + 叠加图后，任务在运行前以「透明背景需要恰好一张实际参考图」阻断，控件与运行器同一理由。
+- **图层拆分（#19）**：`layer_decomposition:true`；`size` 仅 `1K` / `1.5K` / `2K` / `auto`（默认 auto），不发送普通生成的 `WxH`；输入恰好一张 PNG/JPEG，保守 30000000 字节（官方 30MB 未定义十进制 / 二进制）、262144–36000000 像素、1/16–16；`prompt` 可省略表示自动拆分。响应 `data[]` 平铺 `z_index` / `name` / `description` / `bounding_box`（`absolute` 底图像素坐标与 `normalized` 0–1000，与提示坐标 0–999 区分）；按 `z_index` 识别底图（z_index=0）并升序叠放图层，不以 `data[0]` 身份充当层级；名称与描述是可选元数据，不臆造；关键定位数据缺失 / 无效作协议校验错误，不猜测铺满。任一图层下载、格式或 alpha 失败则整体失败。**无真实 Flash 图层网关夹具：全部按官方契约构建合成响应回放，资产明确标记为合成，不宣称网关实测或视觉验证。**
+- **图层保存 / 导出 / 来源图层 / 画板包往返（#20）**：纯客户端持久化与交互行为，不进网关协议。图层文件与 layers.json 由任务目录真源保存，重开与画板包导入按真源还原；来源图层连线发送所选图层的实际字节，谱系仍指向产出它的生成结果；图层文件缺失或身份无效明确阻断，不回落底图。

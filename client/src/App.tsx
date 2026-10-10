@@ -116,7 +116,14 @@ export function App() {
     async (path: string) => {
       // 第二实例 / 画板里的打开动作在准备期间忽略（不多开标签页、不产生界面状态变更）。
       if (guardPreparation()) return;
-      const found = await openPath(path, true).catch(() => false);
+      // 文件不存在与读出来但内容损坏分开报：损坏要给出真实原因（如图层元数据损坏），不混进「找不到」。
+      let found = false;
+      try {
+        found = await openPath(path, true);
+      } catch (e) {
+        if (!guardPreparation()) toast(e instanceof Error ? e.message : String(e));
+        return;
+      }
       if (!found && !guardPreparation()) toast(`找不到画板文件：${path}`);
     },
     [openPath, toast, guardPreparation],
@@ -285,13 +292,22 @@ export function App() {
       const ui = initialUi.current!;
       const opened: string[] = [];
       for (const p of ui.open_boards) {
-        if (await openPath(p, false).catch(() => false)) opened.push(p);
+        // 恢复失败（如图层元数据损坏）提示真实原因，不静默跳过。
+        try {
+          if (await openPath(p, false)) opened.push(p);
+        } catch (e) {
+          toast(e instanceof Error ? e.message : String(e));
+        }
       }
       let activated = false;
       if (ui.active_board && opened.includes(ui.active_board)) activated = await openPath(ui.active_board, true);
       for (const p of (await ipc.startupArgs().catch(() => [])).filter(isBoardPath)) {
-        if (await openPath(p, true).catch(() => false)) activated = true;
-        else toast(`找不到画板文件：${p}`);
+        try {
+          if (await openPath(p, true)) activated = true;
+          else toast(`找不到画板文件：${p}`);
+        } catch (e) {
+          toast(e instanceof Error ? e.message : String(e));
+        }
       }
       if (!activated && opened.length) await openPath(opened[0], true);
       else if (!activated) await createBoard();

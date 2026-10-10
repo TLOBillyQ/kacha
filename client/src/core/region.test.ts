@@ -33,7 +33,9 @@ function board(nodes: BoardNode[], edges: BoardEdge[]): Board {
 }
 
 const qwen = findModel(BUILTIN_TABLE, "qwen-image-3.0-pro")!;
-const doubao = { ...findModel(BUILTIN_TABLE, "doubao-seedream-5-0-lite-260128")!, region_hint: { highlight_overlay: "untested" as const, marked_image: "unsupported" as const, bbox_tag: "unsupported" as const } };
+const flash = findModel(BUILTIN_TABLE, "doubao-seedream-5-0-flash-260915")!;
+const seedreamPro = findModel(BUILTIN_TABLE, "doubao-seedream-5-0-pro-260628")!;
+const doubao = { ...flash, region_hint: { highlight_overlay: "untested" as const, marked_image: "unsupported" as const, bbox_tag: "unsupported" as const } };
 
 const REGION = { rects: [[0.1, 0.1, 0.5, 0.5] as [number, number, number, number]], render: "highlight_overlay" as const };
 
@@ -56,7 +58,7 @@ describe("渲染方式推导", () => {
 describe("端口槽展开", () => {
   it("highlight_overlay：有区域的线贡献原图 + 紧随的叠加槽，序号顺延", () => {
     const edges = [edge("r1", "t", "image:0", { region: REGION }), edge("r2", "t", "image:1")];
-    const slots = expandImageEdges(edges, "highlight_overlay");
+    const slots = expandImageEdges(edges, qwen);
     expect(slots.map((s) => [s.port, s.kind, s.sourcePort])).toEqual([
       [1, "image", null],
       [2, "overlay", 1],
@@ -67,7 +69,7 @@ describe("端口槽展开", () => {
 
   it("用户序号只数用户连线：叠加槽记原图的用户序号，后面的用户图序号不后移", () => {
     const edges = [edge("r1", "t", "image:0", { region: REGION }), edge("r2", "t", "image:1")];
-    const slots = expandImageEdges(edges, "highlight_overlay");
+    const slots = expandImageEdges(edges, qwen);
     expect(slots.map((s) => [s.kind, s.port, s.userPort])).toEqual([
       ["image", 1, 1],
       ["overlay", 2, 1],
@@ -76,22 +78,32 @@ describe("端口槽展开", () => {
   });
 
   it("无区域的线不占叠加名额", () => {
-    const slots = expandImageEdges([edge("r1", "t", "image:0"), edge("r2", "t", "image:1")], "highlight_overlay");
+    const slots = expandImageEdges([edge("r1", "t", "image:0"), edge("r2", "t", "image:1")], qwen);
     expect(slots.map((s) => s.kind)).toEqual(["image", "image"]);
   });
 
   it("空矩形列表视同无区域", () => {
-    const slots = expandImageEdges([edge("r1", "t", "image:0", { region: { ...REGION, rects: [] } })], "highlight_overlay");
+    const slots = expandImageEdges([edge("r1", "t", "image:0", { region: { ...REGION, rects: [] } })], qwen);
     expect(slots).toHaveLength(1);
   });
 
-  it("非 highlight_overlay 渲染不占名额", () => {
-    const slots = expandImageEdges([edge("r1", "t", "image:0", { region: REGION })], "bbox_tag");
+  it("Flash 的坐标区域：不占叠加名额，坐标进入槽位", () => {
+    const coord = { ...REGION, render: "bbox_tag" as const, coordinate_kind: "bbox" as const };
+    const slots = expandImageEdges([edge("r1", "t", "image:0", { region: coord })], flash);
     expect(slots).toHaveLength(1);
+    expect(slots[0].coordinateRegion).toBeDefined();
+    expect(slots[0].regionCount).toBe(1);
   });
 
-  it("渲染方式为 null 时全部只有原图槽", () => {
-    const slots = expandImageEdges([edge("r1", "t", "image:0", { region: REGION })], null);
+  it("坐标区域切到未接坐标通路的模型：回落高亮叠加（Seedream 5.0 pro 能力表支持 bbox_tag，但客户端只接了 Flash）", () => {
+    const coord = { ...REGION, render: "bbox_tag" as const, coordinate_kind: "bbox" as const };
+    const slots = expandImageEdges([edge("r1", "t", "image:0", { region: coord })], seedreamPro);
+    expect(slots.map((s) => s.kind)).toEqual(["image", "overlay"]);
+    expect(slots[0].coordinateRegion).toBeUndefined();
+  });
+
+  it("模型缺失时全部只有原图槽", () => {
+    const slots = expandImageEdges([edge("r1", "t", "image:0", { region: REGION })], undefined);
     expect(slots.map((s) => s.kind)).toEqual(["image"]);
   });
 });
@@ -122,13 +134,13 @@ describe("从任务记录重建槽", () => {
 
   it("旧口径 task.json 重建的槽与从画板展开的槽一致", () => {
     const two = { ...REGION, rects: [REGION.rects[0], REGION.rects[0]] };
-    const fromBoard = expandImageEdges([edge("r1", "t", "image:0", { region: two }), edge("r2", "t", "image:1")], "highlight_overlay");
+    const fromBoard = expandImageEdges([edge("r1", "t", "image:0", { region: two }), edge("r2", "t", "image:1")], qwen);
     expect(slotsFromReferences(OLD_TASK_JSON.references)).toEqual(shape(fromBoard));
   });
 
   it("多张图各带区域、无参考图", () => {
     const edges = [edge("r1", "t", "image:0", { region: REGION }), edge("r2", "t", "image:1"), edge("r3", "t", "image:2", { region: REGION })];
-    const fromBoard = shape(expandImageEdges(edges, "highlight_overlay"));
+    const fromBoard = shape(expandImageEdges(edges, qwen));
     const references = fromBoard.map((s) =>
       s.kind === "overlay"
         ? { source: { kind: "overlay", of: s.sourcePort! }, region: { rects: REGION.rects, render: "highlight_overlay" as const, source_port: s.sourcePort! } }

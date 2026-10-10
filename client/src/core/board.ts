@@ -1,5 +1,6 @@
 // 画板文件：输出根目录/画板/<标题>.ugcboard.json。
 // 任务目录是真源、画板只是视图；本模块只负责文件格式的读写、版本与未知字段保留、文件名派生。
+import type { OutputOptions } from "./gateway";
 import type { AutoRatio, SizeSpec } from "./size";
 
 export const BOARD_FORMAT_VERSION = 1;
@@ -14,6 +15,8 @@ export type RegionRender = "highlight_overlay" | "marked_image" | "bbox_tag";
 export interface Region {
   rects: [number, number, number, number][];
   render: RegionRender;
+  /** 坐标表达以矩形中心为 point 或矩形边界为 bbox；提示坐标为0–999。 */
+  coordinate_kind?: "point" | "bbox";
 }
 
 interface NodeBase {
@@ -44,6 +47,9 @@ export interface TaskNode extends NodeBase {
   image_ports: number;
   layer_decomposition: boolean;
   transparent_background: boolean;
+  /** 缺省沿用 url/png/false；仅适用于 Flash。 */
+  output_options?: OutputOptions;
+  layer_size?: import("./gateway").LayerSize;
   /** 脏判据快照；未提交过为 null。本切片只读写不解释。 */
   last_submitted: Json | null;
 }
@@ -52,7 +58,11 @@ export interface LayerRecord {
   /** 相对任务目录，形如 layers/01.png（按 z_index 升序编号）。 */
   file: string;
   z_index: number;
-  bounding_box: number[];
+  /** Flash 图层为 { absolute, normalized }；旧结果为旧版四元数组。 */
+  bounding_box: number[] | import("./gateway").LayerBoundingBox;
+  /** 可选元数据（官方按可选返回，不臆造）。 */
+  name?: string;
+  description?: string;
 }
 
 export interface ResultRecord {
@@ -168,9 +178,22 @@ function autoRatio(raw: unknown): AutoRatio | null {
 const NODE_KEYS = {
   prompt: ["id", "type", "pos", "size", "text"],
   reference: ["id", "type", "pos", "size", "path", "sha256", "display_name"],
-  task: ["id", "type", "pos", "size", "model", "size_spec", "image_ports", "layer_decomposition", "transparent_background", "last_submitted"],
+  task: ["id", "type", "pos", "size", "model", "size_spec", "image_ports", "layer_decomposition", "transparent_background", "output_options", "layer_size", "last_submitted"],
   result: ["id", "type", "pos", "size", "task_id", "file", "path", "layer_count", "record"],
 } as const;
+
+/** 图层尺寸的封闭取值；画板里出现别的值视为损坏，不静默断言。 */
+function layerSizeOf(raw: unknown): import("./gateway").LayerSize {
+  return need<import("./gateway").LayerSize>(raw === "1K" || raw === "1.5K" || raw === "2K" || raw === "auto", raw, "layer_size 必须是 1K / 1.5K / 2K / auto");
+}
+
+/** 画板里的输出选项做结构化校验；取值越界即损坏（与 gateway.outputOptions 同口径，但损坏归画板格式）。 */
+function outputOptionsOf(raw: unknown): OutputOptions {
+  const o = need<Json>(isObject(raw), raw, "output_options 必须是对象");
+  const format = need<OutputOptions["output_format"]>(o.output_format === "png" || o.output_format === "jpeg", o.output_format, "output_options.output_format 必须是 png / jpeg");
+  const response = need<OutputOptions["response_format"]>(o.response_format === "url" || o.response_format === "b64_json", o.response_format, "output_options.response_format 必须是 url / b64_json");
+  return { output_format: format, response_format: response, watermark: need<boolean>(typeof o.watermark === "boolean", o.watermark, "output_options.watermark 必须是布尔值") };
+}
 
 function parseNode(raw: unknown): BoardNode {
   const o = need<Json>(isObject(raw), raw, "节点必须是对象");
@@ -191,7 +214,9 @@ function parseNode(raw: unknown): BoardNode {
         size_spec: sizeSpec(o, "size_spec"),
         image_ports: num(o, "image_ports"),
         layer_decomposition: bool(o, "layer_decomposition"),
+        ...(o.layer_size === undefined ? {} : { layer_size: layerSizeOf(o.layer_size) }),
         transparent_background: bool(o, "transparent_background"),
+        ...(o.output_options === undefined ? {} : { output_options: outputOptionsOf(o.output_options) }),
         last_submitted: nullableObj(o, "last_submitted"),
       };
     default: {

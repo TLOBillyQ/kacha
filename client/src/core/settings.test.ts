@@ -117,7 +117,7 @@ describe("模型发现", () => {
   });
 
   it("从未发现过时列出上架清单", () => {
-    expect(availableModels(BUILTIN_TABLE, { source: "none" }).map((m) => m.model_id)).toEqual(["qwen-image-3.0-pro", "doubao-seedream-5-0-pro-260628", "qwen-image-3.0", "doubao-seedream-5-0-lite-260128"]);
+    expect(availableModels(BUILTIN_TABLE, { source: "none" }).map((m) => m.model_id)).toEqual(["qwen-image-3.0-pro", "doubao-seedream-5-0-pro-260628", "qwen-image-3.0", "doubao-seedream-5-0-flash-260915"]);
   });
 
   it("已发现但网关没有该模型时，任务标红原因", () => {
@@ -131,17 +131,17 @@ describe("模型发现", () => {
 describe("新建任务默认模型", () => {
   const live = (ids: string[]) => ({ source: "live" as const, ids, fetchedAt: "t" });
 
-  it("优先画板级最近选择；否则首选 Seedream 5.0 lite；都不可用时退回可用列表第一个", () => {
+  it("优先有效最近选择；否则保留 Flash 首选身份，缺失时不选其它模型", () => {
     expect(defaultTaskModel(BUILTIN_TABLE, { source: "none" }, "qwen-image-3.0")).toBe("qwen-image-3.0");
-    expect(defaultTaskModel(BUILTIN_TABLE, { source: "none" }, null)).toBe("doubao-seedream-5-0-lite-260128");
-    expect(defaultTaskModel(BUILTIN_TABLE, live(["qwen-image-3.0"]), "qwen-image-3.0-pro")).toBe("qwen-image-3.0");
+    expect(defaultTaskModel(BUILTIN_TABLE, { source: "none" }, null)).toBe("doubao-seedream-5-0-flash-260915");
+    expect(defaultTaskModel(BUILTIN_TABLE, live(["qwen-image-3.0"]), "qwen-image-3.0-pro")).toBe("doubao-seedream-5-0-flash-260915");
     expect(defaultTaskModel(BUILTIN_TABLE, { source: "none" }, "doubao-seedream-5-0-pro-260628")).toBe("doubao-seedream-5-0-pro-260628");
-    expect(defaultTaskModel(BUILTIN_TABLE, { source: "none" }, "nope")).toBe("doubao-seedream-5-0-lite-260128");
-    expect(defaultTaskModel(BUILTIN_TABLE, live(["qwen-image-3.0-pro", "doubao-seedream-5-0-pro-260628"]), null)).toBe("qwen-image-3.0-pro");
+    expect(defaultTaskModel(BUILTIN_TABLE, { source: "none" }, "nope")).toBe("doubao-seedream-5-0-flash-260915");
+    expect(defaultTaskModel(BUILTIN_TABLE, live(["qwen-image-3.0-pro", "doubao-seedream-5-0-pro-260628"]), null)).toBe("doubao-seedream-5-0-flash-260915");
   });
 
-  it("网关一个上架模型都没有时仍给上架清单第一个（节点会标红）", () => {
-    expect(defaultTaskModel(BUILTIN_TABLE, live([]), null)).toBe("qwen-image-3.0-pro");
+  it("网关一个上架模型都没有时保留 Flash（节点会标红）", () => {
+    expect(defaultTaskModel(BUILTIN_TABLE, live([]), null)).toBe("doubao-seedream-5-0-flash-260915");
   });
 });
 
@@ -293,7 +293,13 @@ describe("刷新模型列表", () => {
 
   it("失败且缓存属于别的 base_url：视为无缓存", async () => {
     const { ports } = memoryPorts();
-    expect(await refreshModels(ports, "http://other:3001", "sk", cached)).toMatchObject({ ok: false, discovery: { source: "none" } });
+    expect(await refreshModels(ports, "http://other:3001", "sk", cached)).toMatchObject({ ok: false, discovery: { source: "none", failed: true } });
+  });
+
+  it("刷新失败且没有同网关缓存：Flash 明确不可用，用户可手动选择前次缓存中的其它可用模型", async () => {
+    const { ports } = memoryPorts();
+    const result = await refreshModels(ports, "http://other:3001", "sk", cached);
+    expect(modelAvailabilityIssue(BUILTIN_TABLE, result.discovery, "doubao-seedream-5-0-flash-260915")).toBe("Flash 不可用，请刷新模型列表或手动选择其它可用模型");
   });
 
   it("非网关错误：没有可展示的说明，日志类别记 unknown", async () => {
@@ -310,7 +316,7 @@ describe("刷新模型列表", () => {
       }),
     });
     const result = await refreshModels(ports, BASE, "sk", null);
-    expect(result).toEqual({ ok: false, message: null, discovery: { source: "none" } });
+    expect(result).toEqual({ ok: false, message: null, discovery: { source: "none", failed: true } });
     expect(logs[0].fields).toMatchObject({ ok: false, category: "unknown" });
   });
 });

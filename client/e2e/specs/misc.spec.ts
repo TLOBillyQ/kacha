@@ -140,7 +140,7 @@ test.describe("#21–#24 高级设置", () => {
     const dialog = await openSettings(page);
     const testButton = dialog.getByRole("button", { name: "测试连接并刷新模型" });
     await testButton.click();
-    await expect(dialog.locator(".ok-text")).toHaveText("连接成功，网关提供 4 个模型");
+    await expect(dialog.locator(".ok-text")).toHaveText("连接成功，网关提供 5 个模型");
     await expect(dialog).toContainText("模型列表：已从网关获取");
 
     await page.route(`${GW}/v1/models`, (route) => route.fulfill({ status: 401, json: { error: { message: "invalid key" } } }));

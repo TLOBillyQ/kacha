@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { imageRuleViolations } from "./graph";
 import {
   BUILTIN_TABLE,
   isSupported,
@@ -10,7 +11,22 @@ import {
 
 const qwenPro = () => BUILTIN_TABLE.models.find((m) => m.model_id === "qwen-image-3.0-pro")!;
 
+describe("Flash 输入政策", () => {
+  const rule = BUILTIN_TABLE.models.find((m) => m.model_id === "doubao-seedream-5-0-flash-260915")!.input_image_rule;
+  it("八种官方格式及保守字节/像素上下界，不继承 Lite 14 图", () => {
+    for (const format of ["jpeg", "png", "webp", "bmp", "tiff", "gif", "heic", "heif"]) expect(imageRuleViolations({ format, bytes: 30000000, width: 6000, height: 6000 }, rule)).toEqual([]);
+    expect(imageRuleViolations({ format: "png", bytes: 30000001, width: 6000, height: 6000 }, rule).join()).toContain("文件");
+    expect(imageRuleViolations({ format: "png", bytes: 1, width: 6001, height: 6000 }, rule).join()).toContain("总像素");
+    expect(imageRuleViolations({ format: "png", bytes: 1, width: 14, height: 14 }, rule).join()).toContain("最短边");
+    expect(imageRuleViolations({ format: "png", bytes: 1, width: 13, height: 15 }, rule).join()).toContain("总像素");
+    expect(imageRuleViolations({ format: "avif", bytes: 1, width: 15, height: 15 }, rule).join()).toContain("格式");
+  });
+});
+
 describe("内置能力表", () => {
+  it("Lite 不再提供运行能力或模型选择入口", () => {
+    expect(BUILTIN_TABLE.models.some((m) => m.model_id === "doubao-seedream-5-0-lite-260128")).toBe(false);
+  });
   it("通过自身 schema 校验，顶层整数 format_version", () => {
     expect(BUILTIN_TABLE.format_version).toBe(1);
     expect(BUILTIN_TABLE.models.length).toBe(4);
@@ -20,7 +36,7 @@ describe("内置能力表", () => {
     const groups = modelsByTier(BUILTIN_TABLE);
     expect(groups.map((g) => [g.tier, g.models.map((m) => m.model_id)])).toEqual([
       ["flagship", ["qwen-image-3.0-pro", "doubao-seedream-5-0-pro-260628"]],
-      ["economy", ["qwen-image-3.0", "doubao-seedream-5-0-lite-260128"]],
+      ["economy", ["qwen-image-3.0", "doubao-seedream-5-0-flash-260915"]],
     ]);
   });
 
@@ -69,6 +85,11 @@ describe("解析与校验", () => {
 });
 
 describe("覆盖文件按模型合并", () => {
+  it("覆盖文件不能重新引入停用 Lite，即使声明全套有效能力", () => {
+    const retired = { ...structuredClone(qwenPro()), model_id: "doubao-seedream-5-0-lite-260128" };
+    const merged = mergeOverride(BUILTIN_TABLE, { format_version: 1, models: [retired] });
+    expect(merged.models.some((m) => m.model_id === retired.model_id)).toBe(false);
+  });
   it("同 model_id 整条替换内置，新模型追加，其余不动", () => {
     const override = structuredClone(qwenPro());
     override.workflows.image_edit.max_references = 5;

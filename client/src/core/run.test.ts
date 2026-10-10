@@ -3,6 +3,8 @@ import type { Board, BoardEdge, BoardNode, ResultNode, TaskNode } from "./board"
 import { BUILTIN_TABLE } from "./capabilities";
 import type { FetchLike } from "./gateway";
 import { addResultNode } from "./layout";
+import { createRunner } from "./runner";
+import { settle } from "./testing/runnerHarness";
 import { memoryTaskFs } from "./testing/memoryTaskFs";
 import { CancelledError, executeJob, failureLabel, prepareJob, prepareRegenerate, writeJob, type Prepared, type PreparedJob, type RunDeps } from "./run";
 
@@ -50,6 +52,185 @@ const prepare = async (d: RunDeps, args: Parameters<typeof prepareJob>[1]) => la
 const regen = async (d: RunDeps, args: Parameters<typeof prepareRegenerate>[1]) => landed(args.board, await prepareRegenerate(d, args));
 
 const ok = () => ({ status: 200, body: JSON.stringify({ metadata: { output: { choices: [{ message: { content: [{ image: PNG_B64 }] } }] } } }) });
+
+describe("Flash 来源图层", () => {
+  const LAYER2 = Uint8Array.from([...PNG, 7]);
+  const layerResult = (): ResultNode => ({
+    id: "x",
+    type: "result",
+    pos: [0, 200],
+    size: [100, 100],
+    extra: {},
+    task_id: "task-x",
+    file: "result.png",
+    path: "2026-09-16/task-x/result.png",
+    layer_count: 2,
+    record: {
+      model: "doubao-seedream-5-0-flash-260915",
+      prompt: "",
+      negative_prompt: "",
+      size_spec: { tier: "1K", ratio: "1:1", width: null, height: null },
+      submitted_at: "2026-09-16T01:00:00Z",
+      layers: [
+        { file: "layers/01.png", z_index: 1, bounding_box: { absolute: [0, 0, 10, 10], normalized: [0, 0, 10, 10] }, name: "主体" },
+        { file: "layers/02.png", z_index: 2, bounding_box: { absolute: [10, 10, 20, 20], normalized: [10, 10, 20, 20] } },
+      ],
+    },
+  });
+  const layerBoard = (sourceLayer: number | null): Board => {
+    const b = board(false);
+    const p = b.nodes.find((n) => n.type === "prompt");
+    if (p?.type === "prompt") p.text = "把图1改色";
+    const t = b.nodes.find((n) => n.type === "task") as TaskNode;
+    t.model = "doubao-seedream-5-0-flash-260915";
+    t.image_ports = 1;
+    b.nodes.push(layerResult());
+    b.edges.push({ from: ["x", "out"], to: ["t", "image:0"], source_layer: sourceLayer, region: null, system: false, extra: {} });
+    return b;
+  };
+  const passThroughCodec: RunDeps["imageCodec"] = { decode: async () => ({ width: 1024, height: 1024, hasAlpha: () => true, encode: async () => PNG, close: () => undefined }) };
+
+  it("实际发送与参考图快照用指定图层字节；任务记录谱系指向所属结果与图层序号；重新生成沿用快照与谱系", async () => {
+    const { d, files } = deps(() => ({ status: 200, body: JSON.stringify({ data: [{ b64_json: PNG_B64 }] }) }));
+    d.imageCodec = passThroughCodec;
+    files.set("/root/2026-09-16/task-x/result.png", PNG);
+    files.set("/root/2026-09-16/task-x/layers/02.png", LAYER2);
+    const prepared = await prepare(d, { board: layerBoard(2), table: BUILTIN_TABLE, tableSha256: "x", outputRoot: "/root", taskNodeId: "t" });
+    expect(prepared.job.plan.references).toHaveLength(1);
+    expect(prepared.job.plan.references[0].bytes).toEqual(LAYER2);
+    expect(prepared.job.plan.references[0].source).toEqual({ kind: "result", task_id: "task-x", file: "result.png", source_layer: 2 });
+    const written = await writeJob(d, "/root", prepared.job);
+    const record = JSON.parse(new TextDecoder().decode(files.get(`/root/${written.relDir}/task.json`)));
+    expect(record.references[0].source).toEqual({ kind: "result", task_id: "task-x", file: "result.png", source_layer: 2 });
+    expect(files.get(`/root/${written.relDir}/reference-1.png`)).toEqual(LAYER2);
+    // 重新生成：读回快照字节与谱系（仍指向所属结果），不依赖画板现状。
+    const again = await regen(d, { board: prepared.board, table: BUILTIN_TABLE, tableSha256: "x", outputRoot: "/root", taskNodeId: "t" });
+    expect(again.job.plan.references[0].bytes).toEqual(LAYER2);
+    expect(again.job.plan.references[0].source).toEqual({ kind: "result", task_id: "task-x", file: "result.png", source_layer: 2 });
+  });
+
+  it("无效来源图层身份：提交前明确失败，不回落底图、不猜 layers/NN 路径、不发请求", async () => {
+    const { d, files, requests } = deps(() => ({ status: 200, body: "{}" }));
+    // 若错误回落到底图，本可通过校验——用它证明没有回落。
+    d.imageCodec = passThroughCodec;
+    files.set("/root/2026-09-16/task-x/result.png", PNG);
+    await expect(prepareJob(d, { board: layerBoard(9), table: BUILTIN_TABLE, tableSha256: "x", outputRoot: "/root", taskNodeId: "t" })).rejects.toThrow(/来源图层/);
+    expect(requests).toEqual([]);
+  });
+
+  it("图层拆分任务尺寸无法解析：提交前明确失败，不静默兜底 1024x1024", async () => {
+    const { d, files, requests } = deps(() => ({ status: 200, body: "{}" }));
+    d.imageCodec = passThroughCodec;
+    files.set("/root/2026-09-16/task-x/result.png", PNG);
+    files.set("/root/2026-09-16/task-x/layers/02.png", LAYER2);
+    const b = layerBoard(2);
+    const t = b.nodes.find((n) => n.type === "task") as TaskNode;
+    t.layer_decomposition = true;
+    t.size_spec = { tier: "1K", ratio: "99:1", width: null, height: null };
+    await expect(prepareJob(d, { board: b, table: BUILTIN_TABLE, tableSha256: "x", outputRoot: "/root", taskNodeId: "t" })).rejects.toThrow(/生成尺寸不在模型尺寸表内/);
+    expect(requests).toEqual([]);
+  });
+
+  it("缺失图层文件：提交前明确失败（读图失败），不回落底图", async () => {
+    const { d, files, requests } = deps(() => ({ status: 200, body: "{}" }));
+    d.imageCodec = passThroughCodec;
+    files.set("/root/2026-09-16/task-x/result.png", PNG);
+    await expect(prepareJob(d, { board: layerBoard(2), table: BUILTIN_TABLE, tableSha256: "x", outputRoot: "/root", taskNodeId: "t" })).rejects.toThrow(/图层2/);
+    expect(requests).toEqual([]);
+  });
+});
+
+describe("Flash 普通任务", () => {
+  it.each([false, true])("公开运行器转换快照链路，编码结果损坏=%s", async (invalid) => {
+    const source2 = Uint8Array.from([...PNG, 2]);
+    const transformed = [Uint8Array.from([...PNG, 11]), Uint8Array.from([...PNG, 12])];
+    const damaged = PNG.slice(0, 8);
+    const events: string[] = [];
+    const { d, files, requests } = deps(() => ({ status: 200, body: JSON.stringify({ data: [{ b64_json: PNG_B64 }] }) }));
+    d.schedule = (ms, fn) => { const timer = setTimeout(fn, ms); return () => clearTimeout(timer); };
+    d.readFile = async (path) => path === "/root/refs/cat.png" ? PNG : path === "/root/refs/second.png" ? source2 : files.get(path)!;
+    d.imageCodec = { decode: async (bytes) => {
+      if (bytes.length === damaged.length) { events.push("decode:damaged"); throw new Error("truncated PNG"); }
+      const source = bytes === PNG ? 0 : bytes === source2 ? 1 : -1;
+      const fitted = transformed.findIndex((v) => v === bytes);
+      const label = source >= 0 ? `source${source + 1}` : `fitted${fitted + 1}`;
+      events.push(`decode:${label}`);
+      return { width: source >= 0 ? 10000 : 6000, height: source >= 0 ? 10000 : 6000, hasAlpha: () => false,
+        encode: async (width, height, format) => { events.push(`encode:${label}:${width}x${height}:${format}`); return invalid ? damaged : transformed[source]; },
+        close: () => { events.push(`close:${label}`); } };
+    } };
+    // Output is decoded independently from the two reference sources.
+    const decode = d.imageCodec.decode;
+    d.imageCodec.decode = async (bytes) => bytes !== PNG && bytes.length === PNG.length
+      ? { width: 1024, height: 1024, hasAlpha: () => false, encode: async () => { throw new Error("output must not encode"); }, close: () => { events.push("close:output"); } }
+      : decode(bytes);
+    const b = board(true);
+    const task = b.nodes.find((n) => n.type === "task") as TaskNode;
+    task.model = "doubao-seedream-5-0-flash-260915";
+    task.image_ports = 2;
+    b.nodes.push({ id: "r2", type: "reference", pos: [0, 400], size: [100, 100], extra: {}, path: "refs/second.png", sha256: "b".repeat(64), display_name: "second.png" });
+    b.edges.push({ from: ["r2", "out"], to: ["t", "image:1"], source_layer: null, region: null, system: false, extra: {} });
+    const changes: string[] = [];
+    const runner = createRunner({ deps: d, concurrency: 3, apply: (_key, change) => { changes.push(change.kind); }, log: () => undefined });
+    const problems = await runner.submit({ boardKey: "A", boardFile: "A.ugcboard", table: BUILTIN_TABLE, outputRoot: "/root", baseUrl: "http://gw", apiKey: "k" }, b, ["t"]);
+    await settle();
+    if (invalid) {
+      expect(problems).toHaveLength(1);
+      expect(events).toEqual(["decode:source1", "encode:source1:6000x6000:png", "close:source1", "decode:damaged"]);
+      expect(files.size).toBe(0);
+      expect(requests).toEqual([]);
+      expect(changes).toEqual([]);
+      return;
+    }
+    expect(problems).toEqual([]);
+    expect([...runner.getSnapshot().board("A").statuses]).toEqual([]);
+    expect(changes).toEqual(["submitted", "runResult"]);
+    expect(events.slice(0, 8)).toEqual([
+      "decode:source1", "encode:source1:6000x6000:png", "close:source1", "decode:fitted1", "close:fitted1",
+      "decode:source2", "encode:source2:6000x6000:png", "close:source2",
+    ]);
+    expect(events.slice(8)).toEqual(["decode:fitted2", "close:fitted2", "close:output"]);
+    expect(JSON.parse(String(requests[0].init.body)).image).toEqual(transformed.map((bytes) => `data:image/png;base64,${btoa(String.fromCharCode(...bytes))}`));
+    const snapshots = [...files.entries()].filter(([path]) => /\/reference-\d+\.png$/.test(path));
+    expect(snapshots.map(([, bytes]) => bytes)).toEqual(transformed);
+    expect(changes).toEqual(["submitted", "runResult"]);
+  });
+  it("实际输入边界逐项校验，合法 15px 边长和比例边界可提交", async () => {
+    const { d } = deps(ok);
+    const b = board(true);
+    (b.nodes.find((n) => n.type === "task") as TaskNode).model = "doubao-seedream-5-0-flash-260915";
+    const args = { board: b, table: BUILTIN_TABLE, tableSha256: "x", outputRoot: "/root", taskNodeId: "t" };
+    for (const [width, height, allowed] of [[15, 15, true], [15, 240, true], [240, 15, true], [14, 100, false], [241, 15, false], [15, 241, false]] as const) {
+      d.imageCodec = { decode: async () => ({ width, height, hasAlpha: () => false, encode: async () => { throw new Error("不应处理"); }, close: () => undefined }) };
+      if (allowed) expect((await prepareJob(d, args)).job.plan.references).toHaveLength(1);
+      else await expect(prepareJob(d, args)).rejects.toThrow(/参考图/);
+    }
+  });
+  it("实际 Flash 快照不合规或处理失败时拒绝提交，不发送原字节", async () => {
+    const { d, requests } = deps(ok);
+    const b = board(true);
+    (b.nodes.find((n) => n.type === "task") as TaskNode).model = "doubao-seedream-5-0-flash-260915";
+    const args = { board: b, table: BUILTIN_TABLE, tableSha256: "x", outputRoot: "/root", taskNodeId: "t" };
+    d.imageCodec = { decode: async () => ({ width: 14, height: 100, hasAlpha: () => false, encode: async () => PNG, close: () => undefined }) };
+    await expect(prepareJob(d, args)).rejects.toThrow(/参考图/);
+    d.imageCodec = { decode: async () => ({ width: 10000, height: 10000, hasAlpha: () => false, encode: async () => { throw new Error("编码失败"); }, close: () => undefined }) };
+    await expect(prepareJob(d, args)).rejects.toThrow(/参考图/);
+    expect(requests).toEqual([]);
+  });
+  it("输出选项写入任务目录，重新生成沿用历史选项", async () => {
+    const { d, files } = deps(ok);
+    const b = board(false);
+    const task = b.nodes.find((n) => n.type === "task") as TaskNode;
+    task.model = "doubao-seedream-5-0-flash-260915";
+    task.output_options = { output_format: "jpeg", response_format: "b64_json", watermark: true };
+    const prepared = await prepare(d, { board: b, table: BUILTIN_TABLE, tableSha256: "x", outputRoot: "/root", taskNodeId: "t" });
+    const written = await writeJob(d, "/root", prepared.job);
+    expect(JSON.parse(new TextDecoder().decode(files.get(`/root/${written.relDir}/task.json`))).output_options).toEqual(task.output_options);
+    task.output_options = { output_format: "png", response_format: "url", watermark: false };
+    const again = await regen(d, { board: prepared.board, table: BUILTIN_TABLE, tableSha256: "x", outputRoot: "/root", taskNodeId: "t" });
+    expect(again.job.input.outputOptions).toEqual({ output_format: "jpeg", response_format: "b64_json", watermark: true });
+  });
+});
 
 describe("单任务端到端", () => {
   it("图片编辑：提交只改 last_submitted；派发时写任务目录，调网关，存结果并加结果节点", async () => {

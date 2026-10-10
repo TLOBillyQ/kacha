@@ -124,6 +124,48 @@ describe("导出计划", () => {
     expect(spec.task_dirs).toEqual([]);
     expect(spec.files).toEqual(plan.files);
   });
+
+  /** Flash 结果：两层，其中 02 的图层文件不在磁盘上。 */
+  const flashResult = (id: string, taskId: string, date = "2026-09-16"): ResultNode => {
+    const node = result(id, taskId, date);
+    node.record.model = "doubao-seedream-5-0-flash-260915";
+    node.layer_count = 2;
+    node.record.layers = [
+      { file: "layers/01.png", z_index: 1, bounding_box: { absolute: [0, 0, 100, 50], normalized: [0, 0, 500, 500] }, name: "主体" },
+      { file: "layers/02.png", z_index: 2, bounding_box: { absolute: [10, 10, 60, 40], normalized: [50, 100, 300, 400] }, description: "阴影" },
+    ];
+    return node;
+  };
+
+  it("Flash 结果的图层文件缺失：逐个列入缺图清单，任务目录照常带上", async () => {
+    const taskId = "20260916T010000Z-00000001";
+    const board = boardWith(flashResult("r", taskId));
+    const files = {
+      [abs(`2026-09-16/${taskId}/result.png`)]: "",
+      [abs(`2026-09-16/${taskId}/layers/01.png`)]: "",
+    };
+    const plan = await planExport(board, ROOT, memoryFs(files));
+    expect(plan.taskDirs).toEqual([`2026-09-16/${taskId}`]);
+    expect(plan.missing).toEqual([{ nodeId: "r", path: `2026-09-16/${taskId}/layers/02.png` }]);
+  });
+
+  it("包往返：图层记录与来源图层连线经序列化 / 解析原样保留", async () => {
+    const taskId = "20260916T010000Z-00000001";
+    const res = flashResult("r", taskId);
+    const board: Board = {
+      ...boardWith(res),
+      edges: [{ from: ["r", "out"], to: ["t", "image:0"], source_layer: 2, region: null, system: false, extra: {} }],
+    };
+    const files = Object.fromEntries(["result.png", "layers/01.png", "layers/02.png"].map((f) => [abs(`2026-09-16/${taskId}/${f}`), ""]));
+    const plan = await planExport(board, ROOT, memoryFs(files));
+    expect(plan.missing).toEqual([]);
+    const parsed = parseBoard(serializeBoard(plan.board));
+    if (parsed.kind !== "ok") throw new Error(parsed.kind);
+    const node = parsed.board.nodes[0] as ResultNode;
+    expect(node.record.layers).toEqual(res.record.layers);
+    expect(node.layer_count).toBe(2);
+    expect(parsed.board.edges[0]).toMatchObject({ source_layer: 2 });
+  });
 });
 
 describe("包清单与版本判定", () => {

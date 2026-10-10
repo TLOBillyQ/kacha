@@ -128,6 +128,33 @@ describe("画板文件读入", () => {
     expect(parseBoard('{"format_version": "1", "title": "", "nodes": [], "edges": []}').kind).toBe("corrupt");
   });
 
+  it("任务节点的 output_options / layer_size 无效视为损坏，按字段名给原因", () => {
+    const badOptions = JSON.parse(serializeBoard(sample()));
+    badOptions.nodes[2].output_options = { output_format: "gif", response_format: "url", watermark: false };
+    const optionsResult = parseBoard(JSON.stringify(badOptions));
+    expect(optionsResult.kind).toBe("corrupt");
+    if (optionsResult.kind === "corrupt") expect(optionsResult.reason).toContain("output_options");
+
+    const badSize = JSON.parse(serializeBoard(sample()));
+    badSize.nodes[2].layer_size = "3K";
+    const sizeResult = parseBoard(JSON.stringify(badSize));
+    expect(sizeResult.kind).toBe("corrupt");
+    if (sizeResult.kind === "corrupt") expect(sizeResult.reason).toContain("layer_size");
+  });
+
+  it("合法的 output_options / layer_size 读写往返保持", () => {
+    const raw = JSON.parse(serializeBoard(sample()));
+    raw.nodes[2].output_options = { output_format: "jpeg", response_format: "b64_json", watermark: true };
+    raw.nodes[2].layer_size = "1.5K";
+    const parsed = parseBoard(JSON.stringify(raw));
+    if (parsed.kind !== "ok") throw new Error("应为可读");
+    const task = parsed.board.nodes[2];
+    expect(task.type === "task" && task.output_options).toEqual({ output_format: "jpeg", response_format: "b64_json", watermark: true });
+    expect(task.type === "task" && task.layer_size).toBe("1.5K");
+    const round = parseBoard(serializeBoard(parsed.board));
+    expect(round.kind).toBe("ok");
+  });
+
   it("手写夹具画板含结果节点可读入", () => {
     const text = readFileSync(new URL("../../fixtures/output-root/画板/结果节点夹具.ugcboard.json", import.meta.url), "utf8");
     const parsed = parseBoard(text);

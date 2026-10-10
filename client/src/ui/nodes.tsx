@@ -678,13 +678,19 @@ export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskF
           <div className="field nodrag">
             <span className="field-label">模型</span>
             <select value={node.model} onChange={(e) => apply({ kind: "setModel", taskId: node.id, model: e.target.value })} disabled={locked} aria-label="模型">
-              {!listed && <option value={node.model}>{modelLabel}</option>}
+              {!listed && <option disabled value={node.model}>{modelLabel}</option>}
               <ModelOptions table={table} available={availableModels} />
             </select>
             <HoverButton className="icon" aria-label="模型说明" info={textHoverInfo("模型说明")} onClick={() => setInfoOpen((v) => !v)} disabled={!model}>
               ⓘ
             </HoverButton>
           </div>
+          {model?.request_shape === "seedream_flash_images_generations" && (
+            <div className="field nodrag">
+              <label>输出格式 <select aria-label="输出格式" value={node.output_options?.output_format ?? "png"} disabled={locked} onChange={(e) => apply({ kind: "setOutputOptions", taskId: node.id, options: { output_format: e.target.value as "png" | "jpeg", response_format: node.output_options?.response_format ?? "url", watermark: node.output_options?.watermark ?? false } })}><option value="png">PNG</option><option value="jpeg">JPEG</option></select></label>
+              <label><input type="checkbox" checked={node.output_options?.watermark ?? false} disabled={locked} onChange={(e) => apply({ kind: "setOutputOptions", taskId: node.id, options: { output_format: node.output_options?.output_format ?? "png", response_format: node.output_options?.response_format ?? "url", watermark: e.target.checked } })} />水印</label>
+            </div>
+          )}
           {infoOpen && <ModelInfo modelId={node.model} onClose={() => setInfoOpen(false)} />}
 
           {(ports.layerDecomposition || ports.transparentBackground) && (
@@ -721,7 +727,14 @@ export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskF
       )}
 
       {/* 分辨率档与宽高比常驻：收起时也能改；模型与开关只在展开区。 */}
-      <div className="field size-field nodrag">
+      {node.layer_decomposition && model?.request_shape === "seedream_flash_images_generations" ? (
+        <div className="field size-field nodrag">
+          <select aria-label="图层尺寸" value={node.layer_size ?? "auto"} disabled={locked} onChange={(e) => apply({ kind: "setLayerSize", taskId: node.id, size: e.target.value as "1K" | "1.5K" | "2K" | "auto" })}>
+            {["auto", "1K", "1.5K", "2K"].map((s) => <option key={s} value={s}>{s === "auto" ? "自动" : s}</option>)}
+          </select>
+          <span className="muted small" title="auto：921600–4624220 像素保持原尺寸，较小放到 1K，较大缩到 2K">底图跟随输入，图层跟随元素</span>
+        </div>
+      ) : <div className="field size-field nodrag">
         <select value={tier ?? ""} onChange={(e) => setTier(e.target.value)} aria-label="分辨率档" disabled={locked}>
           {tier !== null && !tiers.includes(tier) && <option value={tier}>{tier}（不支持）</option>}
           {tier === null && <option value="">自定义</option>}
@@ -753,7 +766,7 @@ export const TaskNodeView = memo(function TaskNodeView({ data }: NodeProps<TaskF
             {pixels.width}×{pixels.height}
           </span>
         )}
-      </div>
+      </div>}
 
       <div className="ports">
         <PortRow id="positive" kind="positive" label={ports.negative ? "正向提示词" : "提示词"} className={hasPositive ? "" : "port-required"} connectable={!locked}>
