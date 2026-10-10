@@ -223,8 +223,11 @@ function loadBuiltin(): CapabilityTable {
   const result = parseCapabilityTable(builtinJson);
   if (!result.ok) throw new Error(`内置能力表无效：${result.errors.join("；")}`);
   // 本票仅新增可手动选择的 Flash，保持既有上架顺序与默认模型（默认切换由停用票处理）。
+  // 明确按 model_id 找到 Flash 挪到末尾，不依赖它在 JSON 里的位置。
   const models = result.table.models;
-  return { ...result.table, models: [...models.slice(1), models[0]] };
+  const flash = models.find((m) => m.model_id === "doubao-seedream-5-0-flash-260915");
+  if (!flash) throw new Error("内置能力表缺少 Flash 模型");
+  return { ...result.table, models: [...models.filter((m) => m !== flash), flash] };
 }
 
 export const BUILTIN_TABLE: CapabilityTable = loadBuiltin();

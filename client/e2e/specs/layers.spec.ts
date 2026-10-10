@@ -2,7 +2,7 @@
 // These tests exercise client behavior only, never a real gateway or visual model quality.
 import { expect, test } from "@playwright/test";
 import { board, boardPath, boardScenario, edge, GW, openApp, png, referenceNode, task, taskNode } from "../app";
-import { OUTPUT_ROOT } from "../scenario";
+import { OUTPUT_ROOT, scenario } from "../scenario";
 
 const FLASH = "doubao-seedream-5-0-flash-260915";
 const bbox = { absolute: [100, 200, 400, 600], normalized: [100, 200, 400, 600] };
@@ -64,5 +64,54 @@ test("single image → optional prompt → bbox preview → save → reopen from
   const exported = await page.evaluate(() => JSON.parse(window.__e2e.readText("/e2e/export/layers.json")!));
   expect(exported.layers[0]).toMatchObject({ bounding_box: bbox, name: "合成主体", description: "官方契约合成资产，非网关实测" });
   await page.screenshot({ path: "test-results/layers-preview.png" });
+  expect(errors).toEqual([]);
+});
+
+// 图层元数据损坏必须按真实原因提示，不能误报「找不到画板文件」或静默跳过。
+const TASK_ID = "20261010T000000Z-abcdef01";
+const TASK_DIR = `${OUTPUT_ROOT}/2026-10-10/${TASK_ID}`;
+const CORRUPT_TITLE = "损坏图层画板";
+const corruptBoard = () =>
+  board(
+    CORRUPT_TITLE,
+    [
+      {
+        id: "res",
+        type: "result",
+        pos: [0, 0],
+        size: [200, 200],
+        task_id: TASK_ID,
+        file: "result.png",
+        path: `2026-10-10/${TASK_ID}/result.png`,
+        layer_count: 1,
+        record: { model: FLASH, prompt: "", negative_prompt: "", size_spec: { tier: "1K", ratio: "1:1", width: null, height: null }, submitted_at: "", layers: [{ file: "layers/01.png", z_index: 1, bounding_box: bbox }] },
+      },
+    ],
+    [],
+  );
+const corruptFiles = { [`${TASK_DIR}/result.png`]: { b64: base }, [`${TASK_DIR}/layers.json`]: { text: "{损坏" } };
+
+test("layers.json 损坏：打开画板报真实原因，不误报找不到画板文件", async ({ page }) => {
+  const errors = await openApp(page, boardScenario(CORRUPT_TITLE, corruptBoard(), { uiState: null, files: corruptFiles }));
+  await expect(page.locator(".tab")).toHaveCount(1);
+  await page.evaluate((p) => window.__e2e.emit("second-instance", [p]), boardPath(CORRUPT_TITLE));
+  await expect(page.locator(".toast")).toContainText("图层元数据损坏");
+  await expect(page.locator(".toast")).not.toContainText("找不到画板文件");
+  await expect(page.locator(".tab", { hasText: CORRUPT_TITLE })).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
+test("layers.json 损坏：启动恢复不静默跳过，提示真实原因", async ({ page }) => {
+  const errors = await openApp(page, boardScenario(CORRUPT_TITLE, corruptBoard(), { files: corruptFiles }));
+  await expect(page.locator(".toast")).toContainText("图层元数据损坏");
+  await expect(page.locator(".tab", { hasText: CORRUPT_TITLE })).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
+test("画板文件确实不存在时仍报找不到画板文件", async ({ page }) => {
+  const errors = await openApp(page, scenario({ settings: null }));
+  await expect(page.locator(".tab")).toHaveCount(1);
+  await page.evaluate((root) => window.__e2e.emit("second-instance", [`${root}/画板/不存在.ugcboard.json`]), OUTPUT_ROOT);
+  await expect(page.locator(".toast")).toContainText("找不到画板文件");
   expect(errors).toEqual([]);
 });

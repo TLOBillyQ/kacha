@@ -9,9 +9,8 @@ import {
   type InputImageRule,
   type WorkflowName,
 } from "./capabilities";
-import { flashFeatureImplemented } from "./gateway";
 import { resolveFromRoot } from "./paths";
-import { effectiveRegionRender, expandImageEdges, type PortSlot } from "./region";
+import { expandImageEdges, type PortSlot } from "./region";
 
 export const IMAGE_PORT_PREFIX = "image:";
 
@@ -61,7 +60,7 @@ export function workflowOf(board: Board, taskId: string): WorkflowName {
 export function imagePortSlots(board: Board, table: CapabilityTable, taskId: string): PortSlot[] {
   const task = findTask(board, taskId);
   const model = task && findModel(table, task.model);
-  return expandImageEdges(imageEdges(board, taskId), effectiveRegionRender(model));
+  return expandImageEdges(imageEdges(board, taskId), model);
 }
 
 /** 接到任务某提示词端口的提示词文本；未接为空串。 */
@@ -240,14 +239,14 @@ export function taskPorts(board: Board, table: CapabilityTable, taskId: string):
   }
   const wf = model.workflows[workflowOf(board, taskId)];
   const maxReferences = model.workflows.image_edit.max_references;
-  const expanded = expandImageEdges(imageEdges(board, taskId), effectiveRegionRender(model)).length;
+  const expanded = expandImageEdges(imageEdges(board, taskId), model).length;
   return {
     negative: isSupported(wf.supports_negative_prompt) || hasNegativeEdge,
     // 空位露出同样按展开后名额：区域叠加图占满后不再给新空位。
     imageSlots: expanded < maxReferences ? count + 1 : count,
     maxReferences,
-    layerDecomposition: (isSupported(wf.layer_decomposition) && flashFeatureImplemented(model, "layers")) || task.layer_decomposition,
-    transparentBackground: (isSupported(model.transparent_background) && flashFeatureImplemented(model, "transparent")) || task.transparent_background,
+    layerDecomposition: isSupported(wf.layer_decomposition) || task.layer_decomposition,
+    transparentBackground: isSupported(model.transparent_background) || task.transparent_background,
   };
 }
 

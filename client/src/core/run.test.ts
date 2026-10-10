@@ -118,6 +118,19 @@ describe("Flash 来源图层", () => {
     expect(requests).toEqual([]);
   });
 
+  it("图层拆分任务尺寸无法解析：提交前明确失败，不静默兜底 1024x1024", async () => {
+    const { d, files, requests } = deps(() => ({ status: 200, body: "{}" }));
+    d.imageCodec = passThroughCodec;
+    files.set("/root/2026-09-16/task-x/result.png", PNG);
+    files.set("/root/2026-09-16/task-x/layers/02.png", LAYER2);
+    const b = layerBoard(2);
+    const t = b.nodes.find((n) => n.type === "task") as TaskNode;
+    t.layer_decomposition = true;
+    t.size_spec = { tier: "1K", ratio: "99:1", width: null, height: null };
+    await expect(prepareJob(d, { board: b, table: BUILTIN_TABLE, tableSha256: "x", outputRoot: "/root", taskNodeId: "t" })).rejects.toThrow(/生成尺寸不在模型尺寸表内/);
+    expect(requests).toEqual([]);
+  });
+
   it("缺失图层文件：提交前明确失败（读图失败），不回落底图", async () => {
     const { d, files, requests } = deps(() => ({ status: 200, body: "{}" }));
     d.imageCodec = passThroughCodec;

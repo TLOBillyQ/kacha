@@ -129,7 +129,8 @@ Tauri 不能交叉构建，Windows 包在 Windows x64 机器上构建，macOS �
 
 ## 8. 记录
 
-自动测试与真机验证分别记录提交、命令、版本、产物及证据。既有基线为 Vitest 845、Rust 44、
+自动测试与真机验证分别记录提交、命令、版本、产物及证据。既有基线为 Vitest 845、Rust 45（4 个套件，
+2026-10-10 实测 `cargo test --manifest-path client/src-tauri/Cargo.toml`：44 + 1，两个空套件）、
 packaging 33、浏览器 E2E 43；后续 worker 最新结果尚未核验，不将这些数量当作最新测试结果。
 
 2026-10-10 #21 收口记录（集成基线 `288ca69` 加本票组合测试与文档变更，本地集成、未发布）：

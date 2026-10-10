@@ -3,7 +3,7 @@
 // 换模型绝不自动删线或改设置，只报告原因。
 import type { Board, TaskNode } from "./board";
 import { findModel, isRetiredModel, isSupported, LITE_RETIRED_HINT, type CapabilityTable, type ModelCapability } from "./capabilities";
-import { flashFeatureImplemented, isRequestShapeImplemented } from "./gateway";
+import { isRequestShapeImplemented } from "./gateway";
 import { imageEdges, imagePortSlots, imageSources, promptText, workflowOf } from "./graph";
 import { MAX_REGIONS } from "./overlay";
 import { effectiveRegionRender, expandImageEdges } from "./region";
@@ -93,7 +93,7 @@ export function taskView(board: Board, table: CapabilityTable, taskId: string, f
   const model = findModel(table, task.model);
   const refs = imageRefProblems(board, table, taskId);
   const transparent = transparentBlock(board, model, taskId, facts);
-  const layer = model && !flashFeatureImplemented(model, "layers") ? "Flash 图层拆分通路尚未实现" : model && !isSupported(model.workflows[workflowOf(board, taskId)].layer_decomposition) ? "模型不支持拆分图层" : null;
+  const layer = model && !isSupported(model.workflows[workflowOf(board, taskId)].layer_decomposition) ? "模型不支持拆分图层" : null;
   const flashLayers = model?.request_shape === "seedream_flash_images_generations" && task.layer_decomposition;
   const reasons = [
     ...(flashLayers ? [] : promptReasons(board, taskId)),
@@ -143,10 +143,9 @@ function modelLabel(table: CapabilityTable, discovery: Discovery, modelId: strin
  */
 function transparentBlock(board: Board, model: ModelCapability | undefined, taskId: string, facts: TaskFacts): { kind: ReasonKind; text: string; hint: string } | null {
   if (!model) return null;
-  if (!flashFeatureImplemented(model, "transparent")) return { kind: "transparentUnsupported", text: "Flash 透明背景通路尚未实现", hint: "通路尚未实现" };
   if (!isSupported(model.transparent_background)) return { kind: "transparentUnsupported", text: "模型不支持透明背景", hint: "模型不支持透明背景" };
   const edges = imageEdges(board, taskId);
-  if (expandImageEdges(edges, effectiveRegionRender(model)).length !== 1) {
+  if (expandImageEdges(edges, model).length !== 1) {
     const text = model.request_shape === "seedream_flash_images_generations" ? "需要恰好一张实际参考图" : "需要恰好一条图片线";
     return { kind: "transparentNeedsOneImage", text: `透明背景${text}`, hint: text };
   }
@@ -209,7 +208,7 @@ function modelReasons(board: Board, model: ModelCapability, task: TaskNode): Unr
   const wf = model.workflows[workflowOf(board, task.id)];
   const max = model.workflows.image_edit.max_references;
   const render = effectiveRegionRender(model);
-  const expanded = expandImageEdges(edges, render).length;
+  const expanded = expandImageEdges(edges, model).length;
   if (edges.length > 0 && max === 0) out.push(reason("imageEditUnsupported", "模型不支持图片编辑"));
   else if (expanded > max) out.push(reason("tooManyReferences", `参考图 ${expanded} 张超出模型上限 ${max} 张`));
   const regions = edges.reduce((n, e) => n + (e.region?.rects.length ?? 0), 0);

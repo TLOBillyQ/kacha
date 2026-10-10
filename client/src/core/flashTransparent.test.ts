@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { BUILTIN_TABLE, findModel } from "./capabilities";
-import { buildGenerationRequest, flashFeatureImplemented } from "./gateway";
+import { BUILTIN_TABLE, findModel, isSupported } from "./capabilities";
+import { buildGenerationRequest } from "./gateway";
 import { taskView } from "./taskView";
 import { board } from "./testing/runnerHarness";
 import { collectRunFacts } from "./submission";
@@ -120,9 +120,9 @@ it("来源图层探测所选文件并与底图 alpha 事实分开", async () => 
   expect(taskView(b, BUILTIN_TABLE, "t1", { ...facts, alphaByNode: new Map([["r", true]]), discovery: { source: "none" } })!.reasons.map(r => r.kind)).toContain("transparentNoAlpha");
 });
 
-it("Flash 透明与图层路径共同开放", () => {
-  expect(flashFeatureImplemented(model, "transparent")).toBe(true);
-  expect(flashFeatureImplemented(model, "layers")).toBe(true);
+it("Flash 透明与图层路径共同开放：能力表标记 supported，视图中无阻止原因", () => {
+  expect(isSupported(model.transparent_background)).toBe(true);
+  expect(isSupported(model.workflows.image_edit.layer_decomposition)).toBe(true);
 });
 it.each([
   { name: "无图", references: [] },

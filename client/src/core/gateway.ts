@@ -5,10 +5,6 @@
 import { withinPixelRange } from "./size";
 import { isSupported, type ModelCapability } from "./capabilities";
 
-export function flashFeatureImplemented(model: ModelCapability | undefined, feature: "transparent" | "layers"): boolean {
-  return model?.request_shape !== "seedream_flash_images_generations" || feature === "layers" || feature === "transparent";
-}
-
 export type LayerSize = "1K" | "1.5K" | "2K" | "auto";
 export interface LayerMetadata { z_index: number; bounding_box?: LayerBoundingBox | number[]; name?: string; description?: string }
 

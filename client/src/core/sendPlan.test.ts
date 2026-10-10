@@ -12,7 +12,7 @@ it("Flash 跨图坐标区域按输入顺序用图N，提示坐标端点为0–99
     { from: ["a", "out"], to: ["t", "image:0"], source_layer: null, system: false, extra: {}, region: { rects: [[0, 0, 1, 1]], render: "bbox_tag" } },
     { from: ["b", "out"], to: ["t", "image:1"], source_layer: null, system: false, extra: {}, region: { rects: [[0.25, 0.25, 0.75, 0.75]], render: "bbox_tag", coordinate_kind: "point" } },
   ];
-  const plan = planSend(flash, expandImageEdges(edges, "highlight_overlay"), "Copy region 2 of Image 2 into region 1 of @图1, keep the rest unchanged", "");
+  const plan = planSend(flash, expandImageEdges(edges, flash), "Copy region 2 of Image 2 into region 1 of @图1, keep the rest unchanged", "");
   expect(plan.referenceCount).toBe(2);
   expect(plan.text).toContain("图1 <bbox>0 0 999 999</bbox>");
   expect(plan.text).toContain("图2 <point>500 500</point>");
@@ -41,7 +41,7 @@ it("Flash 单图叠加的说明使用实际两图数量，所有区域输入拒�
   const plan = planSend(flash, slots, "把区域1改为红色", "");
   expect(plan.text).toContain("本次提供 2 张参考图，按顺序为图1、图2。");
   const edge: BoardEdge = { from: ["a", "out"], to: ["t", "image:0"], source_layer: null, system: false, extra: {}, region: { rects: [[0.8, 0, 0.2, 1]], render: "highlight_overlay" } };
-  expect(planSend(flash, expandImageEdges([edge], "highlight_overlay"), "图1", "").referenceProblems.issues).toContain("图1 的区域坐标无效，需要0–1范围内的非空矩形");
+  expect(planSend(flash, expandImageEdges([edge], flash), "图1", "").referenceProblems.issues).toContain("图1 的区域坐标无效，需要0–1范围内的非空矩形");
 });
 
 const qwenPro = findModel(BUILTIN_TABLE, "qwen-image-3.0-pro")!;
@@ -212,10 +212,10 @@ describe("发送计划：区域改写与固定句", () => {
 
   it("从画板展开的槽：用户序号 → 发送序号跳过叠加图", () => {
     const two = { ...REGION, rects: [REGION.rects[0], REGION.rects[0]] };
-    const slots = expandImageEdges([edge(0, two), edge(1), edge(2, REGION)], "highlight_overlay");
+    const slots = expandImageEdges([edge(0, two), edge(1), edge(2, REGION)], qwenPro);
     expect(rewritten("看@图1、@图2、@图3", slots)).toBe("看图1、图3、图4");
     // 删除区域：恒等。
-    expect(rewritten("看@图1、@图2、@图3", expandImageEdges([edge(0), edge(1), edge(2)], "highlight_overlay"))).toBe("看图1、图2、图3");
+    expect(rewritten("看@图1、@图2、@图3", expandImageEdges([edge(0), edge(1), edge(2)], qwenPro))).toBe("看图1、图2、图3");
   });
 
   it("没有叠加槽时「区域N」是普通文字，不改写", () => {

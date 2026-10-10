@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { Board, BoardEdge, BoardNode, TaskNode } from "./board";
 import { BUILTIN_TABLE, type CapabilityTable } from "./capabilities";
+import { imagePortSlots } from "./graph";
 import { buildConfirmItems } from "./submission";
-import { taskView, type TaskFacts } from "./taskView";
+import { sendPlanOf, taskView, type TaskFacts } from "./taskView";
 
 const QWEN_PRO = "qwen-image-3.0-pro";
 
@@ -62,6 +63,39 @@ function ready(patch: Partial<TaskNode> = {}, refs: string[] = [], text = "@图1
     [edge("p", "t", "positive"), ...refs.map((r, i) => edge(r, "t", `image:${i}`))],
   );
 }
+
+describe("坐标区域按当前模型推导", () => {
+  const COORD = { rects: [[0.1, 0.1, 0.5, 0.5] as [number, number, number, number]], render: "bbox_tag" as const, coordinate_kind: "bbox" as const };
+
+  /** Flash 上框出的坐标区域，切到别的模型后区域数据原样保留。 */
+  const coordBoard = (model: string): Board => {
+    const b = ready({ model }, ["r1"], "把区域1改为红色");
+    b.edges[1] = { ...b.edges[1], region: COORD };
+    return b;
+  };
+
+  it("Flash：坐标区域不占叠加名额，发送文本带坐标标签", () => {
+    const b = coordBoard("doubao-seedream-5-0-flash-260915");
+    const slots = imagePortSlots(b, BUILTIN_TABLE, "t");
+    expect(slots.map((s) => s.kind)).toEqual(["image"]);
+    expect(slots[0].coordinateRegion).toBeDefined();
+    expect(sendPlanOf(b, BUILTIN_TABLE, "t")!.text).toContain("<bbox>");
+  });
+
+  it.each([
+    ["doubao-seedream-5-0-pro-260628", "坐标通路只接 Flash"],
+    ["qwen-image-3.0-pro", "模型不支持坐标标签"],
+  ])("切到 %s（%s）：按高亮叠加发送，不出现坐标语法", (model) => {
+    const b = coordBoard(model);
+    const slots = imagePortSlots(b, BUILTIN_TABLE, "t");
+    expect(slots.map((s) => s.kind)).toEqual(["image", "overlay"]);
+    expect(slots[0].coordinateRegion).toBeUndefined();
+    const text = sendPlanOf(b, BUILTIN_TABLE, "t")!.text;
+    expect(text).not.toContain("<bbox>");
+    expect(text).not.toContain("<point>");
+    expect(text).toContain("标注版");
+  });
+});
 
 describe("Flash 图层任务视图", () => {
   it("单图自动拆分不需要提示词，普通模式仍需要提示词", () => {

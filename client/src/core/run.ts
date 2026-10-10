@@ -128,7 +128,8 @@ export async function prepareJob(
   const model = task?.type === "task" ? findModel(table, task.model) : undefined;
   if (task?.type !== "task" || !snapshot || !model) throw new LocalError("任务节点或模型不存在");
   const flashLayers = model.request_shape === "seedream_flash_images_generations" && task.layer_decomposition;
-  const size = resolveSize(model.workflows[workflowOf(board, taskNodeId)].size_rule, task.size_spec) ?? (flashLayers ? { width: 1024, height: 1024 } : null);
+  // 尺寸解析失败明确失败；图层拆分同样不静默兜底——写进 task.json 的尺寸必须是用户选的。
+  const size = resolveSize(model.workflows[workflowOf(board, taskNodeId)].size_rule, task.size_spec);
   if (!size) throw new LocalError("生成尺寸不在模型尺寸表内");
 
   const sources = imageSources(board, taskNodeId, outputRoot);

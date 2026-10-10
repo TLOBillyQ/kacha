@@ -1,6 +1,6 @@
 // 画板文件：输出根目录/画板/<标题>.ugcboard.json。
 // 任务目录是真源、画板只是视图；本模块只负责文件格式的读写、版本与未知字段保留、文件名派生。
-import { outputOptions, type OutputOptions } from "./gateway";
+import type { OutputOptions } from "./gateway";
 import type { AutoRatio, SizeSpec } from "./size";
 
 export const BOARD_FORMAT_VERSION = 1;
@@ -182,6 +182,19 @@ const NODE_KEYS = {
   result: ["id", "type", "pos", "size", "task_id", "file", "path", "layer_count", "record"],
 } as const;
 
+/** 图层尺寸的封闭取值；画板里出现别的值视为损坏，不静默断言。 */
+function layerSizeOf(raw: unknown): import("./gateway").LayerSize {
+  return need<import("./gateway").LayerSize>(raw === "1K" || raw === "1.5K" || raw === "2K" || raw === "auto", raw, "layer_size 必须是 1K / 1.5K / 2K / auto");
+}
+
+/** 画板里的输出选项做结构化校验；取值越界即损坏（与 gateway.outputOptions 同口径，但损坏归画板格式）。 */
+function outputOptionsOf(raw: unknown): OutputOptions {
+  const o = need<Json>(isObject(raw), raw, "output_options 必须是对象");
+  const format = need<OutputOptions["output_format"]>(o.output_format === "png" || o.output_format === "jpeg", o.output_format, "output_options.output_format 必须是 png / jpeg");
+  const response = need<OutputOptions["response_format"]>(o.response_format === "url" || o.response_format === "b64_json", o.response_format, "output_options.response_format 必须是 url / b64_json");
+  return { output_format: format, response_format: response, watermark: need<boolean>(typeof o.watermark === "boolean", o.watermark, "output_options.watermark 必须是布尔值") };
+}
+
 function parseNode(raw: unknown): BoardNode {
   const o = need<Json>(isObject(raw), raw, "节点必须是对象");
   const id = str(o, "id");
@@ -201,9 +214,9 @@ function parseNode(raw: unknown): BoardNode {
         size_spec: sizeSpec(o, "size_spec"),
         image_ports: num(o, "image_ports"),
         layer_decomposition: bool(o, "layer_decomposition"),
-        ...(o.layer_size === undefined ? {} : { layer_size: o.layer_size as import("./gateway").LayerSize }),
+        ...(o.layer_size === undefined ? {} : { layer_size: layerSizeOf(o.layer_size) }),
         transparent_background: bool(o, "transparent_background"),
-        ...(o.output_options === undefined ? {} : { output_options: outputOptions(o.output_options as OutputOptions) }),
+        ...(o.output_options === undefined ? {} : { output_options: outputOptionsOf(o.output_options) }),
         last_submitted: nullableObj(o, "last_submitted"),
       };
     default: {
@@ -275,7 +288,7 @@ export function parseBoard(text: string): ParsedBoard {
     if (o.last_model !== undefined && o.last_model !== null) board.last_model = str(o, "last_model");
     return { kind: "ok", board };
   } catch (error) {
-    if (error instanceof Corrupt || (error instanceof Error && error.message === "输出选项无效")) return { kind: "corrupt", reason: error.message };
+    if (error instanceof Corrupt) return { kind: "corrupt", reason: error.message };
     throw error;
   }
 }

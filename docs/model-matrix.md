@@ -7,7 +7,7 @@ tags: [工具开发, 生图, 模型选型, 蛋仔, 千星, new-api]
 > 数据来源：千问 AI 平台 CLI 实时查询（2026-08-20）。价格为平台公示单价，团队 new-api 网关的实际计费策略以网关后台为准。
 > 更新方式：`qianwen models list --output image --format json`、`qianwen models info <model-id> --format json`。
 >
-> 2026-10-10 注：本矩阵是当时的计费选型快照，属历史研究，未覆盖后经团队网关接入的 Seedream 系列。现行上架模型为 Seedream 5.0 Pro / Flash 与 qwen-image-3.0-pro / qwen-image-3.0；Lite 已停用，由 Flash（`doubao-seedream-5-0-flash-260915`）接替经济档并作为新建任务首选。现行能力、上架与证据以 `client/src/core/capabilities.builtin.json`、[Flash 研究](research/seedream-flash.md) 及 ADR 0001 / 0004 为准。
+> 2026-10-10 注：本矩阵是当时的计费选型快照，属历史研究，未覆盖后经团队网关接入的 Seedream 系列。现行上架模型为 Seedream 5.0 pro / Flash 与 qwen-image-3.0-pro / qwen-image-3.0；Lite 已停用，由 Flash（`doubao-seedream-5-0-flash-260915`）接替经济档并作为新建任务首选。现行能力、上架与证据以 `client/src/core/capabilities.builtin.json`、[Flash 研究](research/seedream-flash.md) 及 ADR 0001 / 0004 为准。
 
 ## 场景 × 模型矩阵
 

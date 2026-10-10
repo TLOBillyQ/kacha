@@ -42,13 +42,17 @@ export interface PortSlot extends SlotRef {
 }
 
 /**
- * 把用户图片线（已按端口升序）展开成发送序槽位。
+ * 把用户图片线（已按端口升序）展开成发送序槽位。行为一律按当前模型推导（region.render 仅作创建时记录）：
  * 仅当渲染方式为 highlight_overlay 且连线上有非空矩形时插入叠加槽；其它渲染方式不占名额（仅占位，行为后续切片实现）。
+ * 坐标区域是客户端只接了 Flash 的通路（ADR 0004 的「客户端已实现」清单）：当前模型是 Flash 请求形态且支持 bbox_tag 时，
+ * 连线上创建时记为 bbox_tag 的区域按坐标槽处理；否则回落当前模型的渲染方式（如高亮叠加），区域数据不动。
  */
-export function expandImageEdges(edges: BoardEdge[], render: RegionRender | null): PortSlot[] {
+export function expandImageEdges(edges: BoardEdge[], model: ModelCapability | undefined): PortSlot[] {
+  const render = effectiveRegionRender(model);
+  const coordinatePath = render !== null && model?.request_shape === "seedream_flash_images_generations" && isSupported(model.region_hint.bbox_tag);
   const slots: PortSlot[] = [];
   for (const [i, edge] of edges.entries()) {
-    const coordinateRegion = render !== null && edge.region?.render === "bbox_tag" ? edge.region : undefined;
+    const coordinateRegion = coordinatePath && edge.region?.render === "bbox_tag" ? edge.region : undefined;
     slots.push({ port: slots.length + 1, userPort: i + 1, kind: "image", edge, sourcePort: null, regionCount: coordinateRegion?.rects.length ?? 0, ...(coordinateRegion ? { coordinateRegion } : {}), ...(edge.region ? { regionData: edge.region } : {}) });
     const regionCount = edge.region?.rects.length ?? 0;
     if (render === "highlight_overlay" && !coordinateRegion && regionCount > 0) {
