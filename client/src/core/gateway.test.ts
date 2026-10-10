@@ -57,16 +57,9 @@ describe("Flash 真实脱敏夹具回放（替代字节为合成，不证明视�
       return { status: exchange.response.status, headers: { get: (name: string) => exchange.response.headers[name] ?? null }, text: async () => JSON.stringify(exchange.response.body), arrayBuffer: async () => PNG_BYTES.slice().buffer };
     }) as FetchLike };
     const model = findModel(BUILTIN_TABLE, body.model)!;
-    if (file === "transparent.json") {
-      // 已保存证据含透明参数；#18 尚未开放，不以普通请求冒充透明实现。
-      expect(body.background).toBe("transparent");
-      expect((exchange.response.body as any).data).toHaveLength(1);
-      expect(model.transparent_background).toBe("supported");
-      return;
-    }
     const [width, height] = body.size.split("x").map(Number);
-    const references = (body.image ?? []).map(() => ({ mediaType: "image/png", bytes: PNG_BYTES }));
-    const result = await generate(config, { model, text: body.prompt, nativeNegativePrompt: null, size: { width, height }, references });
+    const references = (body.image ?? []).map(() => ({ mediaType: "image/png", bytes: PNG_BYTES, ...(file === "transparent.json" ? { hasAlpha: true } : {}) }));
+    const result = await generate(config, { model, text: body.prompt, nativeNegativePrompt: null, size: { width, height }, references, transparentBackground: body.background === "transparent" });
     const actual = calls[0].body as Record<string, unknown>;
     const { optimize_prompt_options, ...recordedFields } = actual;
     expectMatchesFixture(recordedFields, body);

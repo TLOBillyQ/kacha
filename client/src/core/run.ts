@@ -162,11 +162,23 @@ export async function prepareJob(
     capabilityTableSha256: args.tableSha256,
     references,
   };
+  await validateFlashTransparency(deps, plan, model);
   return { job: jobOf(taskNodeId, plan, model), lastSubmitted: { task_id: taskId, ...snapshot } };
 }
 
+async function validateFlashTransparency(deps: RunDeps, plan: SubmissionPlan, model: ModelCapability): Promise<void> {
+  if (model.request_shape !== "seedream_flash_images_generations" || !plan.transparentBackground) return;
+  if (plan.references.length !== 1) throw new LocalError("透明背景需要恰好一张实际参考图");
+  if (plan.outputOptions?.output_format === "jpeg") throw new LocalError("透明背景输出必须为 PNG");
+  if (!deps.imageCodec) throw new LocalError("参考图透明通道尚未确认");
+  const decoded = await deps.imageCodec.decode(plan.references[0].bytes);
+  try {
+    if (decoded.hasAlpha() !== true) throw new LocalError("透明背景需要已确认带透明通道的参考图快照");
+  } finally { decoded.close(); }
+}
+
 function jobOf(taskNodeId: string, plan: SubmissionPlan, model: ModelCapability): PreparedJob {
-  if (model.request_shape === "seedream_flash_images_generations" && (plan.layerDecomposition || plan.transparentBackground)) throw new LocalError("Flash 透明背景与图层拆分通路尚未实现");
+  if (model.request_shape === "seedream_flash_images_generations" && plan.layerDecomposition) throw new LocalError("Flash 图层拆分通路尚未实现");
   return {
     taskNodeId,
     taskId: plan.taskId,
@@ -238,6 +250,7 @@ export async function prepareRegenerate(
     capabilityTableSha256: args.tableSha256,
     references,
   };
+  await validateFlashTransparency(deps, plan, model);
   const lastSubmitted = args.fromTaskId !== undefined ? undefined : { ...last, task_id: taskId, size_spec: sized.sizeSpec };
   return { job: jobOf(taskNodeId, plan, model), lastSubmitted };
 }
@@ -246,7 +259,7 @@ export async function prepareRegenerate(
 export async function writeJob(deps: RunDeps, outputRoot: string, job: PreparedJob): Promise<WrittenJob> {
   try {
     const { relDir, references } = await writeSubmission(deps, outputRoot, job.plan);
-    return { ...job, relDir, input: { ...job.input, references } };
+    return { ...job, relDir, input: { ...job.input, references: references.map(ref => ({ ...ref, ...(job.plan.transparentBackground && job.input.model.request_shape === "seedream_flash_images_generations" ? { hasAlpha: true } : {}) })) } };
   } catch (e) {
     throw new LocalError(`写任务目录失败：${e instanceof Error ? e.message : String(e)}`);
   }
@@ -275,6 +288,15 @@ export async function executeJob(
       const bytes = await fetchResultImage(deps.fetch, image);
       if (signal?.aborted) throw new CancelledError();
       if (!sniffImage(bytes)) throw new GatewayError("invalid_response", "结果不是可识别的图片");
+      if (job.input.model.request_shape === "seedream_flash_images_generations" && job.plan.transparentBackground) {
+        if (sniffImage(bytes)?.ext !== "png" || !deps.imageCodec) throw new GatewayError("invalid_response", "透明背景结果必须为带透明通道的 PNG");
+        let decoded;
+        try { decoded = await deps.imageCodec.decode(bytes); }
+        catch { throw new GatewayError("invalid_response", "透明背景结果无法解码"); }
+        try {
+          if (decoded.hasAlpha() !== true) throw new GatewayError("invalid_response", "透明背景结果未包含透明像素");
+        } finally { decoded.close(); }
+      }
       fetched.push({ bytes, layer: image.layer });
     }
   } catch (e) {
