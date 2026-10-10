@@ -3,6 +3,8 @@ import type { Board, BoardEdge, BoardNode, ResultNode, TaskNode } from "./board"
 import { BUILTIN_TABLE } from "./capabilities";
 import type { FetchLike } from "./gateway";
 import { addResultNode } from "./layout";
+import { createRunner } from "./runner";
+import { settle } from "./testing/runnerHarness";
 import { memoryTaskFs } from "./testing/memoryTaskFs";
 import { CancelledError, executeJob, failureLabel, prepareJob, prepareRegenerate, writeJob, type Prepared, type PreparedJob, type RunDeps } from "./run";
 
@@ -52,6 +54,60 @@ const regen = async (d: RunDeps, args: Parameters<typeof prepareRegenerate>[1]) 
 const ok = () => ({ status: 200, body: JSON.stringify({ metadata: { output: { choices: [{ message: { content: [{ image: PNG_B64 }] } }] } } }) });
 
 describe("Flash 普通任务", () => {
+  it.each([false, true])("公开运行器转换快照链路，编码结果损坏=%s", async (invalid) => {
+    const source2 = Uint8Array.from([...PNG, 2]);
+    const transformed = [Uint8Array.from([...PNG, 11]), Uint8Array.from([...PNG, 12])];
+    const damaged = PNG.slice(0, 8);
+    const events: string[] = [];
+    const { d, files, requests } = deps(() => ({ status: 200, body: JSON.stringify({ data: [{ b64_json: PNG_B64 }] }) }));
+    d.schedule = (ms, fn) => { const timer = setTimeout(fn, ms); return () => clearTimeout(timer); };
+    d.readFile = async (path) => path === "/root/refs/cat.png" ? PNG : path === "/root/refs/second.png" ? source2 : files.get(path)!;
+    d.imageCodec = { decode: async (bytes) => {
+      if (bytes.length === damaged.length) { events.push("decode:damaged"); throw new Error("truncated PNG"); }
+      const source = bytes === PNG ? 0 : bytes === source2 ? 1 : -1;
+      const fitted = transformed.findIndex((v) => v === bytes);
+      const label = source >= 0 ? `source${source + 1}` : `fitted${fitted + 1}`;
+      events.push(`decode:${label}`);
+      return { width: source >= 0 ? 10000 : 6000, height: source >= 0 ? 10000 : 6000, hasAlpha: () => false,
+        encode: async (width, height, format) => { events.push(`encode:${label}:${width}x${height}:${format}`); return invalid ? damaged : transformed[source]; },
+        close: () => { events.push(`close:${label}`); } };
+    } };
+    // Output is decoded independently from the two reference sources.
+    const decode = d.imageCodec.decode;
+    d.imageCodec.decode = async (bytes) => bytes !== PNG && bytes.length === PNG.length
+      ? { width: 1024, height: 1024, hasAlpha: () => false, encode: async () => { throw new Error("output must not encode"); }, close: () => { events.push("close:output"); } }
+      : decode(bytes);
+    const b = board(true);
+    const task = b.nodes.find((n) => n.type === "task") as TaskNode;
+    task.model = "doubao-seedream-5-0-flash-260915";
+    task.image_ports = 2;
+    b.nodes.push({ id: "r2", type: "reference", pos: [0, 400], size: [100, 100], extra: {}, path: "refs/second.png", sha256: "b".repeat(64), display_name: "second.png" });
+    b.edges.push({ from: ["r2", "out"], to: ["t", "image:1"], source_layer: null, region: null, system: false, extra: {} });
+    const changes: string[] = [];
+    const runner = createRunner({ deps: d, concurrency: 3, apply: (_key, change) => { changes.push(change.kind); }, log: () => undefined });
+    const problems = await runner.submit({ boardKey: "A", boardFile: "A.ugcboard", table: BUILTIN_TABLE, outputRoot: "/root", baseUrl: "http://gw", apiKey: "k" }, b, ["t"]);
+    await settle();
+    if (invalid) {
+      expect(problems).toHaveLength(1);
+      expect(events).toEqual(["decode:source1", "encode:source1:6000x6000:png", "close:source1", "decode:damaged"]);
+      expect(files.size).toBe(0);
+      expect(requests).toEqual([]);
+      expect(changes).toEqual([]);
+      return;
+    }
+    expect(problems).toEqual([]);
+    expect([...runner.getSnapshot().board("A").statuses]).toEqual([]);
+    expect(changes).toEqual(["submitted", "runResult"]);
+    expect(events.slice(0, 8)).toEqual([
+      "decode:source1", "encode:source1:6000x6000:png", "close:source1", "decode:fitted1", "close:fitted1",
+      "decode:source2", "encode:source2:6000x6000:png", "close:source2",
+    ]);
+    expect(events.slice(8)).toEqual(["decode:fitted2", "close:fitted2", "close:output"]);
+    expect(JSON.parse(String(requests[0].init.body)).image).toEqual(transformed.map((bytes) => `data:image/png;base64,${btoa(String.fromCharCode(...bytes))}`));
+    const snapshots = [...files.entries()].filter(([path]) => /\/reference-\d+\.png$/.test(path));
+    expect(snapshots.map(([, bytes]) => bytes)).toEqual(transformed);
+    expect(changes).toEqual(["submitted", "runResult"]);
+  });
   it("实际输入边界逐项校验，合法 15px 边长和比例边界可提交", async () => {
     const { d } = deps(ok);
     const b = board(true);
