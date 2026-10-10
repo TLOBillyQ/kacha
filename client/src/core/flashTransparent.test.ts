@@ -107,9 +107,9 @@ it("来源图层探测所选文件并与底图 alpha 事实分开", async () => 
   expect(taskView(b, BUILTIN_TABLE, "t1", { ...facts, alphaByNode: new Map([["r", true]]), discovery: { source: "none" } })!.reasons.map(r => r.kind)).toContain("transparentNoAlpha");
 });
 
-it("Flash 透明路径开放，图层路径仍由 #19 门控", () => {
+it("Flash 透明与图层路径共同开放", () => {
   expect(flashFeatureImplemented(model, "transparent")).toBe(true);
-  expect(flashFeatureImplemented(model, "layers")).toBe(false);
+  expect(flashFeatureImplemented(model, "layers")).toBe(true);
 });
 it.each([
   { name: "无图", references: [] },

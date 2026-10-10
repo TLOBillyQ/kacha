@@ -47,11 +47,15 @@ export function useSettings() {
   const stateRef = useRef(state);
   stateRef.current = state;
   const cacheRef = useRef<ModelsCache | null>(null);
+  const refreshVersion = useRef(0);
 
   const refreshModels = useCallback(async (baseUrl: string, apiKey: string): Promise<ConnectionResult> => {
+    const version = ++refreshVersion.current;
     const result = await refreshModelsWith(settingsPorts, baseUrl, apiKey, cacheRef.current);
-    if (result.ok) cacheRef.current = result.cache;
-    setState((s) => ({ ...s, discovery: result.discovery }));
+    if (version === refreshVersion.current) {
+      if (result.ok) cacheRef.current = result.cache;
+      setState((s) => normalizeBaseUrl(s.settings.base_url) === normalizeBaseUrl(baseUrl) ? { ...s, discovery: result.discovery } : s);
+    }
     return result.ok ? { ok: true, count: result.cache.model_ids.length } : { ok: false, message: result.message ?? "连接测试失败" };
   }, []);
 
@@ -86,6 +90,7 @@ export function useSettings() {
       return null;
     }
     const baseChanged = normalizeBaseUrl(next.base_url) !== normalizeBaseUrl(current.settings.base_url);
+    if (baseChanged) refreshVersion.current++;
     setState((s) => ({
       ...s,
       file: "ok",
@@ -95,8 +100,9 @@ export function useSettings() {
       keyPersistence,
       discovery: baseChanged ? discoveryFromCache(cacheRef.current, next.base_url) : s.discovery,
     }));
+    if (apiKey && (baseChanged || apiKey !== current.apiKey)) void refreshModels(next.base_url, apiKey);
     return null;
-  }, []);
+  }, [refreshModels]);
 
   return { ...state, save, testConnection: refreshModels };
 }

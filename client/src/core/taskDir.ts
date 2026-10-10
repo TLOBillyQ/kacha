@@ -113,6 +113,7 @@ export interface SubmissionPlan {
   sizeSpec: SizeSpec;
   size: { width: number; height: number };
   layerDecomposition: boolean;
+  layerSize?: import("./gateway").LayerSize;
   transparentBackground: boolean;
   outputOptions?: OutputOptions;
   capabilityFormatVersion: number;
@@ -152,6 +153,7 @@ export interface TaskRecord {
   size_spec: SizeSpec;
   size: { width: number; height: number };
   layer_decomposition: boolean;
+  layer_size?: import("./gateway").LayerSize;
   transparent_background: boolean;
   output_options?: OutputOptions;
   /** 按发送序号排列。 */
@@ -185,6 +187,7 @@ export async function writeSubmission(fs: Pick<TaskFs, "writeNewFile">, outputRo
     size_spec: plan.sizeSpec,
     size: plan.size,
     layer_decomposition: plan.layerDecomposition,
+    ...(plan.layerSize ? { layer_size: plan.layerSize } : {}),
     ...(plan.outputOptions ? { output_options: plan.outputOptions } : {}),
     transparent_background: plan.transparentBackground,
     references,
@@ -264,7 +267,9 @@ export async function saveResult(fs: Pick<TaskFs, "writeNewFile">, outputRoot: s
 export interface LayerImage {
   bytes: Uint8Array;
   zIndex: number;
-  boundingBox: number[];
+  boundingBox: LayerRecord["bounding_box"];
+  name?: string;
+  description?: string;
 }
 
 /** 图层文件名（相对任务目录）：layers/<两位序号>.<ext>，序号 1 起、按 z_index 升序。 */
@@ -273,7 +278,7 @@ export function layerFileName(index: number, ext = "png"): string {
 }
 
 /** 拆分图层落盘：按 z_index 升序写 layers/01.<ext>…；返回写盘后的图层记录。 */
-export async function saveLayers(fs: Pick<TaskFs, "writeNewFile">, outputRoot: string, relDir: string, layers: LayerImage[]): Promise<LayerRecord[]> {
+export async function saveLayers(fs: Pick<TaskFs, "writeNewFile">, outputRoot: string, relDir: string, layers: LayerImage[], metadata?: { base: { z_index: 0; name?: string; description?: string } }): Promise<LayerRecord[]> {
   const ordered = [...layers].sort((a, b) => a.zIndex - b.zIndex);
   const out: LayerRecord[] = [];
   for (const [i, layer] of ordered.entries()) {
@@ -281,8 +286,9 @@ export async function saveLayers(fs: Pick<TaskFs, "writeNewFile">, outputRoot: s
     if (!kind) throw new Error(`图层${i + 1} 不是可识别的图片`);
     const file = layerFileName(i + 1, kind.ext);
     await fs.writeNewFile(taskPath(outputRoot, relDir, file), layer.bytes);
-    out.push({ file, z_index: layer.zIndex, bounding_box: layer.boundingBox });
+    out.push({ file, z_index: layer.zIndex, bounding_box: layer.boundingBox, ...(layer.name !== undefined ? { name: layer.name } : {}), ...(layer.description !== undefined ? { description: layer.description } : {}) });
   }
+  await fs.writeNewFile(taskPath(outputRoot, relDir, "layers.json"), new TextEncoder().encode(layersExportJson(out, metadata?.base)));
   return out;
 }
 

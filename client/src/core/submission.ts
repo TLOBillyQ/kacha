@@ -22,6 +22,7 @@ export interface Snapshot {
   layer_decomposition: boolean;
   transparent_background: boolean;
   output_options?: OutputOptions;
+  layer_size?: import("./gateway").LayerSize;
   images: SnapshotImage[];
 }
 
@@ -45,6 +46,7 @@ export function snapshotOf(board: Board, taskId: string): Snapshot | null {
     model: task.model,
     size_spec: { tier: task.size_spec.tier, ratio: task.size_spec.ratio, width: task.size_spec.width, height: task.size_spec.height },
     layer_decomposition: task.layer_decomposition,
+    ...(task.layer_decomposition && task.model === "doubao-seedream-5-0-flash-260915" ? { layer_size: task.layer_size ?? "auto" } : {}),
     ...(task.model === "doubao-seedream-5-0-flash-260915" ? { output_options: outputOptions(task.output_options) } : {}),
     transparent_background: task.transparent_background,
     images,
@@ -61,7 +63,7 @@ function canonical(value: unknown): string {
   return JSON.stringify(value) ?? "null";
 }
 
-const SNAPSHOT_KEYS: (keyof Snapshot)[] = ["prompt", "negative_prompt", "model", "size_spec", "layer_decomposition", "transparent_background", "output_options", "images"];
+const SNAPSHOT_KEYS: (keyof Snapshot)[] = ["prompt", "negative_prompt", "model", "size_spec", "layer_decomposition", "layer_size", "transparent_background", "output_options", "images"];
 
 export function isDirty(board: Board, taskId: string): boolean {
   const task = findTask(board, taskId);

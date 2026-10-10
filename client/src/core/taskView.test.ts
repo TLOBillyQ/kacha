@@ -63,6 +63,20 @@ function ready(patch: Partial<TaskNode> = {}, refs: string[] = [], text = "@图1
   );
 }
 
+describe("Flash 图层任务视图", () => {
+  it("单图自动拆分不需要提示词，普通模式仍需要提示词", () => {
+    const b = board([reference("r"), task("t", { model: "doubao-seedream-5-0-flash-260915", layer_decomposition: true })], [edge("r", "t", "image:0")]);
+    expect(view(b).reasons).toEqual([]);
+    expect(view(b).toggles.layerDecomposition.canEnable).toBe(true);
+    (b.nodes[1] as TaskNode).layer_decomposition = false;
+    expect(kinds(b)).toContainEqual(["positiveMissing", "notReady"]);
+  });
+  it("专用尺寸无效或输入数量不是一张时阻断", () => {
+    const b = ready({ model: "doubao-seedream-5-0-flash-260915", layer_decomposition: true, layer_size: "bad" as any }, ["a", "b"]);
+    expect(view(b).reasons.map((r) => r.kind)).toEqual(expect.arrayContaining(["layerNeedsOneImage", "sizeUnsupported"]));
+  });
+});
+
 const REGION = { rects: [[0.1, 0.1, 0.5, 0.5] as [number, number, number, number]], render: "highlight_overlay" as const };
 
 /** 带两个图层记录的结果节点。 */
@@ -105,6 +119,7 @@ interface Case {
 }
 
 const CASES: Case[] = [
+  { name: "Lite 停用明确提示", board: ready({ model: "doubao-seedream-5-0-lite-260128" }, [], "猫"), expected: [["modelRetired", "error"]] },
   { name: "正向提示词未连接：未就绪", board: board([task("t")]), expected: [["positiveMissing", "notReady"]] },
   { name: "合法任务无原因", board: ready({}, [], "一只橘猫"), expected: [] },
   { name: "编辑工作流低于最少参考图数不算原因（文生图 0 张合法）", board: ready({}, [], "猫"), expected: [] },
@@ -365,10 +380,10 @@ describe("警告与未引用序号", () => {
   });
 
   it("英文提示词 + 参考图 + 英文序号未验证的模型：黄色警告，不阻断", () => {
-    const lite = "doubao-seedream-5-0-lite-260128";
+    const flash = "doubao-seedream-5-0-flash-260915";
     const t = structuredClone(BUILTIN_TABLE);
-    t.models.find((m) => m.model_id === lite)!.reference_phrasing.en_verified = "untested";
-    const patch = { model: lite, size_spec: { tier: "2K", ratio: "1:1", width: null, height: null } };
+    t.models.find((m) => m.model_id === flash)!.reference_phrasing.en_verified = "untested";
+    const patch = { model: flash, size_spec: { tier: "2K", ratio: "1:1", width: null, height: null } };
     const v = view(ready(patch, ["r1"], "Put @图1 on a beach"), t);
     expect(v.warnings).toEqual(["该模型英文序号未验证"]);
     expect(v.reasons).toEqual([]);

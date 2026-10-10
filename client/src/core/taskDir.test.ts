@@ -385,6 +385,14 @@ describe("结局记录 outcome.json", () => {
 });
 
 describe("图层落盘与导出", () => {
+  it("完整 bbox 与可选元数据从任务目录读取，并覆盖画板冗余", async () => {
+    const fs = memoryTaskFs();
+    const dir = "2026-10-10/20261010T000000Z-00000001";
+    const bbox = { absolute: [100, 200, 300, 400], normalized: [100, 200, 300, 400] };
+    const saved = await saveLayers(fs, "/root", dir, [{ bytes: PNG, zIndex: 1, boundingBox: bbox, name: "主体", description: "官方契约合成资产" }]);
+    expect(await readLayers(fs, "/root", "20261010T000000Z-00000001")).toEqual(saved);
+    expect(JSON.parse(layersExportJson(saved)).layers[0]).toEqual({ file: "layers/01.png", z_index: 1, bounding_box: bbox, name: "主体", description: "官方契约合成资产" });
+  });
   it("图层文件名：layers/ 下两位序号，缺省扩展名 png", () => {
     expect(layerFileName(1)).toBe("layers/01.png");
     expect(layerFileName(12, "jpg")).toBe("layers/12.jpg");
@@ -396,7 +404,7 @@ describe("图层落盘与导出", () => {
       { bytes: JPEG, zIndex: 2, boundingBox: [0, 0, 10, 10] },
       { bytes: PNG, zIndex: 1, boundingBox: [5, 5, 20, 20] },
     ]);
-    expect([...fs.files.keys()]).toEqual(["/root/2026-09-16/t/layers/01.png", "/root/2026-09-16/t/layers/02.jpg"]);
+    expect([...fs.files.keys()]).toEqual(["/root/2026-09-16/t/layers/01.png", "/root/2026-09-16/t/layers/02.jpg", "/root/2026-09-16/t/layers.json"]);
     expect(layers).toEqual([
       { file: "layers/01.png", z_index: 1, bounding_box: [5, 5, 20, 20] },
       { file: "layers/02.jpg", z_index: 2, bounding_box: [0, 0, 10, 10] },

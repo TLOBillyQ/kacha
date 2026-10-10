@@ -6,8 +6,11 @@ import { withinPixelRange } from "./size";
 import { isSupported, type ModelCapability } from "./capabilities";
 
 export function flashFeatureImplemented(model: ModelCapability | undefined, feature: "transparent" | "layers"): boolean {
-  return model?.request_shape !== "seedream_flash_images_generations" || feature === "transparent";
+  return model?.request_shape !== "seedream_flash_images_generations" || feature === "layers" || feature === "transparent";
 }
+
+export type LayerSize = "1K" | "1.5K" | "2K" | "auto";
+export interface LayerMetadata { z_index: number; bounding_box?: LayerBoundingBox | number[]; name?: string; description?: string }
 
 /** 图层定位：absolute 为底图像素坐标 [left,top,right,bottom]，normalized 为 0–1000（与提示坐标 0–999 互不相干）。 */
 export interface LayerBoundingBox {
@@ -105,11 +108,12 @@ export interface GenerationInput {
   /** 透明背景开关；只对能力表支持透明背景的模型生效。 */
   transparentBackground?: boolean;
   outputOptions?: OutputOptions;
+  layerDecomposition?: boolean;
+  layerSize?: LayerSize;
 }
 
 export type GeneratedImage = ({ kind: "url"; url: string } | { kind: "bytes"; bytes: Uint8Array }) & {
-  /** 图层信息（z_index / bounding_box 取自 content item，合成形状待 #83 确认）。 */
-  layer?: { z_index: number; bounding_box: number[] };
+  layer?: LayerMetadata;
 };
 
 // ---- 请求构造 ----
@@ -172,7 +176,9 @@ const buildSeedreamImagesGenerations: RequestShape["build"] = (input) => {
 
 const buildFlashImagesGenerations: RequestShape["build"] = (input) => {
   if (input.references.length > 10) throw new GatewayError("config", "Flash 参考图最多 10 张");
-  if (!withinPixelRange({ min_total_pixels: 921600, max_total_pixels: 4624220, min_aspect_ratio: 1 / 16, max_aspect_ratio: 16 }, input.size.width, input.size.height)) throw new GatewayError("config", "Flash 生成尺寸超出范围");
+  if (!input.layerDecomposition && !withinPixelRange({ min_total_pixels: 921600, max_total_pixels: 4624220, min_aspect_ratio: 1 / 16, max_aspect_ratio: 16 }, input.size.width, input.size.height)) throw new GatewayError("config", "Flash 生成尺寸超出范围");
+  if (input.layerDecomposition && (input.references.length !== 1 || !["image/png", "image/jpeg"].includes(input.references[0].mediaType) || input.references[0].bytes.length > 30000000)) throw new GatewayError("config", "Flash 图层拆分需要一张 PNG/JPEG 参考图（不超过 30MB）");
+  if (input.layerDecomposition && !["1K", "1.5K", "2K", "auto"].includes(input.layerSize ?? "auto")) throw new GatewayError("config", "Flash 图层尺寸无效");
   const options = outputOptions(input.outputOptions);
   if (input.transparentBackground) {
     if (input.references.length !== 1) throw new GatewayError("config", "透明背景需要恰好一张实际参考图");
@@ -181,8 +187,9 @@ const buildFlashImagesGenerations: RequestShape["build"] = (input) => {
   }
   return { path: TEXT_TO_IMAGE_PATH, body: {
     model: input.model.model_id,
-    prompt: input.text,
-    size: `${input.size.width}x${input.size.height}`,
+    ...(input.text.trim() || !input.layerDecomposition ? { prompt: input.text } : {}),
+    size: input.layerDecomposition ? input.layerSize ?? "auto" : `${input.size.width}x${input.size.height}`,
+    ...(input.layerDecomposition ? { layer_decomposition: true } : {}),
     ...options,
     optimize_prompt_options: { mode: "standard" },
     ...(input.transparentBackground ? { background: "transparent" } : {}),
@@ -313,12 +320,28 @@ function parseFlashImage(body: unknown): GeneratedImage[] {
   throw new GatewayError("invalid_response", "Flash 图片响应无效");
 }
 
-/** 提交一个生成任务；图层拆分时可能返回多张（首张为合成结果）。 */
+function parseFlashLayers(body: unknown): GeneratedImage[] {
+  const data = (body as { data?: unknown })?.data;
+  const fail = () => new GatewayError("invalid_response", "Flash 图层身份、层序或定位信息无效");
+  if (!Array.isArray(data) || data.length < 1 || data.length > 17) throw fail();
+  const seen = new Set<number>();
+  const images = data.map((item): GeneratedImage => {
+    if (!item || !Number.isInteger(item.z_index) || item.z_index < 0 || item.z_index > 16 || seen.has(item.z_index) || (item.z_index > 0 && !validLayerBox(item.bounding_box))) throw fail();
+    seen.add(item.z_index);
+    if ((item.name !== undefined && typeof item.name !== "string") || (item.description !== undefined && typeof item.description !== "string")) throw fail();
+    const image = parseFlashImage({ data: [item] })[0];
+    return { ...image, layer: { z_index: item.z_index, ...(item.bounding_box !== undefined ? { bounding_box: item.bounding_box } : {}), ...(item.name !== undefined ? { name: item.name } : {}), ...(item.description !== undefined ? { description: item.description } : {}) } };
+  });
+  if (!seen.has(0) || [...seen].some((n) => n > 0 && !seen.has(n - 1))) throw fail();
+  return images.sort((a, b) => a.layer!.z_index - b.layer!.z_index);
+}
+
+/** 提交一个生成任务；图层拆分仍是一项生成结果。 */
 export async function generate(config: GatewayConfig, input: GenerationInput): Promise<{ images: GeneratedImage[]; requestId: string | null }> {
   const shape = requestShapeOf(input.model);
   const { path, body } = shape.build(input);
   const response = await send(config, "POST", path, body);
-  const images = shape.parse(response.body);
+  const images = input.layerDecomposition && input.model.request_shape === "seedream_flash_images_generations" ? parseFlashLayers(response.body) : shape.parse(response.body);
   if (!images.length) throw new GatewayError("invalid_response", "网关没有返回图片", 200, response.requestId);
   return { images, requestId: response.requestId };
 }
